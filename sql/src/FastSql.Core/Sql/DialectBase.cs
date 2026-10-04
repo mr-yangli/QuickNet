@@ -357,6 +357,15 @@ public abstract class DialectBase(IdentifierPolicy identifiers, IValueBinder val
         }
     }
 
+    /// <summary>把一个内层语句包成表源：<c>( … )</c> 之后由 <see cref="EmitSource"/> 挂别名。
+    /// 括号是这句能当表源用的全部条件，两形（表达式里的相关子查询与规划出来的派生表）共用同一段。</summary>
+    void EmitWrapped(SelectStatement inner, SqlWriter writer)
+    {
+        writer.Append('(');
+        Emit(inner, writer);
+        writer.Append(')');
+    }
+
     protected void EmitSource(TableSource source, SqlWriter writer)
     {
         switch (source)
@@ -366,9 +375,22 @@ public abstract class DialectBase(IdentifierPolicy identifiers, IValueBinder val
                 break;
 
             case SourceSubquery subquery:
-                writer.Append('(');
-                Emit(subquery.Query, writer);
-                writer.Append(") ");
+                EmitWrapped(subquery.Query, writer);
+                break;
+
+            case SourceDerived derived:
+                EmitWrapped(derived.Query, writer);
+                break;
+
+            case SourceRawText raw:
+                // 文本一颗不动，只在外面包一层括号 —— 别名那一段在下面与各家同一条路（GBase 8s / Oracle 血统不写 AS）。
+                // 参数逐颗<em>登记而不落地名字</em>：名字已经在用户的文本里了，这里要的是让它进参数集合，
+                // 否则症状是"文本里有 @min、驱动收不到 @min"那种要到运行期才现形的错。
+                writer.Append('(').Append(raw.Sql).Append(')');
+
+                foreach (var parameter in raw.Parameters)
+                    writer.RegisterParameter(parameter);
+
                 break;
 
             case SourceFunction function:

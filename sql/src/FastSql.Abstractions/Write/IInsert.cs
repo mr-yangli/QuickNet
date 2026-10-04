@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using FastSql.Aop;
 using FastSql.Providers;
 using FastSql.Sql;
@@ -29,8 +30,50 @@ public interface IInsert<T> where T : class
     /// <summary>逐块内联字面量，多块时带 <c>-- 块 n</c> 分节：交付给 DBA 的文本必须能看出有几条语句。</summary>
     string ToLogSql();
 
+    /// <summary>这一批走 §12.2 阶梯的哪一层，以及拿不到那一层时怎么办。
+    /// <b>它只改 <see cref="ExecuteAffrowsAsync"/> 与 <see cref="ExecuteBulkAsync"/> 这两条出口的走法，
+    /// 不改它们的语义</b>：<see cref="ExecuteReturnKeysAsync"/>/<see cref="ExecuteIdentityAsync"/> 要回填库里生成的那些列，
+    /// 而装载通道给不了（§12.1 第三行那句"不能回填自增主键"），所以回填那一档永远走文本层，
+    /// 请求了 <see cref="BulkMethod.CopyChannel"/> 也一样。
+    /// <para><b>不调这一句时的默认值不是 <see cref="BulkMethod.Auto"/></b>：默认是今天已有的
+    /// <see cref="BulkMethod.MultiValue"/>。这不是偷懒而是必须的裁决 —— 若默认就取阶梯最高层，
+    /// SQL Server 上"接了 <c>SqlBulkCopy</c>"这一件事会让每一句 <c>ExecuteAffrowsAsync</c> 不再产生 SQL 文本，
+    /// 于是 <c>CudBuilding</c>（软删改写、影子表）与 <c>ParameterBinding</c> 两个改写钩子集体失效，
+    /// 而 §12.2 那句"防住静默降级"的前提就没有了。反过来 <see cref="ExecuteBulkAsync"/> 在不调用这一句时
+    /// 默认取 <see cref="BulkMethod.Auto"/>：那一条出口存在的意义就是"我要按层要细节"。</para>
+    /// <para><paramref name="rowsPerRoundTrip"/> 是 §12.3 那个分块公式里今天才补上的第二项
+    /// （<c>request.MaxRowsPerStatement</c>）：<b>只许往下压、不许往上抬</b> —— 抬过参数预算会产出一条
+    /// 驱动直接拒掉的语句，而那正是 §12.3 立项要防的"换宽表就出事"，所以上限由预算算出来、请求值取小，
+    /// 被压这件事写在 <c>Reason</c> 里。装载通道那一档它说的是每次往返送几行（没有参数预算那一道界）。</para></summary>
+    IInsert<T> WithBulk(
+        BulkMethod method,
+        FallbackPolicy fallback = FallbackPolicy.DegradeAndLog,
+        int? rowsPerRoundTrip = null);
+
+    /// <summary>不连库回答"这一批会走哪一层、几次往返、为什么"（§12.1 那句"纯函数，可单测、可打印"）。
+    /// <paramref name="requested"/> 为 null 时问的就是 <see cref="ExecuteBulkAsync"/> 会做的事。
+    /// <b>它与 <see cref="Explain"/> 的分工</b>：<c>Explain()</c> 交出的永远是文本层的语句，
+    /// 而这一颗交出的是一句决定 —— 装载通道那一档没有文本可解释。
+    /// <para><b>不连库 ≠ 不反射</b>：判"这一家有没有通道"靠的正是那次按类型名的查找，所以修剪税在这里也要交。
+    /// 这一条不是形式问题：<c>PublishTrimmed=true</c> 的产物上 <c>SqlBulkCopy</c> 会被裁掉，于是这一颗在裁剪后
+    /// 报 <see cref="BulkMethod.MultiValue"/>、在完整运行时上报 <see cref="BulkMethod.CopyChannel"/> ——
+    /// 让读者以为两次的产物本该同形，比多一句标注贵得多。</para></summary>
+    [RequiresUnreferencedCode("判据里包含一次按类型名的装载通道查找（见 IBulkStrategy.ResolveCopyChannel 的抬头），被裁剪的驱动会让这一颗报出不同的层。")]
+    [RequiresDynamicCode("与 RequiresUnreferencedCode 同一条：反射解析装载类需要运行时生成代码。")]
+    BulkReport ExplainBulk(BulkMethod? requested = null);
+
     /// <summary>受影响行数（多块时是各块之和）。不回填主键：要键用 <see cref="ExecuteReturnKeysAsync"/>。</summary>
     Task<int> ExecuteAffrowsAsync(CancellationToken ct = default);
+
+    /// <summary>按 <see cref="WithBulk"/> 请求的那一层执行，并把决策本身交回来（走了哪一层、几次往返、
+    /// 是否降级、为什么）。<b>这一条入口是本仓库写路径上第一颗带修剪税的出口</b>（§12.7 的 AOT 那一格）：
+    /// 属性在这里不是修辞 —— <c>SqlBulkCopy</c> 不在 <c>DbProviderFactory</c> 的抽象面上，只能按类型名去找它，
+    /// 而裁剪器看不见那一句。文本层（<see cref="BulkMethod.MultiValue"/>/<see cref="BulkMethod.SingleRow"/>）
+    /// 同走这一条入口，税因此是按方法收而不是按实际走的那一层收；要零税就用
+    /// <see cref="ExecuteAffrowsAsync"/>，它的默认层永远是文本层。</summary>
+    [RequiresUnreferencedCode("装载通道按类型名在驱动程序集里找批量装载类（SqlBulkCopy 那一族没有 ADO.NET 抽象面），被裁剪的驱动会在这里报通道不存在。")]
+    [RequiresDynamicCode("与 RequiresUnreferencedCode 同一条：反射解析驱动类型需要运行时生成代码。")]
+    Task<BulkReport> ExecuteBulkAsync(CancellationToken ct = default);
 
     /// <summary>单行自增主键。多行或自增列不是一份整数时抛明确异常，而不是静默返回首行的键。</summary>
     Task<long> ExecuteIdentityAsync(CancellationToken ct = default);

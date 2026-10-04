@@ -20,8 +20,10 @@ namespace FastSql.Tests.Dialects;
 /// <see cref="ISelectGrouping{TKey,TValue}"/> 上，而组里的行是 <c>IGrouping</c>，
 /// 实体成员不在它上面。一个运行期用例都写不出来，也因此不需要 <c>ONLY_FULL_GROUP_BY</c> 风格的校验开关
 /// （§5.3 原稿那颗）；同理"分组两次"只剩 <c>GroupBy → Select → GroupBy</c> 那一条走得通，见下面的用例；
-/// ② 分组后的总数（<c>SELECT COUNT(*) FROM (SELECT … GROUP BY …)</c>）与联表之后的分组都没有入口，
-/// 下面的护栏用例钉的是"它当场报错"，不是"它报得对结果"。</para></summary>
+/// ② 分组后的<em>非 COUNT 一族</em>（<c>SUM/Max/Min/Average</c>）与联表之后的分组仍然没有入口：前者要外层引用
+/// 内层的列，而派生行的列契约今天没有形状，后者是"页与组的单位接不上"。下面那两颗护栏钉的是"它当场报错、
+/// 而且消息点名缺的是哪一格"。分组后的<em>计数</em>有对应物了（整份分组进派生表内层），判据在
+/// <c>DerivedTableTests</c>，真库上那一跑在 <c>samples</c> 的 §10。</para></summary>
 public sealed class GroupByTests
 {
     static FastSqlOrm orm() => SqlServer.Orm();
@@ -269,20 +271,23 @@ public sealed class GroupByTests
     }
 
     [Fact]
-    public void The_group_count_needs_a_derived_table_so_it_refuses_instead_of_counting_rows()
+    public void The_group_count_now_wraps_the_grouping_and_leaves_the_refusal_behind()
     {
-        // 这一格是最贵的一格：按原模型补一个 COUNT(*) 得到的是"每组的行数"，
-        // 而那是一堆看起来完全合理的错数字（§5.12）。
+        // 旧版这一格钉的是"当场抛"：按原模型补一个 COUNT(*) 得到的是"每组的行数"，
+        // 一堆看起来完全合理的错数字（§5.12）。现在整份分组进内层、外层只剩 COUNT(*)，
+        // 所以这一颗判据换成"它不再拒"：规划与编译全过，停在这册没有驱动的那一层（§3）。
+        // 派生表本身的文本判据在 <c>DerivedTableTests</c>（那里说清了文本从哪来）。
         var grouped = orm().Select<Order>()
             .GroupBy(o => o.CustomerId)
             .Select(g => new { CustomerId = g.Key, Orders = g.Count() });
 
-        var failure = Checks.Raised<FastSqlException>(() => grouped.CountAsync().GetAwaiter().GetResult());
+        var failure = Checks.Raised<DriverNotAvailableException>(
+            () => grouped.CountAsync(TestContext.Current.CancellationToken).GetAwaiter().GetResult());
 
-        Assert.Contains("分组之后的聚合", failure.Message, StringComparison.Ordinal);
+        Checks.Has("CreateConnection", failure.Message);
 
-        // 分页的总数走的是同一个咽喉（AggregateModel），但这一册读不到它：PagedAsync 先取行、后算总数，
-        // 离线没有驱动就先撞在 DriverNotAvailable 上。要看到那条报错得在集成册（真 sqlite 连接）里翻页到第二页。
+        // 分页的总数走的是同一个咽喉，而这一册读不到它：PagedAsync 先取行、后算总数。
+        // 真库上那两页的总数在 samples/FastSql.Sample 的 §10。
     }
 
     [Fact]

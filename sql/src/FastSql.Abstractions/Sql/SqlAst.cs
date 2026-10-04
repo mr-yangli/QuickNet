@@ -16,6 +16,19 @@ public sealed record SourceTable(TableRef Ref) : TableSource(Ref);
 
 public sealed record SourceSubquery(TableRef Ref, SelectStatement Query) : TableSource(Ref);
 
+/// <summary>派生表（§5.12）：外层那句由库规划，<see cref="Query"/> 是内层的整份 <see cref="SelectStatement"/>。
+/// 它与 <see cref="SourceSubquery"/> 的分别是<em>谁写的内层</em>：那一份的内层来自表达式里的相关子查询
+/// （WHERE / IN / EXISTS），这一份的内层来自同一个模型的另一份计划，于是"分组之后数有几组"
+/// 与"分页之后那一段共有几行"第一次有了能发的句子。<b>只有一个内层，没有清单</b> ——
+/// 一句 SELECT 的 FROM 位今天只承接一个源。</summary>
+public sealed record SourceDerived(TableRef Ref, SelectStatement Query) : TableSource(Ref);
+
+/// <summary>FROM 位换成一整段<b>用户自己写的</b> SELECT 文本（<c>WithSql</c>，规格 §11 的表源那一格）。
+/// 与 <see cref="RawExpression"/> 同一前提：文本一颗不动，只在外面包一层括号再挂别名，
+/// 因为那一列叫什么、按什么顺序，只有 SQL 作者知道。<see cref="Parameters"/> 是已经按本家前缀造好名的那一串，
+/// 发射时逐颗登记进书写器 —— 名字活在文本里，所以登记而不落地名字。</summary>
+public sealed record SourceRawText(TableRef Ref, string Sql, IReadOnlyList<AdoParameter> Parameters) : TableSource(Ref);
+
 public sealed record SourceFunction(TableRef Ref, string Name, IReadOnlyList<SqlExpression> Arguments) : TableSource(Ref);
 
 /// <summary>一个字面行集：<c>(VALUES (@p0,@p1),(@p2,@p3)) AS [t1] ([Id],[Name])</c>。

@@ -71,3 +71,20 @@ public class SkuTotal
 
     public decimal Amount { get; set; }
 }
+
+/// <summary>原生 SQL 的报表行（示例 §9.1）。形状要求只有「公共无参构造 + 公共可写属性」这一条：
+/// 手写 SQL 交回来的列序由那句 SQL 决定，所以这一族口按<em>列名对属性名</em>装配，不按位置。</summary>
+public class CustomerReport
+{
+    public int CustomerId { get; set; }
+
+    public string? Name { get; set; }
+
+    public int Orders { get; set; }
+
+    public decimal Total { get; set; }
+}
+
+/// <summary>构造器 DTO（示例 §9.6）：record 没有无参构造，原生口的名字装配不接它，
+/// 所以那一条走低层口自己给行委托。</summary>
+public record CustomerTop(int CustomerId, decimal Total);

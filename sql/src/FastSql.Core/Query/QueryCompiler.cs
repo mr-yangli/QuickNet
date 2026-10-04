@@ -15,7 +15,12 @@ public sealed class QueryCompiler(IDbProvider provider)
 
     public SelectStatement Compile(QueryModel model)
     {
-        var from = new SourceTable(model.Root);
+        // FROM 位有第三种来路：派生表（先编译内层，再挂成外层的唯一表位）、覆盖源（WithSql 的那一段文本），
+        // 以及照旧的根表位。内层走的是同一个 Compile，所以内层的分页、Include、方言无关的剥序全部原样成立。
+        var from = model.DerivedFrom is { } inner
+            ? new SourceDerived(model.Root, Compile(inner))
+            : model.Source ?? new SourceTable(model.Root);
+
         var where = Fold(model.Predicates);
         IReadOnlyList<OrderExpression> ordering = model.StripsOrdering ? [] : [.. model.Ordering];
 
@@ -160,7 +165,17 @@ public sealed class QueryCompiler(IDbProvider provider)
                 : 32;
 
         if (ast.From is { } from)
+        {
             length += from.Ref.Table.Name.Length + from.Ref.Alias.Length + 40;
+
+            // 两种"内层还有一整句"的表源：那份文本也在同一条 StringBuilder 里落地，所以容量要一起算。
+            length += from switch
+            {
+                SourceDerived derived => EstimateSqlLength(derived.Query),
+                SourceRawText raw => raw.Sql.Length,
+                _ => 0,
+            };
+        }
 
         foreach (var join in ast.Joins)
             length += join.Source.Ref.Table.Name.Length + join.Source.Ref.Alias.Length + 48;

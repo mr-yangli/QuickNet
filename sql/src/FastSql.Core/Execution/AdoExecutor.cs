@@ -1,6 +1,7 @@
 using System.Data;
 using System.Data.Common;
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using System.Text;
 using FastSql.Aop;
@@ -17,7 +18,7 @@ public sealed record ExecutionTag(string Operation, IReadOnlyList<string> Tables
 /// <summary>§3 的第 5 层：连接取还、参数落地、超时、观察类钩子。
 /// 这一层只接 <see cref="DialectSql"/>，既不认识查询模型也不生成文本 ——
 /// 所以「<c>ToSql()</c> 不连库」（§3）在这里是结构性的，不靠约定。</summary>
-public sealed class AdoExecutor
+public sealed partial class AdoExecutor
 {
     readonly string _connectionString;
 
@@ -222,6 +223,57 @@ public sealed class AdoExecutor
         }
     }
 
+    // ── 装载通道（§12.1 的 L1） ──────────────────────────────────────
+
+    /// <summary>§12.1 第三行「批量装载通道」在这一层的形状：<b>不发命令，只把一条已经开好的连接借出去</b>
+    /// （连同它上面可能活着的事务与超时），由 provider 的 <see cref="IBulkCopyChannel"/> 自家的高速入口接管那一批行。
+    /// 这正是这一层必须存在而不是让 provider 自己去拿连接的理由：<see cref="RentAsync"/> 那四支来路
+    /// （环境事务 → 会话连接 → 工厂 → 新建）是执行层的私有知识，provider 伸手去拿就会在环境事务在位时
+    /// 拿到一条<em>旁支</em>连接 —— 那句话 §6 (3) 已经写过一次，读者是文本路径，本家是同一个坑的第二条路。
+    ///
+    /// <para><b>观察钩子收到的是一句合成描述符，不是 SQL 文本</b>：这一档压根不产文本，
+    /// 而 <see cref="FastSqlAop.Executed"/> 与 <see cref="FastSqlAop.Error"/> 的形状里都带一颗
+    /// <see cref="DialectSql"/>。填 <c>null</c> 会把"这一句没有文本"变成"这两个钩子可能收到 null"，
+    /// 让每个订阅方都去补一次空判；于是给一句人能读懂的 <c>BULK COPY INTO &lt;表&gt;</c>，
+    /// 参数表是空的（<b>装载通道没有参数</b>，§12.1 那一句"不走文本、不走参数"就是这条空表的出处）。
+    /// <see cref="CheckNotCancelled"/> 照常放这句进去：<c>CommandTerminating</c> 是决策类闸门，
+    /// 新增一条写出口不能从它旁边绕过去 —— 拦整表写的现场至少能在 <paramref name="tag"/> 的表名上看住这一档。</para>
+    ///
+    /// <para><b>修剪税在这里交，不在 provider 里藏</b>：这一句要往上冒到 <c>IInsert&lt;T&gt;.ExecuteBulkAsync</c>
+    /// 的公开签名上（IL2046 要求接口与实现两边标注一致），所以写路径上第一次出现一个带
+    /// <see cref="RequiresUnreferencedCodeAttribute"/> 的出口。它不是疏漏：装载类不在
+    /// <see cref="System.Data.Common.DbProviderFactory"/> 的抽象面上，只能按类型名找。</para></summary>
+    [RequiresUnreferencedCode("转调装载通道：驱动自家的批量类不在 DbProviderFactory 的抽象面上，只能按类型名在驱动程序集里找。")]
+    [RequiresDynamicCode("与 RequiresUnreferencedCode 同一条：反射解析装载类需要运行时生成代码。")]
+    public async Task<int> CopyAsync(IBulkCopyChannel channel, BulkCopyRequest request, ExecutionTag tag, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(channel);
+        ArgumentNullException.ThrowIfNull(request);
+
+        var descriptor = new DialectSql($"BULK COPY INTO {request.DestinationTable}", []);
+
+        CheckNotCancelled(descriptor, tag);
+
+        var started = Stopwatch.GetTimestamp();
+
+        await using var rented = await RentAsync(ct).ConfigureAwait(false);
+
+        try
+        {
+            var rows = await channel.WriteAsync(
+                new BulkConnection(rented.Connection, rented.Transaction, CommandTimeoutSeconds), request, ct)
+                .ConfigureAwait(false);
+
+            Succeeded(descriptor, tag, started, rows);
+            return rows;
+        }
+        catch (Exception ex)
+        {
+            Failed(ex, descriptor, started);
+            throw;
+        }
+    }
+
     // ── 事务（§6 (1)(3)） ────────────────────────────────────────────
 
     /// <summary>开一条真事务并<b>就地</b>写进环境槽位。整个方法必须是同步的，两个理由见
@@ -360,20 +412,36 @@ public sealed class AdoExecutor
 
     async ValueTask<Session> OpenAsync(DialectSql sql, CancellationToken ct)
     {
+        var rented = await RentAsync(ct).ConfigureAwait(false);
+
+        // 借来的那一条不在这里 dispose：所有权随 Session 走，命令与连接同一个借用周期。
+        return new Session(rented, Prepare(rented.Connection, rented.Transaction, sql));
+    }
+
+    /// <summary>连接的四支来路，按"谁已经占着它"的优先级排：<b>环境事务 → 会话连接 → 会话工厂 → 新建并打开</b>。
+    /// 抽出来只多了一颗 <see cref="RentedConnection"/>，四支的判据与副作用一个字节都没动 —— 抽它的理由是装载通道
+    /// 那一条路要的是<em>连接本身</em>而不是命令（§12.1 第三行：那一家的高速入口不接 <c>DbCommand</c>），
+    /// 而"环境事务在位时必须落在被事务独占的那条连接上"这句话（§6 (3)）在两条路上必须是同一份实现，
+    /// 不许各写一遍再各自漂移。</summary>
+    /// <remarks><b>返回值的连接归调用方 dispose</b>（<see cref="RentedConnection.DisposeAsync"/>，只在
+    /// "这一支是我们自己新建的"时才真的还）。两条路各自怎么交接连接写在那两条路上：<see cref="OpenAsync"/>
+    /// 把所有权转给 <see cref="Session"/>，<see cref="CopyAsync"/> 自己 <c>await using</c>。</remarks>
+    async ValueTask<RentedConnection> RentAsync(CancellationToken ct)
+    {
         // 环境事务在位时不取新连接：语句必须走那条被事务独占的连接，否则"自动 enlist"是假的（§6 (3)）。
         if (FastSqlTransaction.For(this) is { } ambient)
-            return new Session(ambient.Connection, Prepare(ambient.Connection, ambient.DbTransaction, sql), ownsConnection: false);
+            return new RentedConnection(ambient.Connection, ambient.DbTransaction, ownsConnection: false);
 
         // 会话级连接复用（§8.4）：DbContext 绑的连接在位时直接走它，不再每句取还。
         if (_sessionConnection.Value is { } sessionConn)
-            return new Session(sessionConn, Prepare(sessionConn, transaction: null, sql), ownsConnection: false);
+            return new RentedConnection(sessionConn, transaction: null, ownsConnection: false);
 
         // 工厂在位但连接还没建——首次执行时调工厂取连接，之后复用。
         if (_sessionConnectionFactory.Value is { } factory)
         {
             var conn = factory();
             _sessionConnection.Value = conn;
-            return new Session(conn, Prepare(conn, transaction: null, sql), ownsConnection: false);
+            return new RentedConnection(conn, transaction: null, ownsConnection: false);
         }
 
         var connectors = Provider.Connectors;
@@ -393,7 +461,7 @@ public sealed class AdoExecutor
             throw;
         }
 
-        return new Session(connection, Prepare(connection, transaction: null, sql), ownsConnection: true);
+        return new RentedConnection(connection, transaction: null, ownsConnection: true);
     }
 
     DbCommand Prepare(DbConnection connection, DbTransaction? transaction, DialectSql sql)
@@ -500,18 +568,32 @@ public sealed class AdoExecutor
 
     /// <remarks>参数只能进属性初始化器、不能在方法体里再引用一次：主构造函数参数一旦"既被捕获进状态、
     /// 又被用来初始化成员"就是 CS9124，所以 <see cref="DisposeAsync"/> 读的是属性而不是参数。</remarks>
-    sealed class Session(DbConnection connection, DbCommand command, bool ownsConnection) : IAsyncDisposable
+    sealed class RentedConnection(DbConnection connection, DbTransaction? transaction, bool ownsConnection) : IAsyncDisposable
+    {
+        public DbConnection Connection { get; } = connection;
+
+        public DbTransaction? Transaction { get; } = transaction;
+
+        public async ValueTask DisposeAsync()
+        {
+            // 环境事务那条连接归事务，会话那条连接归会话，语句结束都不能把它还给池 ——
+            // 连接上还有一个活着的事务（或还有后面的语句要用它），归还等于把别人的事务交给下一个借用者。
+            if (ownsConnection)
+                await Connection.DisposeAsync().ConfigureAwait(false);
+        }
+    }
+
+    /// <remarks>同 <see cref="RentedConnection"/>：主构造函数参数不能既捕获又初始化（CS9124）。
+    /// 连接那一半的处置整个交给 <paramref name="rental"/>，这里只负责命令 ——
+    /// "谁自有的连接谁还"这句话因此只有 <see cref="RentedConnection.DisposeAsync"/> 一处。</remarks>
+    sealed class Session(RentedConnection rental, DbCommand command) : IAsyncDisposable
     {
         public DbCommand Command { get; } = command;
 
         public async ValueTask DisposeAsync()
         {
             await Command.DisposeAsync().ConfigureAwait(false);
-
-            // 环境事务那条连接归事务，语句结束不能把它还给池 —— 连接上还有一个活着的事务，
-            // 归还等于把别人的事务交给下一个借用者。
-            if (ownsConnection)
-                await connection.DisposeAsync().ConfigureAwait(false);
+            await rental.DisposeAsync().ConfigureAwait(false);
         }
     }
 }

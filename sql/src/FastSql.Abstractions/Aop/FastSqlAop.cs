@@ -16,6 +16,14 @@ public sealed class FastSqlAop
     public Action<SlowCommandEvent>? SlowQuery;
     public Action<MaterializedEvent>? Materialized;
 
+    /// <summary>批量降级的那一位（§12.2 的 <c>DegradeAndLog</c>）。<b>它存在的理由是一格缺口</b>：
+    /// 那一节原稿要求"每一次降级在三处留痕（<c>LogLevel.Warning</c> + OTel 标签 + <c>BulkReport</c>）"，
+    /// 而本仓库既没有日志器也没有 OTel，三处里今天只有 <c>BulkReport</c> 是自带的产物 —— 那一句"务必用
+    /// <c>FallbackPolicy.Never</c> 在 CI 跑一遍"因此一直没有对象。这一位就是它的落地形态：
+    /// 降级这件事从此<em>可订阅</em>，"批量悄悄变成逐条"不再只能靠人读 <c>Reason</c>。
+    /// 零成本规则照旧：未订阅时不构造事件对象。</summary>
+    public Action<BulkDegradedEvent>? BulkDegraded;
+
     // ── 改写类：值级改写，按注册顺序串联
     public Action<AuditValueEvent>? AuditValue;
     public Action<ParameterBindingEvent>? ParameterBinding;
@@ -78,6 +86,16 @@ public sealed record CommandErrorEvent(Exception Exception, string Sql, long Ela
 public sealed record SlowCommandEvent(Sql.DialectSql Sql, long ElapsedMilliseconds, long ThresholdMilliseconds);
 
 public sealed record MaterializedEvent(object Entity, string EntityTypeName, int OrdinalInBatch);
+
+/// <summary>批量降级事件（<see cref="FastSqlAop.BulkDegraded"/>）。<b>只在真的降级时派发</b>：
+/// 请求 <c>Auto</c> 而拿到的就是阶梯上第一档不算降级，请求了装载通道而那一家根本没有通道才算。
+/// <see cref="Reason"/> 与 <c>BulkReport.Reason</c> 是同一句话的两个读者（一个给人看、一个是订阅方要打的字段），
+/// 所以两处由 <c>InsertEngine</c> 一次算出、不分头编。</summary>
+public sealed record BulkDegradedEvent(
+    Providers.BulkMethod Requested,
+    Providers.BulkMethod Method,
+    int RowCount,
+    string Reason);
 
 /// <summary>列级自动填充。零装箱的做法是回调只在「该列需要填充」时触发，且 <see cref="SetValue"/> 直接写回实体字段。</summary>
 public sealed class AuditValueEvent : IEquatable<AuditValueEvent>

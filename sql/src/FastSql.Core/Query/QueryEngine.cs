@@ -223,7 +223,48 @@ sealed class QueryEngine
 
         var root = Model.Root with { Alias = alias };
 
-        return Derive(Model with { Tables = [root, .. Model.Tables.Skip(1)] });
+        // 覆盖源里的 TableRef 是 WithSql 那一刻抓住的旧别名实例：不改写它，FROM 挂 "t0" 而谓词引用 "o"，
+        // 得到的是一句"无法绑定多部分标识符"。与上面那颗守卫同一个理由，只是这一格的引用藏在表源里。
+        var source = Model.Source is SourceRawText raw ? raw with { Ref = root } : Model.Source;
+
+        return Derive(Model with { Tables = [root, .. Model.Tables.Skip(1)], Source = source });
+    }
+
+    /// <summary><c>WithSql</c>（规格 §11 的表源那一格）：把根表位的 FROM 换成<b>一整段用户自己写的 SELECT</b>，
+    /// 链上后面的 <c>Where</c>/<c>OrderBy</c>/<c>Select</c> 仍然照契约端出去 —— 于是外面这一层是库写的、
+    /// 里面那一段是你写的，两边在同一个 <c>DialectSql</c> 里，AOP 与日志仍是同一条链。
+    ///
+    /// <para>三条口径与 <see cref="RawSql"/> 那一段完全一致（那是唯一的一份折叠实现）：文本一颗不动；
+    /// 参数名 = 本家前缀 + 属性名；位置式占位符那一家（GBase 8s）当场拒。多一条在这里：<b>参数名不许长成
+    /// <c>前缀 + p + 数字</c> 的形状</b> —— 那是 <c>SqlWriter</c> 给生成参数留的号段（编号长在项目参数集合的
+    /// 长度上），撞上去的症状是两处绑定抢同一个名字、值串到隔壁列。</para>
+    ///
+    /// <para><b>外面那一层按契约选列</b>，所以内层必须交回契约里那些列名（<c>Select *</c> 那形天然成立）。
+    /// 想要内层的列名与契约不同的形状，就用 <c>Select</c> 投影或干脆走 §11 的原生 SQL 口。</para></summary>
+    public QueryEngine WithSql(string sql, object? args)
+    {
+        var prefix = Orm.Provider.Dialect.ParameterPrefix;
+        var folded = RawSql.ToDialectSql(sql, args, prefix);
+
+        foreach (var parameter in folded.Parameters)
+            if (IsGeneratedName(parameter.Name, prefix))
+                throw new FastSqlException(
+                    $"WithSql 的参数名 {parameter.Name} 占了生成 SQL 的号段（前缀 {prefix} + p + 数字，那里按项目参数集合的长度编号）：" +
+                    "同名的两颗会让外层生成的参数与原生文本里的这颗抢同一个绑定。请把它改成不叫 p<数字> 的名字。");
+
+        return Derive(Model with { Source = new SourceRawText(Model.Root, folded.Text, folded.Parameters) });
+    }
+
+    static bool IsGeneratedName(string name, char prefix)
+    {
+        if (name.Length < 3 || name[0] != prefix || name[1] != 'p')
+            return false;
+
+        for (var i = 2; i < name.Length; i++)
+            if (!char.IsAsciiDigit(name[i]))
+                return false;
+
+        return true;
     }
 
     /// <summary>联表的落点。ON 的<b>最后一个</b>形参就是新表（§5.2 的 arity 递增），所以新表的 CLR 类型从它取，
@@ -1110,31 +1151,62 @@ sealed class QueryEngine
 
     internal QueryModel AggregateModel(QueryModel model, AggregateKind kind, LambdaExpression? key)
     {
-        // 两条都需要"先包成派生表再聚合"的形态，而 P0 的 AST 还没有派生表入口（SourceSubquery 有，规划没有）。
-        if (model.Offset is > 0 || model.Limit is not null)
-            throw new FastSqlException("带 Skip/Take 的聚合要先包成子查询再聚合，本版本未接入（§5.12）。请在未分页的查询上聚合，再对同一查询分页。");
+        var countLike = kind is AggregateKind.Count or AggregateKind.LongCount or AggregateKind.Any;
 
-        if (model.Distinct)
-            throw new FastSqlException("DISTINCT 之后再聚合同样要包子查询（SELECT COUNT(*) FROM (SELECT DISTINCT …)），本版本未接入。");
-
-        // 分组之后再聚合问的是"有几组"而不是"有几行"，而这一版的 AST 发不出那种句子：
-        // 直接按原模型补一个 COUNT(*) 会得到"每组的行数"，而那是一个看起来完全合理的错数字
-        // （分页的总数那一格尤其危险，§5.12）。宁可报错，不降级。
-        if (model.GroupBy.Count > 0)
-            throw new FastSqlException(
-                "分组之后的聚合（含分页总数）要先包成派生表再聚合（SELECT COUNT(*) FROM (SELECT … GROUP BY …)），本版本未接入（§5.12）。" +
-                "要总数请在未分组的查询上 Count/ToPaged；要组数请取回全部分组，或先聚合成一个不带 GroupBy 的形状。");
-
-        var plan = kind switch
+        // 派生表那一档（§5.12）：这三种形状下"在原模型上换一个 COUNT 出来"得到的是一个看起来完全合理的错数字 ——
+        // 分组之后按行数是"每组的行数"，DISTINCT 之后按行数是去重前的行数，而带页的整句换掉分页就数了全表。
+        // 现在它们各发各的句子：整份模型原样进内层，外层只剩一个 COUNT(*)。
+        if (NeedsDerivedTable(model))
         {
-            AggregateKind.Count or AggregateKind.LongCount or AggregateKind.Any
-                => new AggregateProjection(kind, new StarExpression(null), kind == AggregateKind.LongCount ? typeof(long) : typeof(int), Distinct: false),
-            _ => key is null
+            // 只有 COUNT 一族发得出这一档：外层要引用内层的列（SELECT SUM(t0.Total) FROM (…) t0）
+            // 就得先给派生行造一份列契约，而那一步今天没有形状（派生行的列名与类型只在内层的投影计划里）。
+            if (!countLike)
+                throw new FastSqlException(
+                    $"分组之后、或带 Skip/Take、DISTINCT 之后再 {kind} 要的是外层引用内层的列（SELECT {kind}(t0.那一列) FROM (…) t0），" +
+                    "而派生行的列契约今天没有形状 —— 这一档只接 COUNT 一族。请把这一列在未分组、未分页的查询上聚合，" +
+                    "或者走 §11 的原生 SQL 口（orm.Ado.QueryAsync / ExecuteScalarAsync）自己写外层。");
+
+            return Derived(model, kind);
+        }
+
+        var plan = countLike
+            ? new AggregateProjection(kind, new StarExpression(null), kind == AggregateKind.LongCount ? typeof(long) : typeof(int), Distinct: false)
+            : key is null
                 ? throw new FastSqlException($"{kind} 需要值选择器，例如 q.Sum(o => o.Amount)。")
-                : new AggregateProjection(kind, Orm.Expressions.Visit(key.Body, Scope.Create(model, key)), key.Body.Type, Distinct: false),
-        };
+                : new AggregateProjection(kind, Orm.Expressions.Visit(key.Body, Scope.Create(model, key)), key.Body.Type, Distinct: false);
 
         return model with { Plan = plan, Ordering = [], Offset = null, Limit = null };
+    }
+
+    /// <summary>这一份模型能不能就地补一个聚合、还是必须先包成内层。</summary>
+    static bool NeedsDerivedTable(QueryModel model)
+        => model.GroupBy.Count > 0 || model.Distinct || model.Offset is > 0 || model.Limit is not null;
+
+    /// <summary>包内层：外层清掉一切子句（它们都活在内层那一份里，重复端出去就是"同一条 WHERE 写两遍而第二遍引用不到列"），
+    /// 只留表位与聚合计划。<b>内层的序按一句库的事实处理</b>：T-SQL 拒绝带 <c>ORDER BY</c> 的派生表
+    /// （除非内层自己有分页，那时那个序是 <c>OFFSET..FETCH</c> 的一部分，摘掉就改了页的内容），
+    /// 而 count 不关心序，所以没有分页时把它剥掉是既合法又省的一刀。</summary>
+    static QueryModel Derived(QueryModel model, AggregateKind kind)
+    {
+        var inner = model.Offset is null && model.Limit is null ? model with { Ordering = [] } : model;
+
+        var plan = new AggregateProjection(kind, new StarExpression(null), kind == AggregateKind.LongCount ? typeof(long) : typeof(int), Distinct: false);
+
+        return model with
+        {
+            Plan = plan,
+            Ordering = [],
+            GroupBy = [],
+            Having = null,
+            Offset = null,
+            Limit = null,
+            Distinct = false,
+            Predicates = [],
+            Joins = [],
+            Includes = [],
+            IncludeManys = [],
+            DerivedFrom = inner,
+        };
     }
 
     public async Task<PagedResult<TResult>> PagedAsync<TResult>(int page, int size, PagedOptions? options, CancellationToken ct)

@@ -243,15 +243,17 @@ public sealed class GuardrailTests
     }
 
     [Fact]
-    public async Task Aggregate_over_a_paged_query_throws_before_the_driver_is_reached()
+    public async Task A_value_aggregate_over_a_paged_query_refuses_while_the_count_family_goes_through()
     {
         var query = orm().Select<Order>().OrderBy(o => o.Id).Skip(10).Take(10);
 
-        // 聚合要先包成派生表，而 P0 的 AST 没有那个入口（§5.12）。这里要的是"报出来"而不是"跑出一条错 SQL"。
-        // 传 TestContext 的 token 而不是 default：查询真挂住时 xunit 要能取消它并把这条报成失败而不是拖死整轮。
-        var failure = await Assert.ThrowsAsync<FastSqlException>(() => query.CountAsync(TestContext.Current.CancellationToken));
+        // 带页的聚合现在分两档：COUNT 一族整份模型进内层、外层只发 COUNT(*)，所以它不再拒；
+        // 而 SUM 要的是"外层引用内层的某一列"，那一步缺派生行的列契约（§5.12 的 P1 那一格）。
+        // 这里传的 token 而不是 default：查询真挂住时 xunit 要能取消它并把这条报成失败而不是拖死整轮。
+        var failure = await Assert.ThrowsAsync<FastSqlException>(() => query.SumAsync(o => o.Amount, TestContext.Current.CancellationToken));
 
-        Checks.Has("子查询", failure.Message);
+        Checks.Has("派生行的列契约", failure.Message);
+        Checks.Has("orm.Ado", failure.Message);
     }
 
     [Fact]

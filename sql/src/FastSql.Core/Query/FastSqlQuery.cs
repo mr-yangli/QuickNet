@@ -80,6 +80,8 @@ public class FastSqlQuery<T> : IQuery<T>, IEngineCarrier
 
     public IQuery<T> As(string alias) => new FastSqlQuery<T>(Engine.Alias(alias));
 
+    public IQuery<T> WithSql(string sql, object? args = null) => new FastSqlQuery<T>(Engine.WithSql(sql, args));
+
     public IQuery<T, T2> LeftJoin<T2>(Expression<Func<T, T2, bool>> on) where T2 : class
         => new FastSqlJoinQuery<T, T2>(Engine.Join(JoinKind.Left, on));
 

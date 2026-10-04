@@ -20,6 +20,16 @@ static class QueryModelPrinter
              .Append(" AS ").Append(table.Alias).Append('\n');
         }
 
+        // 表源的两种非默认来路都要在文本里看得见：WithSql 那一段是用户写的（RAW[…]），
+        // 派生表那份是库规划的内层模型（DERIVED + 缩进的内层全文）。留白的理由是 §13.2 那句判据：
+        // 模型文本里没有，等价性测试就漏掉一整类差异，而 Explain() 给人看的那一段也少一格。
+        if (model.Source is SourceRawText raw)
+            b.Append("  SOURCE RAW[").Append(raw.Sql).Append("]{")
+             .Append(string.Join(", ", raw.Parameters.Select(p => p.Name))).Append("}\n");
+
+        if (model.DerivedFrom is { } inner)
+            b.Append("  DERIVED\n").Append(Indent(Print(inner)));
+
         foreach (var join in model.Joins)
         {
             var ref_ = join.Source.Ref;
@@ -64,6 +74,21 @@ static class QueryModelPrinter
     }
 
     static string Join(IReadOnlyList<Sql.Ast.SqlExpression> nodes) => string.Join(", ", nodes.Select(Expr));
+
+    /// <summary>内层那份模型的全文按四格缩进嵌进来。<b>空行直接丢掉</b>：外层 <see cref="Print"/> 每行都以
+    /// <c>'\n'</c> 结尾，切出来的最后一段必然是空串，留着它就多一个尾随空行，而规范文本是按字节比的。</summary>
+    static string Indent(string text)
+    {
+        var b = new StringBuilder(text.Length + 16);
+
+        foreach (var line in text.Split('\n'))
+        {
+            if (line.Length > 0)
+                b.Append("    ").Append(line).Append('\n');
+        }
+
+        return b.ToString();
+    }
 
     static string Plan(ProjectionPlan plan) => plan switch
     {

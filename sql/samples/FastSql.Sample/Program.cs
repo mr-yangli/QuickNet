@@ -1,4 +1,6 @@
 using FastSql;
+using FastSql.Providers;
+using FastSql.Query;
 using FastSql.Sample;
 using FastSql.Schema;
 using Microsoft.Data.Sqlite;
@@ -418,10 +420,228 @@ var filteredGroups = await grouped.ToListAsync();
 
 Console.WriteLine($"先 WHERE 再 GROUP BY 再 HAVING：{string.Join(", ", filteredGroups.Select(r => $"客户{r.CustomerId}({r.Orders}笔/{r.Total})"))}");
 
-// 还没接住的三件事，都会当场报错而不是给一个看起来合理的数（不是静默降级）：
-//   · 分组后的 Count / ToPagedAsync 的总数 —— 要 SELECT COUNT(*) FROM (SELECT … GROUP BY …)，派生表入口未接入；
+// 还没接住的两件事，都会当场报错而不是给一个看起来合理的数（不是静默降级）：
 //   · 联表之后的分组 —— GroupBy 今天开在单表链（IQuery<T>）上，两表/三表链没有这一颗口；
 //   · 组内去重计数 g.CountDistinct(…) —— COUNT(DISTINCT x) 与 FILTER 各家不同，未接入。
+//   分组之后的计数与分页总数已经接住（派生表，见下面 §10），而分组之后的 SUM/Max 仍在这一格外 ——
+//   这几件今天都能用下面 §9 的原生 SQL 口自己写出来。
+
+Console.WriteLine();
+
+// ── 9. 原生 SQL 逃生舱（orm.Ado 的字符串口） ───────────────────────────
+Console.WriteLine("═══ 9. 原生 SQL ═══");
+Console.WriteLine();
+
+// ── 9.1 手写一句分组 SQL，行按「列名对属性名」装配 ──
+//
+// 三个约定：文本一颗不动（不重写占位符、不补引号、不校验语法）；参数名 = 本家前缀 + 属性名，
+// 所以文本里的占位符必须写成 @minAmount 这一形；行落在「公共无参构造 + 公共可写属性」的形状上。
+// 对不上属性的列被忽略（报表 SQL 常带辅助列），属性拿不到列则留默认值（那句 SQL 少选了一列）。
+//
+var report = await orm.Ado.QueryAsync<CustomerReport>(
+    """
+    SELECT o.CustomerId  AS CustomerId,
+           c.Name        AS Name,
+           COUNT(*)      AS Orders,
+           SUM(o.Amount) AS Total
+      FROM Orders o
+      JOIN Customers c ON c.Id = o.CustomerId
+     WHERE o.Amount >= @minAmount
+     GROUP BY o.CustomerId, c.Name
+     ORDER BY SUM(o.Amount) DESC
+    """,
+    new { minAmount = 100m });
+
+Console.WriteLine("手写 GROUP BY 的报表行：");
+foreach (var row in report)
+    Console.WriteLine($"  {row.Name}（客户 {row.CustomerId}）：{row.Orders} 笔，合计 {row.Total}");
+
+// ── 9.2 标量出口：第一行第一列，DBNull 折成 null ──
+var totalOrders = await orm.Ado.ExecuteScalarAsync("SELECT COUNT(*) FROM Orders WHERE Amount >= @min", new { min = 100m });
+
+Console.WriteLine($"ExecuteScalarAsync：金额 ≥100 的订单共 {totalOrders} 笔");
+
+// ── 9.3 一行一个标量：直读第 0 列，不进名字匹配 ──
+var biggest = await orm.Ado.FirstAsync<decimal>("SELECT MAX(Amount) FROM Orders WHERE CustomerId = @customerId", new { customerId = cA.Id });
+
+Console.WriteLine($"FirstAsync<decimal>：客户 {cA.Id} 的最大单笔 = {biggest}");
+
+// ── 9.4 逐行流式：不先把整张结果集读进 List ──
+Console.Write("StreamAsync<string>（上海的客户名）：");
+
+await foreach (var name in orm.Ado.StreamAsync<string>(
+                   "SELECT Name FROM Customers WHERE City = @city ORDER BY Name", new { city = "上海" }))
+    Console.Write($"{name} ");
+
+Console.WriteLine();
+
+// ── 9.5 非查询：与链式写路径同一个出口，因此同一条 AOP 链、同一次连接复用 ──
+var affected = await orm.Ado.ExecuteNonQueryAsync(
+    "UPDATE Orders SET Note = @note WHERE CustomerId = @customerId",
+    new { note = "原生口", customerId = cA.Id });
+
+// 读回来验证：原生口写的，链式口读得到 —— 这里没有第二条通道，只有一个 ADO 出口。
+var noted = await orm.Select<Order>().Where(o => o.CustomerId == cA.Id && o.Note == "原生口").CountAsync();
+
+Console.WriteLine($"ExecuteNonQueryAsync：改了 {affected} 行，链式口读回 {noted} 行 Note=原生口");
+
+// ── 9.6 一次调用发多句：共用一条连接，而它不开事务 ──
+//   要把这一串包进事务请显式 BeginTransaction —— 「这一串是不是一个原子单位」只有 SQL 作者知道。
+await orm.Ado.ExecuteBatchAsync(
+[
+    "CREATE TABLE IF NOT EXISTS SampleBatchProbe (Seq INTEGER PRIMARY KEY, Label TEXT)",
+    "INSERT INTO SampleBatchProbe (Label) VALUES ('第一句')",
+    "INSERT INTO SampleBatchProbe (Label) VALUES ('第二句')",
+]);
+
+var probe = await orm.Ado.QueryAsync<string>("SELECT Label FROM SampleBatchProbe ORDER BY Seq");
+
+await orm.Ado.ExecuteNonQueryAsync("DROP TABLE SampleBatchProbe");
+
+Console.WriteLine($"ExecuteBatchAsync 三句：读回 [{string.Join(", ", probe)}]，探针表已清掉");
+
+// ── 9.7 record / 构造器 DTO：走低层口，自己给行委托 ──
+//
+// 名字装配那一条不接 record（参数顺序在这一口里没有对应物，列序由那句 SQL 决定）。
+// 低层口收 (DialectSql, Func<DbDataReader, T>, ExecutionTag)，ToRawSql 负责把文本 + 参数对象折成 DialectSql，
+// 行委托里用 ValueConverter（库里唯一的取值门）而不是各型各读一份。
+//
+var top = await orm.Ado.QueryAsync(
+    orm.Ado.ToRawSql(
+        "SELECT CustomerId, SUM(Amount) AS Total FROM Orders GROUP BY CustomerId ORDER BY Total DESC LIMIT 1",
+        null),
+    static reader => new CustomerTop(
+        FastSql.Materialization.ValueConverter.Read<int>(reader, 0),
+        FastSql.Materialization.ValueConverter.Read<decimal>(reader, 1)),
+    FastSql.Execution.RawSql.Tag,
+    null,
+    default);
+
+Console.WriteLine($"低层口装 record：{top.FirstOrDefault()}");
+
+Console.WriteLine();
+
+// ── 10. 派生表（分组/DISTINCT/带页之后的计数）与 WithSql ────────────────
+Console.WriteLine("═══ 10. 派生表与 WithSql ═══");
+Console.WriteLine();
+
+// ── 10.1 分组之后的总数：整份分组进内层，外层只发 COUNT(*) ──
+//
+// 这一格以前会当场报错，因为"照着原模型换一个 COUNT(*)"得到的是每组里的行数（§5.12）。
+// 两个数放在一起打印：内层交回几组、外层数出几组，对了才说明包的是内层而不是换掉的整句。
+//
+var byCustomer = orm.Select<Order>()
+    .GroupBy(o => o.CustomerId)
+    .OrderByDescending(g => g.Count())
+    .Select(g => new { CustomerId = g.Key, Orders = g.Count() });
+
+var groups = await byCustomer.ToListAsync();
+var groupTotal = await byCustomer.CountAsync();
+
+Console.WriteLine($"分组交回 {groups.Count} 组，派生表外层数出 {groupTotal} 组");
+Console.WriteLine($"  同一条链自己端出去（{byCustomer.ToLogSql()}），而它 count 的那一句把 ORDER BY 剥掉了 —— 内层没有分页时序就不参与（§5.12）。");
+
+// ── 10.2 分组查询的分页：页与组同一单位，总数也是组数 ──
+var groupedPage = await orm.Select<Order>()
+    .GroupBy(o => o.CustomerId)
+    .OrderBy(g => g.Key)
+    .Select(g => new { CustomerId = g.Key, Orders = g.Count() })
+    .ToPagedAsync(page: 1, size: 2, new PagedOptions(CountMethod.CountStar));
+
+Console.WriteLine($"分组分页：第 {groupedPage.Page} 页 {groupedPage.Items.Count} 行，总组数 {groupedPage.Total}（这一格点名了 CountMethod.CountStar；Auto 在首页只多取一行判 HasNext，Total 就是 null）");
+
+// ── 10.3 DISTINCT 之后计数：数的是去重后的行 ──
+var distinctCustomers = await orm.Select<Order>().Select(o => o.CustomerId).Distinct().CountAsync();
+var allCustomers = await orm.Select<Order>().Select(o => o.CustomerId).CountAsync();
+
+Console.WriteLine($"去重后的客户数 {distinctCustomers}（不去重是 {allCustomers} 行订单）");
+
+// ── 10.4 带页之后再计数：数的就是那一页的行，不是全表 ──
+var paged = orm.Select<Order>().OrderBy(o => o.Id).Skip(1).Take(2);
+var pageRows = await paged.CountAsync();
+var allRows = await orm.Select<Order>().CountAsync();
+
+Console.WriteLine($"Skip(1).Take(2) 之后 CountAsync = {pageRows}，全表 = {allRows}（分页那两颗粒留在内层：{paged.ToLogSql()}）");
+
+// ── 10.5 WithSql：里面那一段自己写，外面这一层仍然归库 ──
+//
+// 原生文本一颗不动（连表名都不加引号），而链上的 Where/OrderBy 按列契约端出去，
+// 所以参数集合里先是原生那颗（@customerId），生成的那颗接着编号（@p1）—— 两处不可能撞名。
+//
+var native = orm.Select<Order>()
+    .WithSql("SELECT * FROM Orders WHERE CustomerId = @customerId", new { customerId = cA.Id })
+    .Where(o => o.Amount >= 200m)
+    .OrderBy(o => o.Id);
+
+Console.WriteLine($"WithSql 外层由库写：{native.ToLogSql()}");
+Console.WriteLine($"  读回 {await native.CountAsync()} 行，其中最大单笔 {await native.MaxAsync(o => o.Amount)}");
+
+// 外层是 COUNT(*) 时，原生那一段就落在派生表的内层位置上 —— 两格合起来用，谁写内层仍然只有一处含糊。
+var nativeCount = orm.Select<Customer>().Where(c => native.Count() > 0);
+
+Console.WriteLine($"派生表套原生源：{nativeCount.ToLogSql()}");
+
+Console.WriteLine();
+
+// ── 11. 批量高速层（ExplainBulk / WithBulk / ExecuteBulkAsync） ─────────
+Console.WriteLine("═══ 11. 批量高速层 ═══");
+Console.WriteLine();
+
+// 阶梯从上往下取第一个满足条件的层：装载通道（L1）→ 多值语句（L3）→ 逐条（L5）。
+// 装载通道那一档今天只有 SQL Server 一家接（src/FastSql.Providers.SqlServer/SqlServerBulk.cs:40 那颗
+// ResolveCopyChannel），而本示例跑在 SQLite 上 —— 那一家的 Bulk 直接是 null
+// （src/FastSql.Providers.Sqlite/SqliteProvider.cs:220）。所以下面每一颗交回的都是文本层那两档，
+// 而"退到了哪一层、为什么退"这件事本身是打印得出来的：Reason 那句话就是给现场读的。
+var bulk = Enumerable.Range(1, 500).Select(i => new Order
+{
+    CustomerId = cA.Id,
+    Amount = 10m + i,
+    CreatedAt = new DateTime(2026, 3, 1).AddMinutes(i),
+    Note = "bulk-layer",
+}).ToArray();
+
+// 决策与执行共用同一次判定，所以这一颗不连库也报得出块数（它不建文本、不发语句，但要反射问一次"有没有通道"）。
+var layer = orm.InsertRange(bulk).ExplainBulk();
+
+Console.WriteLine($"Auto 取到的层：{layer.Method} ∶ {layer.RowCount} 行 / {layer.RoundTrips} 次往返 / 每块 {layer.ChunkSize} 行");
+Console.WriteLine($"  为什么：{layer.Reason}");
+
+// 请求了装载通道而这一家没有：默认策略 DegradeAndLog 退 L3，并在订阅位上留一次痕（未订阅时零成本）。
+var traces = new List<string>();
+orm.Aop.BulkDegraded = e => traces.Add($"{e.Requested} → {e.Method}");
+
+var degraded = await orm.InsertRange(bulk).WithBulk(BulkMethod.CopyChannel).ExecuteBulkAsync();
+
+Console.WriteLine($"请求 {degraded.Requested} 实际走了 {degraded.Method}（Degraded={degraded.Degraded}），留痕 {traces.Count} 次：{traces.FirstOrDefault()}");
+
+// 同一条请求换成 Never：拿不到请求的那一层就抛。这是 CI 里防「批量悄悄变成逐条」的那一闸。
+try
+{
+    await orm.InsertRange(bulk).WithBulk(BulkMethod.CopyChannel, FallbackPolicy.Never).ExecuteBulkAsync();
+}
+catch (FastSqlException ex)
+{
+    Console.WriteLine($"  Never 拦下了：{ex.Message}");
+}
+
+// 指向装载通道的请求在行数出口那里也是拒，不是「默默当没看见」：那颗出口返回一颗 int，
+// 装不下"走了哪一层、几次往返"，而 COPY 那一档根本不产 SQL 文本（改写钩子会集体失效）。
+try
+{
+    await orm.InsertRange(bulk).WithBulk(BulkMethod.CopyChannel).ExecuteAffrowsAsync();
+}
+catch (FastSqlException ex)
+{
+    Console.WriteLine($"  行数出口拒了：{ex.Message}");
+}
+
+// 旋钮 rowsPerRoundTrip 只许往下压、不许往上抬：这里把每块压到 20 行，500 行就成了 25 次往返。
+var capped = await orm.InsertRange(bulk).WithBulk(BulkMethod.MultiValue, rowsPerRoundTrip: 20).ExecuteBulkAsync();
+
+Console.WriteLine($"压到每块 20 行：{capped.RoundTrips} 次往返、每块 {capped.ChunkSize} 行");
+
+// 两次真执行 × 500 行进了库，拒掉的那两次一行都没进（拒都在动手之前）。
+Console.WriteLine($"库里读回 {await orm.Select<Order>().Where(o => o.Note == "bulk-layer").CountAsync()} 行 Note=bulk-layer");
 
 Console.WriteLine();
 Console.WriteLine("═══ 示例完成 ═══");

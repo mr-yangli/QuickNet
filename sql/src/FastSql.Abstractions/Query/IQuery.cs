@@ -106,6 +106,15 @@ public interface IQuery<T> : IAsyncEnumerable<T>
     /// <summary>显式别名，取代按形参名找表（§5.1）。</summary>
     IQuery<T> As(string alias);
 
+    /// <summary>根表位的 FROM 换成<b>一整段自己写的 SELECT</b>（规格 §11 的表源那一格）：
+    /// 外面这一层仍然由库端 —— <c>Where</c>/<c>OrderBy</c>/<c>Select</c> 照契约出列，内层那一段一个字不动，
+    /// 两边合成同一个 <c>DialectSql</c>，所以日志、AOP、连接复用、超时与链式同一条链。
+    /// <c>args</c> 的口径与 <c>orm.Ado</c> 的字符串口同一份实现（<c>RawSql</c>）：参数名 = 本家前缀 + 属性名，
+    /// 文本里的占位符要写成同形的那一颗；位置式那一家（GBase 8s）当场拒，参数名占了生成号段（<c>@p0</c> 那一形）也当场拒。
+    /// <b>内层必须交回契约里那些列名</b>（<c>SELECT *</c> 那形天然成立）。
+    /// <b>只落在 arity 1 这一档</b>，与 <see cref="IgnoreQueryFilters"/> 同一处已记名的缺口：联表链上没有这一颗口。</summary>
+    IQuery<T> WithSql(string sql, object? args = null);
+
     IQuery<T> WithCache(string cacheKey, TimeSpan ttl);
 
     IQuery<T> Distinct();

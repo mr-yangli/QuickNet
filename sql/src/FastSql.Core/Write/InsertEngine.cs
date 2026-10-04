@@ -1,8 +1,10 @@
 using System.Globalization;
 using System.Text;
+using System.Diagnostics.CodeAnalysis;
 using FastSql.Aop;
 using FastSql.Execution;
 using FastSql.Metadata;
+using FastSql.Providers;
 using FastSql.Schema;
 using FastSql.Sql;
 using FastSql.Sql.Ast;
@@ -27,6 +29,12 @@ sealed class InsertEngine<T> : IInsert<T> where T : class
     InsertPlan? _plain;
     InsertPlan? _withKeys;
     InsertPlan? _withGenerated;
+
+    // §12.2 的三格请求。null 不是"没决定"，是"这条出口自己的默认"：ExecuteAffrowsAsync 默认文本层，
+    // ExecuteBulkAsync 默认 Auto（判据与理由见 IInsert.WithBulk 的抬头，落在下面的 Decide / ExecuteAffrowsAsync）。
+    BulkMethod? _requested;
+    FallbackPolicy _fallback = FallbackPolicy.DegradeAndLog;
+    int? _rowsPerRoundTrip;
 
     public InsertEngine(FastSqlOrm orm, T[] rows)
     {
@@ -60,10 +68,47 @@ sealed class InsertEngine<T> : IInsert<T> where T : class
 
     public string ToLogSql() => Plan(Backfill.None).ToLogSql();
 
+    // ── 批量阶梯（§12.2） ────────────────────────────────────────────
+
+    public IInsert<T> WithBulk(BulkMethod method, FallbackPolicy fallback = FallbackPolicy.DegradeAndLog, int? rowsPerRoundTrip = null)
+    {
+        if (rowsPerRoundTrip is { } requested && requested < 1)
+            throw new FastSqlException($"rowsPerRoundTrip={requested}：每块至少 1 行。要到阶梯最底那一档请传 {BulkMethod.SingleRow}，不是把这块压到 0。");
+
+        _requested = method;
+        _fallback = fallback;
+        _rowsPerRoundTrip = rowsPerRoundTrip;
+
+        // 每块行数是发射段的输入，改过它，缓存里那三份文本就过期了。取值段那份不动 ——
+        // AuditValue 只许跑一次（§10.1 硬规则 1 与上面抬头的两段之分）。
+        _plain = _withKeys = _withGenerated = null;
+
+        return this;
+    }
+
+    [RequiresUnreferencedCode("判「这一家有没有装载通道」靠一次按类型名的反射查找（IBulkStrategy.ResolveCopyChannel 的抬头）：被裁剪的驱动会让这一颗报出与完整运行时不同的层。")]
+    [RequiresDynamicCode("与 RequiresUnreferencedCode 同一条：反射解析装载类需要运行时生成代码。")]
+    public BulkReport ExplainBulk(BulkMethod? requested = null)
+        => Decide(Prepare(), requested ?? _requested ?? BulkMethod.Auto).Report;
+
     // ── 执行出口 ──────────────────────────────────────────────────────
 
+    /// <summary>文本层出口：<b>认得的请求是 <see cref="BulkMethod.MultiValue"/> 与
+    /// <see cref="BulkMethod.SingleRow"/> 那一档</b>（连同 <see cref="WithBulk"/> 那句里的每块行数），
+    /// <b>而指向装载通道的请求在这里当场拒，不是"默默当没看见"</b>。
+    /// 拒的理由与默认层为什么是文本层是同一条（<c>IInsert.WithBulk</c> 的抬头）：这一颗返回的是一颗
+    /// <see cref="int"/>，装不下"走了哪一层、几次往返、为什么"，而装载通道那一档根本不产文本 ——
+    /// <see cref="FastSqlAop.CudBuilding"/>（软删改写、影子表）与 <see cref="FastSqlAop.ParameterBinding"/>
+    /// 两个改写钩子会集体失效，而调用方只看到一个数字。<b>结构上的另一半收益是这条出口不欠修剪税</b>：
+    /// 它不可能走到 <see cref="AdoExecutor.CopyAsync"/>，所以签名上没有
+    /// <see cref="RequiresUnreferencedCodeAttribute"/>，写路径上今天已有的每一个调用点都不必改。</summary>
     public async Task<int> ExecuteAffrowsAsync(CancellationToken ct = default)
     {
+        if (_requested is BulkMethod.Auto or BulkMethod.CopyChannel)
+            throw new FastSqlException(
+                $"ExecuteAffrowsAsync 走不了 {_requested}：那一档要的是「走了哪一层、几次往返、为什么」，而它的返回值只是一颗行数。" +
+                "装载通道请用 ExecuteBulkAsync；只压每块行数或按请求逐条请用 WithBulk(MultiValue/SingleRow, rowsPerRoundTrip: …)。");
+
         var plan = Plan(Backfill.None);
         var tag = Tag();
         var affrows = 0;
@@ -73,6 +118,242 @@ sealed class InsertEngine<T> : IInsert<T> where T : class
 
         return affrows;
     }
+
+    [RequiresUnreferencedCode("转调装载通道：驱动自家的批量类不在 DbProviderFactory 的抽象面上，只能按类型名找（接口那一句标注的镜像，IL2046 要求两边一致）。")]
+    [RequiresDynamicCode("与 RequiresUnreferencedCode 同一条：反射解析装载类需要运行时生成代码。")]
+    public async Task<BulkReport> ExecuteBulkAsync(CancellationToken ct = default)
+    {
+        var preparation = Prepare();
+        var decision = Decide(preparation, _requested ?? BulkMethod.Auto);
+        var report = decision.Report;
+        var tag = Tag();
+
+        // 留痕在动手之前：降级之后那句写还可能失败，而"它退到哪一层"正是排查那一半要用的信息。
+        // DegradeSilently 走不到这里（§12.2 那一格给的就是"纯优化路径不必声张"）。
+        if (report.Degraded && _fallback == FallbackPolicy.DegradeAndLog && _orm.Aop.BulkDegraded is { } degraded)
+            _orm.Aop.Observe(() => degraded(new BulkDegradedEvent(report.Requested, report.Method, report.RowCount, report.Reason)));
+
+        int written;
+
+        if (decision.Channel is { } channel)
+        {
+            var batch = CopyRequest(preparation);
+            var width = batch.Rows.Count;
+            var trips = 1;
+
+            // rowsPerRoundTrip 在装载通道这一档说的是"一次递交几行"（IInsert.WithBulk 的抬头），与文本层同一个旋钮、
+            // 同一条只压不抬：这里没有参数预算那道界，所以上限只有这批的行数本身。
+            if (_rowsPerRoundTrip is { } cap && cap < width)
+            {
+                width = cap;
+                trips = (batch.Rows.Count + width - 1) / width;
+            }
+
+            written = 0;
+
+            for (var first = 0; first < batch.Rows.Count; first += width)
+                written += await _orm.Ado
+                    .CopyAsync(channel, Slice(batch, first, width), tag, ct)
+                    .ConfigureAwait(false);
+
+            // 通道报回的数与递交的数不等 = 部分写入。少报的数比少一列危险（v0.32 那一判同一条：
+            // 绿着交出一个看着合法的结果，调用方拿不到异常），所以这里抛而不是把 report 改小。
+            if (written != report.RowCount)
+                throw new FastSqlException(
+                    $"{_orm.Provider.Kind} 的装载通道报回 {written}/{report.RowCount} 行：这一家的批量入口给不出「进了几行」，" +
+                    "不能假设这一批完整落库（§12.1 那句「失败不能定位到行」在这一格里就是整批不可信）。");
+
+            return report with { ChunkSize = width, RoundTrips = trips };
+        }
+
+        // 文本层：把决策里的估算换成发射段的实数（块数与每块行数都由 Build 那一份算，两处不许各算一遍）。
+        var plan = Plan(Backfill.None);
+
+        report = report with { ChunkSize = plan.RowsPerStatement, RoundTrips = plan.Chunks.Count };
+
+        written = 0;
+
+        foreach (var chunk in plan.Chunks)
+            written += await _orm.Ado.NonQueryAsync(chunk.Sql, tag, ct).ConfigureAwait(false);
+
+        return report;
+    }
+
+    /// <summary>§12.2 那张阶梯今天能落的三档，由这一颗纯函数选：<b>不建文本、不碰连接、不发钩子</b>
+    /// （<see cref="ExplainBulk"/> 与 <see cref="ExecuteBulkAsync"/> 共用它，所以"离线看到的层"与
+    /// "执行走的那一层"之间没有第二套判据可漂移）。</summary>
+    /// <remarks><b>两次判定之间不许有第二份真相</b>是这里唯一的难点：装载通道那一条分支必须在建文本
+    /// <em>之前</em>定下来，否则 <c>CudBuilding</c> 会为一句丢掉的分块语句白跑一遍；而文本层那两档的
+    /// 往返次数又是 <c>Build</c> 算出来的（它才知道预算、钩子改过的东西）。做法是让 <see cref="BulkReport"/>
+    /// 先带公式的估算、执行时由 <c>Plan</c> 的实数覆写（<see cref="ExecuteBulkAsync"/> 那一句 <c>with</c>），
+    /// 而不是让 <c>Decide</c> 去建一份它用不到的文本。</remarks>
+    [RequiresUnreferencedCode("调用 IBulkStrategy.ResolveCopyChannel() 那一次按类型名的反射查找：税从这里往上冒到两条公开出口（ExplainBulk / ExecuteBulkAsync）。")]
+    [RequiresDynamicCode("与 RequiresUnreferencedCode 同一条：反射解析装载类需要运行时生成代码。")]
+    BulkDecision Decide(Preparation preparation, BulkMethod requested)
+    {
+        RequireColumns(preparation);
+
+        var provider = _orm.Provider;
+        var rows = _rows.Length;
+
+        if (rows == 0)
+            return new BulkDecision(new BulkReport(requested, BulkMethod.MultiValue, 0, 0, 0, false,
+                "0 行：一层都不必选。不建文本、不取连接，执行直接返回 0。"), null);
+
+        if (requested is BulkMethod.Auto or BulkMethod.CopyChannel)
+        {
+            var channel = provider.Bulk?.ResolveCopyChannel();
+            var refusal = Refusal(provider, channel, preparation.Columns);
+
+            if (refusal is null)
+            {
+                // 装载通道这一档没有参数预算那道界，所以 _rowsPerRoundTrip 的上限就是这批的行数；
+                // 不压时一次递交（执行段用同一组数，两处不许各算一遍）。
+                var width = _rowsPerRoundTrip is { } cap && cap < rows ? cap : rows;
+                var trips = (rows + width - 1) / width;
+
+                return new BulkDecision(new BulkReport(requested, BulkMethod.CopyChannel, rows, trips, width, false,
+                    $"{rows} 行走 {provider.Kind} 的装载通道（§12.1 的 L1）：不发 SQL 文本、不走参数，" +
+                    (trips == 1 ? "一次递交。" : $"分 {trips} 次递交、每次 {width} 行（块宽是请求压下来的）。") +
+                    "通道内部怎么分批是驱动的事，对上层是一次递交一块；改写类钩子（CudBuilding / ParameterBinding）在这一档不适用。"), channel);
+            }
+
+            // 请求过装载通道而拿不到：Never 不许退（§12.2 那句"唯一能防住静默逐条的手段"）。
+            // Auto 不算降级 —— 它没有承诺过任何一层，取到阶梯上第一档满足条件的层就是它的定义。
+            if (requested == BulkMethod.CopyChannel)
+            {
+                if (_fallback == FallbackPolicy.Never)
+                    throw new FastSqlException($"请求了 {provider.Kind} 的装载通道而它不可用：{refusal}。FallbackPolicy.Never 不允许退回文本层。");
+
+                return new BulkDecision(TextReport(preparation, requested, BulkMethod.MultiValue, degraded: true) with
+                {
+                    Reason = $"{refusal} → 退回 L3 多值语句。{TextReason(preparation, BulkMethod.MultiValue)}",
+                }, null);
+            }
+
+            return new BulkDecision(TextReport(preparation, requested, BulkMethod.MultiValue, degraded: false), null);
+        }
+
+        return new BulkDecision(TextReport(preparation, requested, requested, degraded: false), null);
+    }
+
+    /// <summary>这一家能不能整批进装载通道的判据，<b>交回的是话而不是布尔</b>：拒绝的理由要进
+    /// <see cref="BulkReport.Reason"/> 给现场读，也要进 <see cref="FallbackPolicy.Never"/> 那句异常，
+    /// 两处同一份文本。null = 可以进。</summary>
+    static string? Refusal(IDbProvider provider, IBulkCopyChannel? channel, ColumnContract[] columns)
+    {
+        if (channel is null)
+            return $"{provider.Kind} 没有可用的装载通道（IBulkStrategy.ResolveCopyChannel() 交回 null：这一家没接，或这一支驱动里没有装载类）";
+
+        // 一列不合格就整批退回，不是把那一列从通道里省掉：省一列等于那一列的值不进库，那是丢写
+        // （IBulkCopyChannel.SupportsColumn 的抬头，与 IChangeGuard.Compares 同一个道理）。
+        foreach (var column in columns)
+            if (!channel.SupportsColumn(column))
+                return $"{column.ColumnName}（CLR {column.ClrType.Name}）不在 {provider.Kind} 装载通道收下的类型里";
+
+        return null;
+    }
+
+    BulkReport TextReport(Preparation preparation, BulkMethod requested, BulkMethod method, bool degraded)
+        => new(requested, method, _rows.Length, Trips(preparation, method), ChunkRows(preparation, method), degraded, TextReason(preparation, method));
+
+    string TextReason(Preparation preparation, BulkMethod method)
+    {
+        var provider = _orm.Provider;
+        var budget = provider.Bulk?.ParameterBudget ?? StatementEmitter.ConservativeParameterBudget;
+        var rows = _rows.Length;
+
+        if (method == BulkMethod.SingleRow)
+            return $"{rows} 行按请求逐条（L5）：{rows} 次往返。语义与批量一致（§12.4 的等价性），代价是往返。";
+
+        var statementRows = ChunkRows(preparation, method);
+
+        return $"{rows} 行 × {preparation.Columns.Length} 列，参数预算 {budget} → 每块 {statementRows} 行（{Trips(preparation, method)} 块），L3 多值语句。" +
+               (statementRows < StatementEmitter.RowsPerStatement(budget, preparation.Columns.Length)
+                   ? " 每块行数是请求压下来的（WithBulk 的 rowsPerRoundTrip），不是预算算出来的。"
+                   : string.Empty);
+    }
+
+    /// <summary>每块几行 —— <c>Build</c> 里那一句的同一个公式，两处不许各写一遍算式：都由这一个出口取。</summary>
+    /// <remarks><b><see cref="BulkMethod.SingleRow"/> 不是第二套逐条实现，就是把块宽定成 1</b>：
+    /// 阶梯最底那一档今天已经在走这条代码路径（回填链上<em>没有</em>独立的逐条循环，块宽为 1 时
+    /// 每行拿到的是<em>自己那份</em>经 <c>CudBuilding</c> 改写过的文本，而块与块之间不共享软删后缀），
+    /// 所以按请求逐条走的也是同一条：一行一块 = 一次改写 = 一次往返。分岔点在 <c>Build</c> 之下，不在它旁边。</remarks>
+    int ChunkRows(Preparation preparation, BulkMethod method)
+    {
+        if (method == BulkMethod.SingleRow)
+            return 1;
+
+        var budget = _orm.Provider.Bulk?.ParameterBudget ?? StatementEmitter.ConservativeParameterBudget;
+
+        return Math.Min(StatementEmitter.RowsPerStatement(budget, preparation.Columns.Length), _rowsPerRoundTrip ?? int.MaxValue);
+    }
+
+    int Trips(Preparation preparation, BulkMethod method)
+        => (_rows.Length + ChunkRows(preparation, method) - 1) / ChunkRows(preparation, method);
+
+    /// <summary>递给装载通道的那一批：<b>列清单照文本层</b>（自增列与并发列都不进，理由与
+    /// <see cref="Prepare"/> 那两条 continue 同一条），每格过 <see cref="Values.IValueBinder"/> 那一扇门。
+    /// 目标表名由 <see cref="ISqlDialect.EmitTableName"/> 产，所以 COPY 落的那一张与 <c>INSERT</c> 写的必然是同一张。</summary>
+    BulkCopyRequest CopyRequest(Preparation preparation)
+    {
+        var binder = _orm.Provider.Values;
+        var columns = preparation.Columns;
+        var payload = new object?[preparation.Cells.Length][];
+
+        for (var row = 0; row < payload.Length; row++)
+        {
+            var source = preparation.Cells[row];
+            var cells = new object?[columns.Length];
+
+            // 名字在这一趟里是白花的（装载通道不接 DbParameter），但类型归一只长在这颗门上：
+            // 另起一条"不带名字的转换"就是第七份 Normalize（§12.1 那句"同一条插入在几家参数化形状不同"的第二个出处）。
+            for (var column = 0; column < columns.Length; column++)
+                cells[column] = binder.CreateParameter($"c{column}", source[column], columns[column]).Value;
+
+            payload[row] = cells;
+        }
+
+        return new BulkCopyRequest(DestinationTable(preparation), columns, payload);
+    }
+
+    /// <summary>把已算好的那一批切出第 <paramref name="first"/> 行起的 <paramref name="width"/> 行。
+    /// <b>切的是行数组，不重走取值与归一</b>：<see cref="CopyRequest"/> 只算一次，格子值与列清单在几次递交之间
+    /// 是同一份 —— 而 §12.4 第 1 项那句"行序就是入参顺序"要靠这一点才成立。</summary>
+    static BulkCopyRequest Slice(BulkCopyRequest batch, int first, int width)
+    {
+        var count = Math.Min(width, batch.Rows.Count - first);
+        var rows = new object?[count][];
+
+        for (var row = 0; row < count; row++)
+            rows[row] = batch.Rows[first + row];
+
+        return batch with { Rows = rows };
+    }
+
+    string DestinationTable(Preparation preparation)
+    {
+        var dialect = _orm.Provider.Dialect;
+        var writer = new SqlWriter(new StringBuilder(preparation.Table.Length + 8), [], dialect.ParameterPrefix);
+
+        dialect.EmitTableName(writer, preparation.Contract.Table);
+
+        return writer.ToSqlString();
+    }
+
+    /// <summary>0 列的插入只剩 <c>DEFAULT VALUES</c> 一种写法，而本版本未接入（§12.3）。
+    /// 抽成一处是因为它有<em>两个</em>读者：文本层在建语句之前要问，装载通道在选层之前也要问
+    /// —— 而"零列的 COPY"恰好是那种能绿着把 0 个字段写进 N 行的形状，不能让它比文本层更晚红。</summary>
+    static void RequireColumns(Preparation preparation)
+    {
+        if (preparation.Columns.Length == 0)
+            throw new FastSqlException($"{preparation.Table} 的每一列都不进列清单（自增列或并发列），插入只剩 DEFAULT VALUES 这一种写法，本版本未接入（§12.3）。");
+    }
+
+    /// <summary>决策 + 决策依据的那一个通道对象。<see cref="BulkDecision.Channel"/> 只在method == CopyChannel 时非 null：
+    /// "能不能用"与"用它"因此是同一次判定的两个产物，执行时不再取第二次 <c>Bulk?.ResolveCopyChannel()</c>（那一取会看到另一个实例）。</summary>
+    sealed record BulkDecision(BulkReport Report, IBulkCopyChannel? Channel);
+
 
     public async Task<long> ExecuteIdentityAsync(CancellationToken ct = default)
     {
@@ -319,8 +600,7 @@ sealed class InsertEngine<T> : IInsert<T> where T : class
         if (_rows.Length == 0)
             return new InsertPlan([], 0, columns.Length, 0, budget, "0 行：不产生任何语句，执行直接返回 0。", traces) { Provider = provider };
 
-        if (columns.Length == 0)
-            throw new FastSqlException($"{preparation.Table} 的每一列都不进列清单（自增列或并发列），插入只剩 DEFAULT VALUES 这一种写法，本版本未接入（§12.3）。");
+        RequireColumns(preparation);
 
         // 回填集为空就没有那一档：带 Returning 的文本会生成一条「看着像在回填」的普通 INSERT。
         // 执行口自己会拒（ReadBackAsync 之前先查），但离线口是给人审阅用的，读到一条假 OUTPUT 就已经误导了。
@@ -332,7 +612,9 @@ sealed class InsertEngine<T> : IInsert<T> where T : class
         };
 
         // §12.3：预算先留十分之一的余量（文本里还有表名/列名/OUTPUT），再除以每行参数个数，至少 1 行。
-        var rowsPerStatement = StatementEmitter.RowsPerStatement(budget, columns.Length);
+        // 请求把块宽压下来（WithBulk 的 rowsPerRoundTrip）或按请求逐条，都走这同一个出口取数（见 ChunkRows 的抬头）。
+        var budgetRows = StatementEmitter.RowsPerStatement(budget, columns.Length);
+        var rowsPerStatement = ChunkRows(preparation, _requested ?? BulkMethod.MultiValue);
         var degraded = false;
 
         // L3 → L5 的那一跳（§12.4 第 1 项）：没有批量 RETURNING/OUTPUT 的库要回填，只能逐条。
@@ -383,6 +665,11 @@ sealed class InsertEngine<T> : IInsert<T> where T : class
               (postRead ? "，每块句尾接语句后回读（键在同一句命令里带回，§14 的那颗口子）" : "，而这一家连语句后回读也没有：构建到 EmitReturning 即拒") +
               $"。语义与批量一致（§12.4 的等价性），代价是 {_rows.Length} 次往返。"
             : $"{_rows.Length} 行 × {columns.Length} 列，参数预算 {budget} → 每块 {rowsPerStatement} 行（{chunks.Count} 块），L3 多值语句。";
+
+        if (_requested == BulkMethod.SingleRow)
+            reason += " 块宽 1 是按请求来的（WithBulk(SingleRow)），不是这一家给不出批量。";
+        else if (_rowsPerRoundTrip is { } cap && cap < budgetRows && !degraded)
+            reason += $" 块宽 {rowsPerStatement} 是请求压下来的（预算允许 {budgetRows} 行）。";
 
         if (chunks.Count > 1)
             reason += " 跨块不是原子的（§12.4 第 8 项）：要整批原子就包 §6 的事务。";

@@ -9,6 +9,19 @@ public sealed record QueryModel
 {
     public required IReadOnlyList<TableRef> Tables { get; init; }
 
+    /// <summary>FROM 位的<b>覆盖口</b>。null 说的是"照旧：根表位就是那张实体表"；非 null 时编译器把它原样端出去
+    /// （今天两种：<c>SourceRawText</c> = <c>WithSql</c> 交回的一段用户自己的 SELECT，
+    /// 与 <see cref="DerivedFrom"/> 折出来的 <c>SourceDerived</c>）。
+    /// <b>它不进 <see cref="StableKey"/> 的判据之外</b>：这一格里有东西，模型文本就必须有对应的一行，
+    /// 否则 §13.2 那句"两侧逐字节相等"会漏掉一整类差异（打印在 <c>QueryModelPrinter</c>）。</summary>
+    public TableSource? Source { get; init; }
+
+    /// <summary>派生表入口（§5.12）：整份模型先编译成内层 SELECT，再作为外层唯一的表位。
+    /// 与 <see cref="Source"/> 的分工是<b>谁写内层</b>：这一格的内层由库自己规划（于是键、聚合、页
+    /// 都在内层，外层只剩一个 <c>COUNT(*)</c>），而 <see cref="Source"/> 那一格的内层是用户写的文本。
+    /// 两者不会同时出现在一份模型上：派生表的外层是库造的，它没有理由再带一个覆盖源。</summary>
+    public QueryModel? DerivedFrom { get; init; }
+
     public IReadOnlyList<JoinClause> Joins { get; init; } = [];
 
     /// <summary>AND 折叠前的原样集合——保留它才能做到「链式与 LINQ 产出同一个模型」的可判定比较。</summary>

@@ -56,6 +56,11 @@ public sealed class RawReader : DbDataReader
     /// 把要量的东西量成量具的私货；一颗 <c>int</c> 不自增堆，所以两侧读数仍然只算产品的。</para></summary>
     public int NullAsks;
 
+    /// <summary>被问过 <c>GetName</c> 的<b>次数</b>（同一件量具，第三颗）。它判的是原生 SQL 那条出口
+    /// 「名字对位按场次还是按行」：<c>RawRowReader</c> 只该在第一行把整张列名表读一遍，
+    /// 于是 N 列 × 三行的读数恰好是 N。形状与 <see cref="NullAsks"/> 同格（一颗数，不是清单）。</summary>
+    public int NameAsks;
+
     public override Type GetFieldType(int ordinal)
     {
         FieldTypeAsks.Add(ordinal);
@@ -90,7 +95,12 @@ public sealed class RawReader : DbDataReader
 
     public override void Close() => closed = true;
 
-    public override string GetName(int ordinal) => names[ordinal];
+    public override string GetName(int ordinal)
+    {
+        NameAsks++;
+
+        return names[ordinal];
+    }
 
     public override int GetOrdinal(string name) => Array.IndexOf(names, name);
 

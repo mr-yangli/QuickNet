@@ -30,6 +30,11 @@ public sealed class SqlServerProvider : IDbProvider
         Connectors = new SqlServerConnectorFactory(driverFactory);
         CodeFirst = new SqlServerCodeFirst(_types);
         _dialect = new SqlServerDialect(_types, _keys, _values, _expressions);
+
+        // 批量策略要认识工厂住的那个程序集：装载类（<c>SqlBulkCopy</c>）不在 <see cref="DbProviderFactory"/>
+        // 的抽象面上，只能从同一支驱动程序集里按名字取 —— 现场同时装两家时，跟着连接所属的那一家走才是唯一
+        // 可能对的答案。这里交的是工厂而不是程序集名，所以构造期仍然一次反射都没有（见 SqlServerBulk 的抬头）。
+        Bulk = new SqlServerBulk(driverFactory);
     }
 
     public DbKind Kind => DbKind.SqlServer;
@@ -65,9 +70,9 @@ public sealed class SqlServerProvider : IDbProvider
 
     public IChangeGuard ChangeGuard { get; } = new SqlServerChangeGuard();
 
-    /// <summary>L1 <c>SqlBulkCopy</c> 在 P2 才接（那是驱动类型，要反射），但 2100 的参数预算从第一天就要生效，
-    /// 所以这里返回"只有预算、没有高速通道"的策略，而不是 §14 里说的 null。</summary>
-    public IBulkStrategy? Bulk { get; } = new SqlServerBulk();
+    /// <summary>L1 有通道了（<c>SqlServerBulk.ResolveCopyChannel()</c> → <see cref="DbCapabilities.Bulk_Copy"/> 那颗位从此有对象），
+    /// 而 2100 的参数预算从第一天就生效。通道是<em>懒</em>出来的：只产 SQL 的离线路径不会碰那次类型查找。</summary>
+    public IBulkStrategy? Bulk { get; }
 
     public bool CanCreateDatabase => true;
 

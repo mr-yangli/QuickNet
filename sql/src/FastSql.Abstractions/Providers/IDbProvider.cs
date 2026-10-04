@@ -1,8 +1,9 @@
+using System.Data.Common;
+using System.Diagnostics.CodeAnalysis;
 using FastSql.Metadata;
 using FastSql.Sql;
 using FastSql.Sql.Ast;
 using FastSql.Values;
-using System.Data.Common;
 
 namespace FastSql.Providers;
 
@@ -201,9 +202,28 @@ public interface IChangeGuard
 }
 
 /// <summary>批量高速层（§12.1 的 L1/L2/L4）。P0 的 provider 一律返回 null，退回链自然从 L3 起。</summary>
+/// <remarks><b>§12.1 那张决策表里今天在场的只有两颗</b>：<see cref="ParameterBudget"/> 有四个真读数（2100 / 32767 /
+/// 65535 / 没有 provider 报的那些家走共用层的 100），<see cref="ResolveCopyChannel()"/> 从本版起有唯一一家落地（SQL Server 的
+/// <c>SqlBulkCopy</c>，反射绑定，因为装载类不在 <c>DbProviderFactory</c> 的抽象面上，而本仓库的编译期驱动引用纪律
+/// 不许直接 <c>new</c> 它）。原稿那颗 <c>CanResolveKeys</c> 没有进来，因为它要答的问题（"批量 + 要主键能不能成立"）
+/// 今天由 <c>InsertEngine</c> 自己判得更准：那一档不是"通道能不能给键"，是"这一条出口要不要键"，
+/// 而后者是出口的形状不是库的能力，放在这里会让 provider 替调用方决定它自己没问过的东西。</remarks>
 public interface IBulkStrategy
 {
     int ParameterBudget { get; }
 
     string Describe { get; }
+
+    /// <summary>L1 装载通道（§12.1 第三行）。交回 <see langword="null"/> = 这一家不接（或这一支驱动里没有装载类），
+    /// 阶梯自然从 L3 起 —— 默认实现让其余六家一个字节都不必改，这与 <see cref="IDbProvider.CanCreateDatabase"/> 那颗默认位同一个手法：
+    /// <b>新增的 SPI 槽位一律带默认值，否则接一家就要改六家</b>。
+    /// <para><b>它是方法而不是属性</b>：<c>RequiresUnreferencedCode</c> 的特性目标里没有属性
+    /// （CS0592），而这一颗<em>必须</em>带那一句标注 —— 取它的过程是一次按类型名的反射查找，
+    /// <b>被裁剪的驱动会让它交回 null</b>。于是差异是行为级的：同一份代码在裁剪后的产物上报 L3、
+    /// 在完整运行时上报 L1。税因此要往上冒到 <c>ExplainBulk</c> 与 <c>ExecuteBulkAsync</c> 两条公开出口上，
+    /// 而不是藏在 provider 里当没人负责的实现细节。名字里的 <c>Resolve</c> 说的就是这件事：它不是"取一个已有的值"。</para>
+    /// <para>与 <c>DriverRegistry.Factory</c> 同一手法：反射只在第一次取用时走一次，结果（连<em>没有</em>这一种）缓存。</para></summary>
+    [RequiresUnreferencedCode("装载通道按类型名在驱动程序集里找（SqlBulkCopy 那一族没有 ADO.NET 抽象面），被裁剪的驱动会交回 null。")]
+    [RequiresDynamicCode("与 RequiresUnreferencedCode 同一条：反射解析装载类需要运行时生成代码。")]
+    IBulkCopyChannel? ResolveCopyChannel() => null;
 }
