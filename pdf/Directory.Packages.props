@@ -1,0 +1,16 @@
+<Project>
+
+  <!-- pdf/ 子树的集中包管理（CPM）。src/FastPdf 零 NuGet 依赖（只 ProjectReference 到 excel/），
+       所以这里只有测试四件套。 -->
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageVersion Include="coverlet.collector" Version="6.0.4" />
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageVersion Include="xunit" Version="2.9.3" />
+    <PackageVersion Include="xunit.runner.visualstudio" Version="3.1.4" />
+  </ItemGroup>
+
+</Project>

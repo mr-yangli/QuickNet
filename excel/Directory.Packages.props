@@ -1,0 +1,21 @@
+<Project>
+
+  <!-- excel/ 子树的集中包管理（CPM）。src/FastExcel 零依赖、不出现在这里；
+       测试四件套与基准对照组 MiniExcel 的版本只在 benchmarks/ 与 tests/ 出现。 -->
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- xunit v2 + VSTest：文档三件套统一测试形状（FastSql 侧是 xunit.v3/MTP，两本账互不影响） -->
+    <PackageVersion Include="coverlet.collector" Version="6.0.4" />
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageVersion Include="xunit" Version="2.9.3" />
+    <PackageVersion Include="xunit.runner.visualstudio" Version="3.1.4" />
+
+    <!-- 基准对照组。只在 benchmarks/ 出现：基准要的是"业界公认的快"，
+         FastExcel 本体的零依赖纪律不为它破例。 -->
+    <PackageVersion Include="MiniExcel" Version="1.42.0" />
+  </ItemGroup>
+
+</Project>

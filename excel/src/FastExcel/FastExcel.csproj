@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- TFM/LangVersion/Nullable/ImplicitUsings 见 excel/Directory.Build.props -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+
+    <PackageId>FastExcel</PackageId>
+    <Version>1.0.0</Version>
+    <Authors>FastExcel</Authors>
+    <Description>High-performance, zero-dependency streaming Excel (xlsx) import/export for .NET 10. Features: DataAnnotations validation, image import/export, template export/import, SAX-based low-memory read/write.</Description>
+    <PackageTags>excel;xlsx;import;export;performance;dotnet10</PackageTags>
+    <RepositoryType>git</RepositoryType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="FastExcel.Tests" />
+  </ItemGroup>
+
+</Project>

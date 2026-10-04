@@ -1,0 +1,116 @@
+using System.Collections.Generic;
+
+namespace FastSql.Generators;
+
+/// <summary>一个实体的 G1 产出计划。<b>存的是语义值，不是代码文本</b>：转义与排版全在
+/// <see cref="EntityFactsWriter"/>，判定全部在 <see cref="EntityFactsBuilder"/>，
+/// 于是「§10.2 的规则写在哪一处」这个问题只有一个答案。</summary>
+sealed class EntityModel
+{
+    public string Namespace = "";
+
+    /// <summary>实体类型表达式，<c>global::FastSql.TestInfra.Order</c>。</summary>
+    public string Entity = "";
+
+    /// <summary>生成类名前缀：嵌套链折成一个标识符，保证同编译期内不撞名。</summary>
+    public string Name = "";
+
+    public string TableName = "";
+
+    public string? TableSchema;
+
+    public List<ColumnModel> Columns = [];
+
+    public List<IndexModel> Indexes = [];
+
+    public List<RelationshipModel> Relationships = [];
+}
+
+sealed class ColumnModel
+{
+    public string Member = "";
+
+    /// <summary>属性声明类型（含 <c>Nullable&lt;T&gt;</c>），与反射侧的 <c>PropertyType</c> 同一个。</summary>
+    public string ClrType = "";
+
+    public string ColumnName = "";
+
+    /// <summary><see cref="FastSql.Metadata.MetadataLayer"/> 的成员名。整条 origin 取这一层（§10.2）。</summary>
+    public string ColumnNameLayer = "Convention";
+
+    public string ColumnNameNote = "";
+
+    public int? MaxChars;
+
+    public string LengthNote = "";
+
+    public bool IsNullable;
+
+    public string NullableNote = "";
+
+    public bool IsPrimary;
+
+    /// <summary>null ⇒ 交给「整型主键 ⇒ 自增」约定，由运行期的 <c>EntityContractFactory</c> 判定。</summary>
+    public bool? DeclaredIdentity;
+
+    public int? Precision;
+
+    public int? Scale;
+
+    public string? StoreType;
+
+    public string? Comment;
+
+    /// <summary>并发列（<c>[ConcurrencyToken]</c>）。与其余各格同一口径：生成期只看得见注解，
+    /// Fluent 那一层 G1 整体上就吃不到（<c>GeneratedEntitySchemaRegistry</c> 的类注释里写着这条）。</summary>
+    public bool IsConcurrencyToken;
+
+    public string? ConcurrencyNote;
+
+    /// <summary>CLR 侧是不是 <c>string</c>：只有字符串列有长度尺子（§10.4）。</summary>
+    public bool IsString;
+
+    /// <summary>这一列的<em>直读臂</em>方法名（<c>DirectRead.ReadInt32</c> 那一批），null = 没有臂、进装箱口。
+    /// 判据与编号都在运行期那一处（<c>ReadOps</c>/<c>DirectRead</c> 同一个文件），这里只挑名字：
+    /// 名字写错是编译错误，挑错臂（比如给 <c>short</c> 列挑了 <c>ReadInt32</c>）则两侧编号对不上、
+    /// 静默退回装箱口 —— <b>能错的方向是"没变快"，不是"读错值"</b>（§16.21）。</summary>
+    public string? DirectArm;
+
+    /// <summary>非空值类型装箱后不可能是 null ⇒ 必填检查是死代码，生成器不写。</summary>
+    public bool CanBeNull;
+}
+
+sealed class IndexModel
+{
+    /// <summary>可空：留 null 时运行期按 <c>IX_实体_成员</c> 生成，与反射侧同一个条件。
+    /// 自研 <c>[Index]</c> 的构造器要求给名字，所以实际上只有这一条路能到 null。</summary>
+    public string? Name;
+
+    public List<string> Members = [];
+
+    public bool Unique;
+
+    public bool Clustered;
+
+    public bool Descending;
+}
+
+/// <summary>一条引用导航（to-one 关系）。列名换算不在生成期做——那是运行期
+/// <c>EntityContractFactory</c> 的活，与索引同一份实现（§10.3）。</summary>
+sealed class RelationshipModel
+{
+    /// <summary>导航属性名，它自己不是列。</summary>
+    public string Member = "";
+
+    /// <summary>主端实体类型表达式，<c>global::FastSql.TestInfra.Customer</c>。</summary>
+    public string TargetType = "";
+
+    /// <summary>依赖侧外键成员名；复合外键（<c>[ForeignKey("A,B")]</c>）有多条。</summary>
+    public List<string> Members = [];
+
+    /// <summary><see cref="FastSql.Metadata.MetadataLayer"/> 的成员名：这一格只有两档，
+    /// DataAnnotations 的 <c>[ForeignKey]</c> 与「导航名 + Id」的约定。</summary>
+    public string Layer = "Convention";
+
+    public string Note = "";
+}

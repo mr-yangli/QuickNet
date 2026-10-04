@@ -1,0 +1,386 @@
+using System.Data;
+using Da = System.ComponentModel.DataAnnotations;
+using DaSchema = System.ComponentModel.DataAnnotations.Schema;
+using FastSql.Generated;
+using FastSql.Materialization;
+using FastSql.Metadata;
+using FastSql.Metadata.Fluent;
+using FastSql.Providers;
+using FastSql.Schema;
+using FastSql.TestInfra;
+using Xunit;
+
+namespace FastSql.Tests.Dialects;
+
+/// <summary>§13.11：G1（源生成）与 G2（启动期反射）必须给出<b>逐字段相同</b>的答案。
+/// 这不是「两条实现碰巧一样」的核对，而是「两条实现是否共用同一份判定」的核对——
+/// 收尾（provider 的 storage defaults、自增约定、索引与外键的列名换算）两边都走 <see cref="EntityContractFactory"/>，
+/// 校验消息两边都走 <see cref="ContractRules"/>，所以这里的红意味着某一层的规则被复制成了两份并且已经分叉。
+/// <b>全程不连库</b>：<see cref="SqlServer.NoDriverFactory"/> 一被碰到就抛。</summary>
+public sealed class MetadataEquivalenceTests
+{
+    static readonly IDbProvider Provider = SqlServer.Provider(SqlServer.NoDriverFactory.Instance);
+
+    static IEntitySchemaRegistry Generated(ModelConfiguration? model = null)
+        => new GeneratedEntitySchemaRegistry(Provider, FastSqlGeneratedMetadata.TryGet, model: model);
+
+    static IEntitySchemaRegistry Reflected(ModelConfiguration? model = null)
+        => new EntitySchemaRegistry(new ContractResolver(Provider, model));
+
+    static FastSqlOrm Orm(IEntitySchemaRegistry schemas)
+        => new(new FastSqlOrmOptions { Provider = Provider, ConnectionString = SqlServer.OfflineConnectionString }, schemas);
+
+    /// <summary>只比「生成的 == 反射的」不够：两条路径同时退化成同一个错误值也会通过。
+    /// 所以每个实体还钉了一条绝对值断言（<see cref="Contract_carries_the_layer_it_claims"/>）。</summary>
+    [Theory]
+    [InlineData(typeof(Order))]
+    [InlineData(typeof(OrderItem))]
+    [InlineData(typeof(Customer))]
+    [InlineData(typeof(SessionToken))]
+    [InlineData(typeof(InventoryItem))]
+    [InlineData(typeof(LegacyShipment))]
+    [InlineData(typeof(BareReport))]
+    [InlineData(typeof(AuditRow))]
+    [InlineData(typeof(Project))]
+    [InlineData(typeof(Milestone))]
+    [InlineData(typeof(SelfRef))]
+    [InlineData(typeof(TwoKeys))]
+    public void Both_paths_produce_the_same_contract(Type clrType)
+        => Assert.Equal(Shape(Reflected().Contract(clrType)), Shape(Generated().Contract(clrType)));
+
+    [Theory]
+    [InlineData(typeof(Order), "table = -.FastSqlOrder", "primary = Id", "index IX_FastSqlOrder_CreatedAt NonClustered (CreatedAt) → (CreatedAt)",
+        "nav Customer → FastSql.TestInfra.Customer fk=(CustomerId) cols=(CustomerId)")]
+    [InlineData(typeof(LegacyShipment), "table = -.FastSqlLegacyShipment", "primary = ShipmentId", "[1] CarrierCode clr=String col=carrier_code len=Char:32/64B")]
+    [InlineData(typeof(Project), "nav = (0)")]
+    [InlineData(typeof(Milestone), "nav Project → FastSql.TestInfra.Project fk=(ProjectId) cols=(ProjectId) origin=Convention: 约定：Project ⇒ ProjectId")]
+    [InlineData(typeof(SelfRef), "nav Manager → FastSql.TestInfra.SelfRef fk=(ManagerId) cols=(ManagerId)")]
+    [InlineData(typeof(TwoKeys), "nav = (0)")]
+    public void Contract_carries_the_layer_it_claims(Type clrType, params string[] expected)
+    {
+        var shape = Shape(Generated().Contract(clrType));
+
+        foreach (var line in expected)
+            Assert.Contains(shape, l => l == line || l.StartsWith(line, StringComparison.Ordinal));
+
+        // 自增不是哪一层声明的，是「整型主键 ⇒ 自增」这条约定在收尾时补的（两侧共用一份实现）。
+        // Project 的主键是 Guid，那一格必须是 False —— 无条件断 True 等于把这条约定念成"每个主键都自增"。
+        Assert.Contains(shape, l => l.Contains("identity=" + (clrType == typeof(Project) ? "False" : "True"), StringComparison.Ordinal));
+    }
+
+    /// <summary>把契约摊成一行一个字段：集合相等的失败消息只会说「两个集合不同」，
+    /// 而这里要的是<b>哪一格</b>分叉。origin 默认随行——两侧同源时它就是证据；
+    /// 比「注解 vs Fluent」那一对时关掉它，因为 origin 按定义要记录是哪一层赢的（§10.2）。
+    /// <c>conc=</c> 那一格（v0.18）不加进来的话，「逐字段相同」是一句假话：并发标记只落在一侧时，
+    /// 列清单、<c>WHERE</c>、回填集三处一起分岔，而这里照样全绿。
+    /// <c>nav</c> 那一格（v0.20）同一取向：引用导航只落在一侧时，另一侧的 <c>SaveChanges</c> 就排不出这一根依赖，
+    /// 而两条路径"看起来都建出了这张表"。</summary>
+    static string[] Shape(EntityContract contract, bool withOrigin = true)
+    {
+        var lines = new List<string>
+        {
+            $"table = {contract.Table.Schema ?? "-"}.{contract.Table.Name}",
+            $"primary = {string.Join(",", contract.PrimaryKey.Select(c => c.MemberName))}",
+            $"nav = ({contract.Relationships.Count})",
+        };
+
+        for (var i = 0; i < contract.Columns.Length; i++)
+        {
+            var c = contract.Columns[i];
+
+            lines.Add($"[{i}] {c.MemberName} clr={c.ClrType.Name} col={c.ColumnName} len={c.LengthSemantics}:{c.MaxChars?.ToString() ?? "-"}/{c.MaxBytes?.ToString() ?? "-"}B unicode={c.Unicode} null={c.IsNullable} key={c.IsPrimary} identity={c.IsIdentity} conc={c.IsConcurrencyToken} prec={c.Precision?.ToString() ?? "-"}/{c.Scale?.ToString() ?? "-"} store={c.StoreTypeName ?? "-"} comment={c.Comment ?? "-"}"
+                + (withOrigin ? $" origin={c.Origin}" : ""));
+        }
+
+        foreach (var index in contract.Indexes)
+            lines.Add($"index {index.Name} {index.Kind} ({string.Join(",", index.MemberNames)}) → ({string.Join(",", index.ColumnNames)}) desc={index.Descending}");
+
+        foreach (var nav in contract.Relationships)
+            lines.Add($"nav {nav.MemberName} → {nav.TargetType.FullName} fk=({string.Join(",", nav.MemberNames)}) cols=({string.Join(",", nav.ColumnNames)})"
+                + (withOrigin ? $" origin={nav.Origin}" : ""));
+
+        return [.. lines];
+    }
+
+    [Fact]
+    public void The_generated_entity_is_materialized_by_generated_code_not_by_reflection()
+    {
+        // 这句是「G1 真的在跑」的证据。没有它，下面所有相等断言都可能只是两条反射路径在互相印证。
+        Assert.Equal("FastSqlGeneratedOrderSchema", Generated().Schema<Order>().GetType().Name);
+        Assert.Equal("FastSqlGeneratedOrderValidator", Generated().Validator<Order>().GetType().Name);
+
+        // 没标注的实体必须留在 G2，否则「命中 G1」这条断言只是自称通过。
+        Assert.StartsWith("ReflectionEntitySchema", Generated().Schema<BareReport>().GetType().Name);
+        Assert.StartsWith("ReflectionEntityValidator", Generated().Validator<BareReport>().GetType().Name);
+
+        // 让路判据看的是"有没有可映射的公共属性"，不是"有没有边"（§12.7 那六条），所以零条边的 Project
+        // 与一条边的 Milestone 都该在 G1 那一侧 —— 没有这两句，上面那 8 条新对拍可能只是两条反射路径在互相印证。
+        Assert.Equal("FastSqlGeneratedProjectSchema", Generated().Schema<Project>().GetType().Name);
+        Assert.Equal("FastSqlGeneratedMilestoneSchema", Generated().Schema<Milestone>().GetType().Name);
+    }
+
+    [Fact]
+    public void Both_paths_read_the_same_order_row()
+    {
+        var rows = Read(typeof(Order), OrderRow());
+        var reflected = Assert.IsType<Order>(rows[0]);
+        var generated = Assert.IsType<Order>(rows[1]);
+
+        Assert.Equal(Vals(reflected), Vals(generated));
+
+        // 上面那句只证明两侧一致；这句证明它们一致地<b>读对了</b>。
+        Assert.Equal(OrderState.Shipped, generated.State);
+        Assert.Equal(1234.5600m, generated.Amount);
+        Assert.Null(generated.PaidAt);
+        Assert.Equal("加急，别丢字", generated.Note);
+
+        static string[] Vals(Order o)
+            => [$"Id={o.Id}", $"CustomerName={o.CustomerName}", $"CustomerId={o.CustomerId}", $"Amount={o.Amount:0.0000}",
+                $"State={o.State}", $"CreatedAt={o.CreatedAt:O}", $"PaidAt={o.PaidAt:O}", $"Note={o.Note}"];
+    }
+
+    [Fact]
+    public void Both_paths_read_the_same_dataannotations_row()
+    {
+        var rows = Read(typeof(LegacyShipment), ShipmentRow());
+        var reflected = Assert.IsType<LegacyShipment>(rows[0]);
+        var generated = Assert.IsType<LegacyShipment>(rows[1]);
+
+        Assert.Equal(reflected.ShipmentId, generated.ShipmentId);
+        Assert.Equal(reflected.CarrierCode, generated.CarrierCode);
+        Assert.Equal(reflected.Weight, generated.Weight);
+        Assert.Equal(reflected.DispatchedAt, generated.DispatchedAt);
+
+        // [NotMapped] 不在契约里，所以它连读取序号都没有：这一列必须保持默认值。
+        Assert.Null(generated.TrackingUrl);
+        Assert.Equal("SFxxx", generated.CarrierCode);
+        Assert.Equal(12.3400m, generated.Weight);
+    }
+
+    /// <summary>两条路径的读取委托读同一份 <see cref="DataTableReader"/>、<b>同一张票</b>，返回 <c>[0]=G2、[1]=G1</c>。
+    /// 序号取 <c>0..n-1</c> 的前提是「契约列序 == 选列序」，那句前提就在下面的断言里。
+    /// 票必须共用：它决定"哪些列这次不进装箱口"（§16.21），两边各探一次的话，
+    /// 这一条就退化成"两条实现各自读对了"而不再比"两条实现对同一件事的判断相同"。</summary>
+    static object[] Read(Type clrType, DataTable table)
+    {
+        var reflected = Reflected();
+        var contract = reflected.Contract(clrType);
+        var ordinals = new int[contract.Columns.Length];
+
+        for (var i = 0; i < ordinals.Length; i++)
+            ordinals[i] = i;
+
+        Assert.Equal(contract.Columns.Select(c => c.ColumnName), table.Columns.Cast<DataColumn>().Select(c => c.ColumnName).Take(ordinals.Length));
+
+        using var reader = table.CreateDataReader();
+
+        Assert.True(reader.Read());
+
+        var plan = ReadOps.Build(reader, contract, 0);
+
+        return [reflected.ReadDelegate(clrType)(reader, plan), Generated().ReadDelegate(clrType)(reader, plan)];
+    }
+
+    static DataTable OrderRow()
+    {
+        var table = new DataTable();
+
+        table.Columns.Add("Id", typeof(int));
+        table.Columns.Add("CustomerName", typeof(string));
+        table.Columns.Add("CustomerId", typeof(int));
+        table.Columns.Add("Amount", typeof(decimal));
+        table.Columns.Add("State", typeof(int));
+        table.Columns.Add("CreatedAt", typeof(DateTime));
+        table.Columns.Add("PaidAt", typeof(DateTime));
+        table.Columns.Add("Note", typeof(string));
+
+        table.Rows.Add(1, "张三", 42, 1234.5600m, (int) OrderState.Shipped, new DateTime(2026, 1, 2, 3, 4, 5), DBNull.Value, "加急，别丢字");
+
+        return table;
+    }
+
+    static DataTable ShipmentRow()
+    {
+        var table = new DataTable();
+
+        table.Columns.Add("ShipmentId", typeof(int));
+        table.Columns.Add("carrier_code", typeof(string));
+        table.Columns.Add("Weight", typeof(decimal));
+        table.Columns.Add("DispatchedAt", typeof(DateTime));
+        table.Columns.Add("TrackingUrl", typeof(string));
+
+        table.Rows.Add(7, "SFxxx", 12.3400m, new DateTime(2026, 3, 5, 10, 0, 0), "不该被读");
+
+        return table;
+    }
+
+    [Fact]
+    public void Both_paths_report_the_same_validation_failures()
+    {
+        var oversize = new Order { CustomerName = new string('n', 65), Note = "ok" };
+        var inside = new Order { CustomerName = "刚好", Note = null };
+
+        Assert.Equal(Failures(Reflected(), oversize), Failures(Generated(), oversize));
+        Assert.Equal(Failures(Reflected(), inside), Failures(Generated(), inside));
+
+        // 至少要真的报出问题，否则上面那句相等只是两个人同时沉默。
+        Assert.Equal("length", Rules(Generated(), oversize));
+        Assert.Empty(Failures(Generated(), inside));
+    }
+
+    [Fact]
+    public void The_required_and_length_rulers_apply_the_same_way_on_dataannotations_columns()
+    {
+        var missing = new LegacyShipment { Weight = 1m };
+        var oversize = new LegacyShipment { CarrierCode = new string('c', 33), Weight = 1m };
+
+        Assert.Equal(Failures(Reflected(), missing), Failures(Generated(), missing));
+        Assert.Equal(Failures(Reflected(), oversize), Failures(Generated(), oversize));
+
+        Assert.Equal("required", Rules(Generated(), missing));
+        Assert.Equal("length", Rules(Generated(), oversize));
+    }
+
+    static string Rules<T>(IEntitySchemaRegistry schemas, T entity) where T : class
+        => string.Join(",", Failures(schemas, entity).Select(f => f.Rule));
+
+    static List<ValidationFailure> Failures<T>(IEntitySchemaRegistry schemas, T entity) where T : class
+    {
+        var failures = new List<ValidationFailure>();
+
+        schemas.Validator<T>().TryValidate(entity, failures);
+
+        return failures;
+    }
+
+    [Fact]
+    public void A_higher_validation_mode_is_the_reflection_path_job_not_the_generated_one()
+    {
+        // 生成的校验器只有 ContractOnly 档：再往上一档要读注解实例，那是运行期的东西（§10.6）。
+        var raised = new GeneratedEntitySchemaRegistry(Provider, FastSqlGeneratedMetadata.TryGet,
+            new EntitySchemaOptions(ValidationMode.DataAnnotations));
+
+        Assert.StartsWith("ReflectionEntityValidator", raised.Validator<Order>().GetType().Name);
+        Assert.Equal("FastSqlGeneratedOrderValidator", Generated().Validator<Order>().GetType().Name);
+    }
+
+    [Fact]
+    public void Fluent_configuration_makes_the_generator_step_aside()
+    {
+        var model = new ModelConfiguration();
+        model.Entity<Order>().ToTable("FastSqlOrderRenamed").Property(o => o.Note).HasMaxLength(16);
+
+        // §10.2 里 Fluent 压在注解之上，而生成器看不到运行期的 ModelConfiguration：
+        // 让它接管就会把高优先层的配置静默吃掉，所以这里必须交回反射那份答案。
+        var contract = Generated(model).Contract<Order>();
+
+        Assert.Equal("FastSqlOrderRenamed", contract.Table.Name);
+        Assert.Equal(16, contract.Columns.First(c => c.MemberName == "Note").MaxChars);
+        Assert.Equal(Shape(Reflected(model).Contract<Order>()), Shape(contract));
+
+        // 反过来也要成立：没有 Fluent 时 G1 用的是自己算出的表名。
+        Assert.Equal("FastSqlOrder", Generated().Contract<Order>().Table.Name);
+    }
+
+    /// <summary>§13.11 的「默认可用不是口号」那一半：同一个实体，一套只写注解、一套把同样的值写成 Fluent，
+    /// 除 origin 之外<b>每一格都必须相等</b>（长度量纲、Unicode、可空、自增、存储类型全都要一样）。
+    /// origin 反过来<b>必须不等</b>——它按定义记录的是哪一层赢了（§10.2），两侧一致就说明这格是装饰。</summary>
+    [Fact]
+    public void Annotations_only_and_the_equivalent_Fluent_agree_on_values_and_disagree_on_origin()
+    {
+        var model = new ModelConfiguration();
+        var customer = model.Entity<Customer>();
+
+        customer.ToTable("FastSqlCustomer");
+        customer.Property(c => c.Name).HasMaxLength(64);
+        customer.Property(c => c.City).HasColumnName("City");
+        customer.Property(c => c.City).HasMaxLength(32);
+        customer.Property(c => c.Remark).HasMaxLength(32);
+
+        var viaAnnotation = Reflected().Contract<Customer>();
+        var viaFluent = Reflected(model).Contract<Customer>();
+
+        Assert.Equal(Shape(viaAnnotation, withOrigin: false), Shape(viaFluent, withOrigin: false));
+
+        var city = viaFluent.Columns.Single(c => c.MemberName == "City").Origin;
+
+        Assert.Equal(MetadataLayer.Fluent, city.Layer);
+        Assert.Contains("Fluent HasColumnName", city.Note);
+        Assert.Contains("Fluent HasMaxLength(32)", city.Note);
+        Assert.Contains("[Column(Length=32)]", viaAnnotation.Columns.Single(c => c.MemberName == "City").Origin.Note);
+
+        // 只覆写长度的那一列不该顺手把「列名来自哪一层」也改成 Fluent——层的粒度是按字段而不是按实体。
+        Assert.Equal(MetadataLayer.Convention, viaFluent.Columns.Single(c => c.MemberName == "Name").Origin.Layer);
+
+        // 约定命中的主键与 Fluent 无关，两侧连 origin 都必须一模一样。
+        Assert.Equal(viaAnnotation.Columns[0].Origin, viaFluent.Columns[0].Origin);
+    }
+
+    /// <summary>§13.11 的冲突护栏：两条互斥注解同时出现时必须**抛**，而不是"取更严的那条"。
+    /// 取严格者会让建表按 20、校验按 10，事故三个月后才现形（§10.2）。</summary>
+    [Fact]
+    public void A_same_layer_conflict_is_refused_at_startup_rather_than_resolved_to_the_stricter_one()
+    {
+        var raised = Checks.Raised<MetadataConflictException>(() => Reflected().Contract<ConflictingLengths>());
+
+        Assert.Equal(nameof(ConflictingLengths.Code), raised.MemberName);
+        Assert.Equal(new[] { "[StringLength(10)]", "[MaxLength(20)]" }, raised.Sources);
+        Assert.Contains("不自动取更严的那条", raised.Message);
+    }
+
+    [Fact]
+    public void Two_table_attributes_naming_different_tables_are_a_conflict_not_a_precedence()
+    {
+        var raised = Checks.Raised<MetadataConflictException>(() => Reflected().Contract<ConflictingTable>());
+
+        Assert.Equal(new[] { "[Table(\"ConflictingNames\")]", "[Table(\"ConflictingNamesToo\")]" }, raised.Sources);
+    }
+
+    [Fact]
+    public void Sql_is_byte_identical_through_both_registries()
+    {
+        Assert.Equal(
+            Orm(Reflected()).Select<Order>().Where(o => o.State == OrderState.Paid && o.Amount > 100m).OrderByDescending(o => o.CreatedAt).ToSql(),
+            Orm(Generated()).Select<Order>().Where(o => o.State == OrderState.Paid && o.Amount > 100m).OrderByDescending(o => o.CreatedAt).ToSql());
+
+        Assert.Equal(
+            Orm(Reflected()).Select<LegacyShipment>().Where(s => s.CarrierCode != null).ToSql(),
+            Orm(Generated()).Select<LegacyShipment>().Where(s => s.CarrierCode != null).ToSql());
+    }
+
+    [Fact]
+    public void An_unannotated_entity_still_resolves_through_the_g1_registry()
+    {
+        // BareReport 没被生成：注册表既不能因此找不到契约，也不能把它当成 G1 命中。
+        var columns = Generated().Contract<BareReport>().Columns;
+
+        Assert.Equal("Id", columns[0].ColumnName);
+        Assert.True(columns[0].IsPrimary);
+        Assert.True(columns[0].IsIdentity);
+
+        // 约定命中的主键会把整条 origin 换掉（不是追加），所以这里钉的是那句人话而不是层名。
+        Assert.Equal(MetadataLayer.Convention, columns[0].Origin.Layer);
+        Assert.Equal("Id 命中 Id/{Entity}Id 形态", columns[0].Origin.Note);
+        Assert.Contains("约定：属性名", columns[1].Origin.Note);
+    }
+}
+
+/// <summary>同层冲突的两个负样本。<b>它们必须待在本项目而不是 FastSql.Tests.Common</b>：那边挂着源生成器，
+/// 同样的形状在那边会让编译直接失败（FastSql001），而「编译期负样本没有断言口」是 §14 未完项里另一格。
+/// 换到这里，G2 的启动期抛点才有可跑的用例（§13.11）。</summary>
+[Table("ConflictingNames")]
+[DaSchema.Table("ConflictingNamesToo")]
+public class ConflictingTable
+{
+    public int Id { get; set; }
+}
+
+[Table("ConflictingLengths")]
+public class ConflictingLengths
+{
+    public int Id { get; set; }
+
+    [Da.StringLength(10)]
+    [Da.MaxLength(20)]
+    public string? Code { get; set; }
+}

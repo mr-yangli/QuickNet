@@ -1,0 +1,20 @@
+# 构建产物与本地状态
+bin/
+obj/
+.vs/
+.scratch/
+TestResults/
+BenchmarkDotNet.Artifacts/
+*.user
+*.suo
+
+# 真库连接串（含口令）——只允许被测试读，永不进版本库
+*.connection.local.txt
+
+# 示例跑出来的 SQLite 库，每次运行重生成
+sql/samples/FastSql.Sample/fastsql-sample.db
+*.db-shm
+*.db-wal
+
+# 示例程序每次跑都重生成的 SQLite 库
+sql/samples/FastSql.Sample/fastsql-sample.db

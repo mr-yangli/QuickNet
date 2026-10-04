@@ -1,0 +1,51 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="excel/src/FastExcel/FastExcel.csproj" />
+    <Project Path="word/src/FastWord/FastWord.csproj" />
+    <Project Path="pdf/src/FastPdf/FastPdf.csproj" />
+    <Project Path="sql/src/FastSql.Abstractions/FastSql.Abstractions.csproj" />
+    <Project Path="sql/src/FastSql.Core/FastSql.Core.csproj" />
+    <Project Path="sql/src/FastSql.Generators/FastSql.Generators.csproj" />
+    <!-- 方言族：SqlServer（单层） -->
+    <Project Path="sql/src/FastSql.Providers.SqlServer/FastSql.Providers.SqlServer.csproj" />
+    <!-- 方言族：PostgreSQL（血统 + 五叶 + 本尊） -->
+    <Project Path="sql/src/FastSql.Providers.PostgreSqlBase/FastSql.Providers.PostgreSqlBase.csproj" />
+    <Project Path="sql/src/FastSql.Providers.Kingbase/FastSql.Providers.Kingbase.csproj" />
+    <Project Path="sql/src/FastSql.Providers.OpenGauss/FastSql.Providers.OpenGauss.csproj" />
+    <Project Path="sql/src/FastSql.Providers.GaussDb/FastSql.Providers.GaussDb.csproj" />
+    <Project Path="sql/src/FastSql.Providers.Highgo/FastSql.Providers.Highgo.csproj" />
+    <Project Path="sql/src/FastSql.Providers.Gbase8c/FastSql.Providers.Gbase8c.csproj" />
+    <!-- PG 血统的正典叶（v0.37 第二笔）：这一族第一颗"本尊"，而 §9.1 那张表里 PG 与 MySQL 两个本尊都没有行。 -->
+    <Project Path="sql/src/FastSql.Providers.PostgreSql/FastSql.Providers.PostgreSql.csproj" />
+    <!-- 方言族：Oracle（血统 + 两叶 + 本尊） -->
+    <Project Path="sql/src/FastSql.Providers.OracleBase/FastSql.Providers.OracleBase.csproj" />
+    <Project Path="sql/src/FastSql.Providers.Dameng/FastSql.Providers.Dameng.csproj" />
+    <Project Path="sql/src/FastSql.Providers.ShenTong/FastSql.Providers.ShenTong.csproj" />
+    <!-- Oracle 血统的正典叶（v0.37 第三笔）：这一族第二颗"本尊"，而它到场兑现的是自家基类注释里挂了四版的那颗住户。 -->
+    <Project Path="sql/src/FastSql.Providers.Oracle/FastSql.Providers.Oracle.csproj" />
+    <!-- 方言族：MySQL（血统 + 三叶 + 本尊） -->
+    <Project Path="sql/src/FastSql.Providers.MySqlBase/FastSql.Providers.MySqlBase.csproj" />
+    <Project Path="sql/src/FastSql.Providers.MySql/FastSql.Providers.MySql.csproj" />
+    <Project Path="sql/src/FastSql.Providers.TiDb/FastSql.Providers.TiDb.csproj" />
+    <Project Path="sql/src/FastSql.Providers.OceanBase/FastSql.Providers.OceanBase.csproj" />
+    <!-- 方言族：单层（虚谷 / GBase 8s / SQLite） -->
+    <Project Path="sql/src/FastSql.Providers.Xugu/FastSql.Providers.Xugu.csproj" />
+    <Project Path="sql/src/FastSql.Providers.Gbase8s/FastSql.Providers.Gbase8s.csproj" />
+    <!-- 第七家（本笔）：第四颗单层整层，而它是这一串里第一颗断言逐格向活库问过的——本机一个文件就是一座库。 -->
+    <Project Path="sql/src/FastSql.Providers.Sqlite/FastSql.Providers.Sqlite.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="excel/tests/FastExcel.Tests/FastExcel.Tests.csproj" />
+    <Project Path="word/tests/FastWord.Tests/FastWord.Tests.csproj" />
+    <Project Path="pdf/tests/FastPdf.Tests/FastPdf.Tests.csproj" />
+    <Project Path="sql/tests/FastSql.Tests.Dialects/FastSql.Tests.Dialects.csproj" />
+    <Project Path="sql/tests/FastSql.Tests.Integration/FastSql.Tests.Integration.csproj" />
+  </Folder>
+  <Folder Name="/samples/">
+    <Project Path="sql/samples/FastSql.Sample/FastSql.Sample.csproj" />
+  </Folder>
+  <Folder Name="/benchmarks/">
+    <Project Path="excel/benchmarks/FastExcel.Benchmarks/FastExcel.Benchmarks.csproj" />
+    <Project Path="sql/benchmarks/FastSql.Benchmarks/FastSql.Benchmarks.csproj" />
+  </Folder>
+</Solution>

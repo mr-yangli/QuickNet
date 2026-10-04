@@ -1,0 +1,14 @@
+<Project>
+
+  <!-- excel/ 子树闸门。与 sql/Directory.Build.props 同形状（TFM / 语言 / 可空性），
+       但刻意不带 sql 那套 TreatWarningsAsErrors + trim/AOT 分析器：FastExcel 本体大量用
+       反射与表达式树（TypeMetadataCache / DataAnnotations / Activator 回退），开警告即错误
+       会当场红。这条分界是设计决定，README 与 docs/fastexcel-usage.md 同口径。 -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>preview</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+</Project>

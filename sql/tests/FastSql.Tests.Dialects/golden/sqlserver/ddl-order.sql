@@ -1,0 +1,2 @@
+
+CREATE TABLE [dbo].[FastSqlOrder] ([Id] INT IDENTITY(1,1) NOT NULL, [CustomerName] NVARCHAR(64) NULL, [CustomerId] INT NOT NULL, [Amount] DECIMAL(18,4) NOT NULL, [State] INT NOT NULL, [CreatedAt] DATETIME2(3) NOT NULL, [PaidAt] DATETIME2(3) NULL, [Note] NVARCHAR(MAX) NULL, CONSTRAINT [PK_FastSqlOrder] PRIMARY KEY CLUSTERED ([Id])) ; CREATE INDEX [IX_FastSqlOrder_CreatedAt] ON [dbo].[FastSqlOrder] ( [CreatedAt] ASC )
