@@ -410,6 +410,8 @@ Console.WriteLine("Explain() 模型文本里的分组那几行（摘录）：");
 foreach (var line in plan.ModelText.Split('\n').Where(l => l.Contains("WHERE") || l.Contains("GROUP BY") || l.Contains("HAVING")))
     Console.WriteLine($"  {line.TrimEnd()}");
 
+// 上面 HAVING 那一行的 COUNT({0}) 是模型文本打印器的既有缺陷（函数模板的占位没被替掉），
+// 不是模型里真写着 {0}；它对任何带函数的投影都这样，与分组无关。产出 SQL 那一行是替好的。
 Console.WriteLine($"同一条查询产出的 SQL：  {grouped.ToLogSql()}");
 
 var filteredGroups = await grouped.ToListAsync();

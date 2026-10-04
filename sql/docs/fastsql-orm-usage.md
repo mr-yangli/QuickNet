@@ -311,6 +311,27 @@ var q = orm.Select<Order>()
 - 其它：`As(string alias)`、`Distinct()`、`AsNoTracking()`、`IgnoreQueryFilters()`、`WithCache(string, TimeSpan)`
 - 出口：`ToListAsync`/`FirstOrDefaultAsync`/`CountAsync`/`ToAsyncEnumerable(int batchSize)`，以及同步的 `ToList`/`FirstOrDefault`/`Count`；类型本身还是 `IAsyncEnumerable<T>`
 
+**分组（`GroupBy`/`Having`）走的是另一条类型链，出口只有 `Select`。**
+
+```csharp
+var top = await orm.Select<Order>()
+    .Where(o => o.Amount > 100m)                        // 分组之前的条件 → WHERE
+    .GroupBy(o => o.CustomerId)                         // → ISelectGrouping<int, Order>
+    .Having(g => g.Count() > 1)                         // → HAVING（可多条，折成 AND）
+    .OrderByDescending(g => g.Sum(o => o.Amount))
+    .Take(5)                                            // 页与组同一单位：5 是"五组"
+    .Select(g => new { g.Key, Total = g.Sum(o => o.Amount) })
+    .ToListAsync();
+```
+
+- 链上可用的成员：`Having`、`OrderBy`/`OrderByDescending`（`IOrderedSelectGrouping` 上再加 `ThenBy`/`ThenByDescending`）、`Skip`/`Take`、`Select<TResult>`。**没有 `Where`**——分组之前的条件属于 `IQuery<T>` 的 `Where`，分组之后的条件属于 `Having`，这一点由类型决定，不由书写顺序决定
+- 组里能读的只有 `g.Key` 与聚合：`g.Count()`/`g.LongCount()` → `COUNT(*)`，`g.Sum(o => o.列)`/`g.Max`/`g.Min`/`g.Average` → 各家的 `SUM({0})`/`MIN`/`MAX`/`AVG` 模板（`Fn` 注册表里本来就有，方言侧没有为分组新登记任何东西）。聚合的 lambda 形参绑回同一张表位，所以产出是 `SUM([t0].[Amount])` 而不是子查询
+- 复合键：`GroupBy(o => new { o.OrderId, o.Sku })`，读法只能是 `g.Key.OrderId` 这样**到成员**的一层；`g.Key` 整体（那个匿名对象）在库里没有对应物，当场抛而不是静默取第一颗列
+- **不需要 `ONLY_FULL_GROUP_BY` 风格的校验开关**（规格 §5.3 原稿那颗）：lambda 形参的类型是 BCL `IGrouping<TKey, TElement>`，实体成员不在它上面，所以"组里选非键列"根本编译不过去。同理 `Having` 写在 `GroupBy` 之前也写不出来
+- 联表之后的分组**没有入口**：`GroupBy` 只长在 `IQuery<T>` 单表那一份契约上，`IQuery<T1, T2>` 上没有，所以那是编译期过不去而不是运行期报错。分组与联表要合用（`SELECT … FROM a JOIN b … GROUP BY a.x`）今天没有对应物
+- 今天会**当场抛**（宁可报错，不发一条看起来合理的错句子）：分组之后再聚合（`CountAsync`、分页的总数）——那要先包成派生表 `SELECT COUNT(*) FROM (SELECT … GROUP BY …)`，AST 还没有派生表入口；`DISTINCT` 计数与带条件的计数（`g.Count(o => …)`）；无序分页时 `PagingOrderingPolicy.AutoOrderPrimaryKey` 那颗补序兜底（主键不在分组键里，补出来不合法）；分组链上 `Any`/`First` 这类没有 `GROUP BY` 对应物的方法
+- 见证：离线册 `tests/FastSql.Tests.Dialects/GroupByTests.cs` 19 颗（版式四判 + 三家引号 + 分组与集合导航相关子查询的分工 + 上面每一格报错），可跑示例 `samples/FastSql.Sample/Program.cs` §8（单键五聚合、`Having`、复合键进 DTO、排序取前 N 组、`Explain()` 的模型文本）
+
 别名由位置生成（`t0`/`t1`/…），C# 里那个 lambda 形参名不影响产出；表名与列序来自契约。占位符名字统一是 `@p0`/`@p1` 这种由 `SqlWriter` 生成的形式，但**前缀按家换**：`@`（SQL Server / PG 系 / MySQL 系）、`:`（Oracle 系 / 虚谷）、`?`（GBase 8s，位置式，不接受带前缀参数名）。取参数用 `ToSql(out IReadOnlyList<AdoParameter> parameters)`，`AdoParameter { Name, Value, DbType, Size, Hint, DriverName }`。
 
 无 `ORDER BY` 的分页默认抛（`PagingOrderingPolicy.Throw`）：T-SQL 的 `OFFSET..FETCH` 硬性要求 `ORDER BY`，而虚谷/MySQL 单独 `OFFSET` 要补一颗上界哨兵。想放开就改 `FastSqlOrmOptions.PagingOrdering`。
@@ -425,6 +446,8 @@ orm.Provider.CodeFirst.EmitCreateTable(writer, orm.Schemas.Contract<Order>());
 5. **`MultiStatement` 有第二份声明了，但仍是一颗没人读来分派的位**：v0.37 第四笔之前只有 SQL Server 声明（`SqlServerProvider.cs:43`），今天 SQLite 也声明它（`SqliteProvider.cs`，七家第二份），而这一份背后第一次挂上真实发射——`SqliteCodeFirst.EmitCreateTable` 把建表＋建索引串成一句 ` ; `-分隔的文本，集成夹具 `tests/FastSql.Tests.Integration/Database.cs:812` 那句 `ExecuteNonQuery` 把它整个发进活库跑过（这就是 §4.2 那三颗 `Live` 里 `MultiStatement` 那颗的来路）。但 `grep -rn "MultiStatement" src/` 命中的仍是声明与注释、**没有一处按这颗位走岔路**：走的是"这一族的发射器本来就把两句串起来"那条硬路径，不是"读了位才决定串不串"。所以它从"空判"改口成"有产出、仍零决策消费者"，性质与前几版一样——别按这颗位选路。写侧真正按方言分派的是 `ISqlDialect.SupportsJoinedWrites`。
 6. **合并写档七族里只有两族有**（T-SQL 与 PG 系那六颗叶）：`SupportsJoinedWrites` 为 false 的是 MySQL 系（`MySqlDialect.cs:77`）、Oracle 系（`OracleDialect.cs:57`）、虚谷（`XuguDialect.cs:105`）、GBase 8s（`Gbase8sDialect.cs:87`）、SQLite（`SqliteDialect.cs:109`）—— 那五族的 `SaveChanges` 多表更新整桶退回一句一实体；`EmitJoinedSources` 在这五家里都是抛（走到那里说明开关被绕过）。**SQLite 这一格第一次逼出"合并写不是一句子句而是两个出口"的读法**：它的 `UPDATE … FROM` 有、而 `DELETE` 的 `FROM` 与 `USING` 两形全无，于是同一颗 `SupportsJoinedWrites` 在这一家要问两遍而两遍答案不同，取 false 是因为只要有一半发不出就得整桶退回。
 7. **反向工程读不全**：`SchemaColumn` 六格没有主键位（全仓库 `PRIMARY KEY` 的非注释命中一共七处、全在七份 CodeFirst 的建表清单里，目录侧 0 处）、注释七家一家都读不回（`SchemaColumn` 没有那一格，七份 `*SchemaReader` 一家都不例外；发射侧倒是只有三家发原生 `COMMENT ON COLUMN`：`PostgreSqlCodeFirst.cs:109`、`OracleCodeFirst.cs:139`、`XuguCodeFirst.cs:140`；另两家用别的形状 —— MySQL 系的列内子句 `COMMENT '…'`（`MySqlCodeFirst.cs:192`）、SQL Server 的扩展属性 `sys.sp_addextendedproperty`（`SqlServerCodeFirst.cs:62`），而 GBase 8s（`Gbase8sCodeFirst`）与 SQLite（`SqliteCodeFirst.cs:217`）的 `TryEmitColumnComment` 都直接返回 false —— SQLite 更硬，`COMMENT` 这个词在本族是语法错、根本没有列注释的落处）、虚谷那份目录查询里的 `IS_SERIAL` 与 `COMMENTS` 两列没有槽承接（`XuguSchemaReader.cs:68` 自陈"不是漏，是没有槽"）。所以别指望 CodeFirst + SchemaReader 做双向。
+
+8. **AST 有派生表的位置、没有规划入口**：`SelectStatement.Source` 能挂子查询（`SourceSubquery`，相关子查询那条路今天就在用它），而链式算子里没有任何一形产出"把整句包成内层再聚合/再分组"的计划。后果全部落在报错侧（§3.1 那一段的清单）：分组之后的 `CountAsync`、分组查询的分页总数、带 `Skip/Take` 或 `Distinct` 之后再聚合，一家都不发句子。规格 §5.12 的"总数与页一致性"那一格要到这一步才走得完。
 
 ### 4.4 跨库迁移时最容易踩的五格
 
