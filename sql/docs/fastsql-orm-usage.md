@@ -14,7 +14,7 @@
 2. **十六家里只有三家有真库见证，而且见证很窄。** SQL Server 一族的每一位能力都由集成层在两台实例上跑过（`CapabilityLedgerTests.cs` 类注释明写"T-SQL 那一族不进这份台账，不是漏记"）；虚谷有 7 位中的 4 位被钉为 `Live`，见证是把基线文本逐句敲进那台库；SQLite 有 5 位中的 3 位被钉为 `Live`（`Paging_LimitOffset`／`Returning`／`MultiStatement`），而这三颗走的是**另一条路**——集成册里 ORM 自己拼出来的语句真在临时文件库上跑过，没有一行手写文本参与，其中 `MultiStatement` 是这本账第一颗落在 DDL 侧的 `Live`（见证是事后翻库看到 `IX_FastSqlOrder_CreatedAt` 在场）。其余十三家 `PinnedLive` 全是 0，**驱动从未在一台机器上解析成功过**（`FastSqlDrivers.json` 各行 `$comment` 逐行自陈）。§4.2 把这三处的口径差异原样列出。
 3. 离线证据是自产的：`tests/FastSql.Tests.Dialects/golden/` 下七个目录共 125 份基线（sqlserver 51 / kingbase 18 / dameng 18 / mysql 11 / gbase8s 10 / xugu 6 / sqlite 11）。除 §4.2 点到的那几份之外，它们是"本仓库自己认为应该长这样"的锁，不是厂商确认——**SQLite 那一套 11 份也是自产基线：本家有活库，而活库跑的是 ORM 产出的语句（第 2 点那三颗 `Live`），不是把这 11 句原样重放**，所以"黄金样本 ↔ 真库执行"这一对在本家仍然没配上，配上的是另一条证据链（provider 产出 ↔ 真库执行）。其余九颗叶子（postgresql/opengauss/gaussdb/highgo/gbase8c/oracle/shentong/tidb/oceanbase）没有自己的 golden 目录，同形部分由 `DialectParityTests` 逐字对拍钉住。
 
-另有一句不在上面三句之内的：**与 SqlSugar 的对照另有一份** `docs/fastsql-vs-sqlsugar.md`——同一台真库、同一副逐字相同的表、十四格实测（多数格子四到六趟，`UseParameter` 那一格八趟，计划缓存那一格两趟）加六面读码对照（含被这次对照打折的旧说法，以及三处对本文自己旧说法的翻案：§5.6／§5.7／§5.8）。本文不搬那些数字，也不改本文的口径。
+另有一句不在上面三句之内的：**与 SqlSugar 的对照另有一份** `docs/fastsql-vs-sqlsugar.md`——同一台真库、同一副逐字相同的表、十四格实测（墙钟那一多半格子八趟，`UseParameter` 窄表十二趟，计划缓存那一格是原八族四趟加本轮新开的七族两趟）加六面读码对照（含被这次对照打折的旧说法，以及三处对本文自己旧说法的翻案：§5.6／§5.7／§5.8；跨轮累计的名次句收回七处，记在 §1 第 4 条）。本文不搬那些数字，也不改本文的口径。
 
 所以本文的读法是：**接口形状可信；除 SQL Server 之外的执行结果基本未证。**
 
