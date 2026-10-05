@@ -1,6 +1,10 @@
 // v0.35 第二笔：这一支从 gitignored 的 obj/ 搬进 tools/ 并入库（欠账"量具进版本库"的那一步）。
 // v0.38 第四笔：添"没有 git 也能跑"那一半。原样它一进本仓库就抛 fatal: not a git repository，
 // 于是 §13.17 ① 那句"全仓库零 CRLF、零 BOM"从搬家那天起就没被复核过（欠账记 §14 那一格）。
+// v0.38 第十一笔：git 那一半在 2026-10-04 的入库之后是直接跑不起来的（抛 status 128，一颗文件都没判），
+// 因为本仓库现在是四棵子树共一个根，而 git 的三张口给三种路径——见下面 cwdPrefix() 那一段。修在此处，
+// 判据本身一字未改：比 HEAD 的 BOM ∶ 比工作区改动件的 BOM/CRLF/TAB/行尾，两半都是原样；
+// 只把 `ls-files` 那颗硬编码的 *.cs 改成跟着 --ext 走，与无 git 那半的射程对齐。
 // 两种模式：
 //   有 git —— 比 HEAD（tracked .cs 的 BOM）+ 比工作区改动过的 .cs（BOM/CRLF/TAB/行尾），照旧
 //   无 git —— 直接遍历工作树自产文本，判据是绝对的（零 BOM ∶ 零 CRLF ∶ 零 TAB ∶ 有行尾），
@@ -8,6 +12,7 @@
 // 两种模式共用同一条边界：.gitignore 写着不算交付物的，这里也不算（不靠硬编码的跳目录名单猜），
 // 外加 §13.17 ① 的厂商字节例外 src/FastSql.Providers.Xugu/Driver/。
 // 用法：node tools/hygiene.mjs [--ext .cs] [--ext .md] …   不给 --ext 就只查 .cs
+//       node tools/hygiene.mjs --worktree …   绕过 git 那一半，判整棵自产文本（刚 commit 完 git 模式是空集）
 //       node tools/hygiene.mjs --fix …   把判据里"行尾"那一半改过来：去 BOM ∶ CRLF→LF ∶ 补末行换行；
 //                                         TAB 不动（制表符可能活在字符串字面量里，改写它不是量具的权）
 //       退出码：0 干净 ∶ 4 有违规 ∶ 3 找不到可扫的自产文本（那是量具自己扫空集，不许当绿灯）
@@ -42,6 +47,13 @@ const args = process.argv.slice(2);
 const exts = args.reduce((a, x, i) => (x === '--ext' && args[i + 1] ? a.concat(args[i + 1]) : a), []);
 const wantExts = exts.length ? exts : ['.cs'];
 const fix = args.includes('--fix');
+// 刚 commit 完跑 git 模式必然扫到空集（它判的是"工作区改动过的"），而 §13.17 ① 那句"全仓库零 CRLF ∶ 零 BOM"
+// 要的是整棵树的绝对读数——那正是无 git 年代这一支交回的形。`--worktree` 就是把这一半强制回来，
+// 不改判据、只换射程；两颗名字都保留，交账时读得出这一场量的是哪一片。
+const forceWorktree = args.includes('--worktree');
+// 从 HEAD 取一颗件的字节要留给读 BOM 的头三颗，`execFileSync` 却要把整份吐完才还手，
+// 默认 1 MiB 不够台账那一份用——这是探针量出来的，不是猜的。
+const HEAD_MAX = 256 * 1024 * 1024;
 const ign = readIgnore('.');
 
 // 目录名规则：带斜杠的按从根算起的路径前缀，不带斜杠的按任何一层的名字。
@@ -68,6 +80,16 @@ function isGit() {
   } catch {
     return false;
   }
+}
+
+// git 那三张口给的是三种路径，而 2026-10-04 入库之后本仓库是"四棵子树共一个根"（`sql/` 只是其中一棵），
+// 于是同一支脚本里并排着三种形：`ls-files` 给"相对当前目录"的，`status --porcelain` 给"相对仓库根"的
+// （还会把别家子树的改动一起给），而 `git show HEAD:<路径>` 认的也是相对仓库根的。
+// 本支的判据路径（`src/…` 与 VENDOR 那一格）一直是以运行目录为根的，所以统一折成"相对当前目录"：
+// HEAD 那侧写成 `HEAD:./<相对路径>`（git 认这一形，`./` 就是当前目录），status 那侧减掉 `--show-prefix`。
+function cwdPrefix() {
+  try { return cp.execFileSync('git', ['rev-parse', '--show-prefix'], { encoding: 'utf8' }).trim(); }
+  catch { return ''; }
 }
 
 function check(buf, f) {
@@ -123,28 +145,50 @@ let headBom = null;
 console.log(`boundary: .gitignore dirs=${ign.dirs.size} names=${ign.names.size} suffix=${ign.suffix.size} unparsed=${ign.unparsed.length} + vendor ${VENDOR}`);
 for (const u of ign.unparsed) console.log(`UNPARSED-RULE ${u}（这一条形没被读，落在这条形上的文件会被当成自产文本）`);
 
-if (git) {
+if (git && !forceWorktree) {
   mode = 'git';
-  const tracked = cp.execFileSync('git', ['ls-files', '*.cs'], { encoding: 'utf8' }).split('\n').filter(Boolean);
-  headBom = tracked.filter(f => bom(cp.execFileSync('git', ['show', 'HEAD:' + f], { stdio: ['ignore', 'pipe', 'ignore'] }))).length;
-  console.log(`HEAD .cs: ${tracked.length} tracked, ${headBom} with BOM`);
+  const prefix = cwdPrefix();
+  const tracked = cp.execFileSync('git', ['ls-files', ...wantExts.map(x => '*' + x)], { encoding: 'utf8' }).split('\n').filter(Boolean);
+  // HEAD 里查不到的单报一颗：新落盘还没 commit 的件在 index 里、`ls-files` 认它，而 `git show HEAD:` 不认。
+  // 读不到一律报名并带错误码，不许静默折成"不在 HEAD"：`execFileSync` 的默认射程只有 1 MiB，
+  // 而台账那一份 .md 在 HEAD 里就比它大——探针实测过，不抬这个数就会把在册的件误报成缺席。
+  let notInHead = 0;
+  headBom = tracked.filter(f => {
+    let raw;
+    try {
+      raw = cp.execFileSync('git', ['show', 'HEAD:./' + f], { stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: HEAD_MAX });
+    } catch (e) {
+      notInHead++;
+      console.log(`HEAD-MISS ${f}（${(e && e.code) || e}）这一颗 HEAD 那侧没读到，不算干净也不算违规`);
+      return false;
+    }
+    return bom(raw);
+  }).length;
+  console.log(`HEAD ${wantExts.join('/')} ${tracked.length} tracked ∶ ${headBom} with BOM ∶ ${notInHead} not in HEAD ∶ prefix=${prefix || '(仓库根本身)'}`);
   const out = cp.execFileSync('git', ['status', '--porcelain'], { encoding: 'utf8' });
   const set = new Set();
   const add = p => { if (wantExts.some(x => p.endsWith(x)) && !ignoredFile(p)) set.add(p); };
   for (const l of out.split('\n').filter(Boolean)) {
-    const p = l.slice(3).trim().replace(/\\/g, '/');
+    let p = l.slice(3).trim().replace(/\\/g, '/');
+    if (p.includes(' -> ')) p = p.split(' -> ').pop(); // 改名行给的是「旧 -> 新」，工作树上在场的是新名
+    if (prefix) {
+      if (!p.startsWith(prefix)) continue; // 别家子树的改动不进本支射程
+      p = p.slice(prefix.length);
+    }
     if (l.startsWith('??') && fs.existsSync(p) && fs.statSync(p).isDirectory()) { walk(p, []).forEach(f => add(f)); continue; }
     add(p);
   }
   files = [...set];
 } else {
-  mode = 'worktree（无 git，判据换成整棵自产文本的绝对读数）';
+  mode = git ? 'worktree（在场 git 未用——`--worktree` 强制整棵树的绝对读数）'
+             : 'worktree（无 git，判据换成整棵自产文本的绝对读数）';
   files = walk('.', []).sort();
 }
 
 let bad = 0;
 let empty = 0;
 let locked = 0;
+let absent = 0;
 let fixed = 0;
 let left = 0;
 for (const f of files) {
@@ -153,6 +197,8 @@ for (const f of files) {
     buf = fs.readFileSync(f);
   } catch (e) {
     if (e && (e.code === 'EBUSY' || e.code === 'EPERM' || e.code === 'EMFILE')) { locked++; console.log(`LOCKED ${f}（读不到，不算干净也不算违规）`); continue; }
+    // git 报它改动过而工作树上没有：删除那一条，或改名行里 git 打的是带引号的路径。不算干净也不算违规，只报名。
+    if (e && e.code === 'ENOENT') { absent++; console.log(`ABSENT ${f}（git 说它变了，工作树里却没有这一颗）`); continue; }
     throw e;
   }
   const r = check(buf, f);
@@ -169,7 +215,7 @@ for (const f of files) {
   }
 }
 console.log(`mode=${mode}${fix ? '  [--fix 已改写]' : ''}`);
-console.log(`checked ${files.length} file(s) [${wantExts.join(', ')}], ${bad} problem file(s), ${fixed} fixed, ${empty} empty file(s), ${locked} locked file(s)`);
+console.log(`checked ${files.length} file(s) [${wantExts.join(', ')}], ${bad} problem file(s), ${fixed} fixed, ${empty} empty file(s), ${locked} locked file(s), ${absent} absent file(s)`);
 if (fix && bad) {
   let recheck = 0;
   for (const f of files) {
