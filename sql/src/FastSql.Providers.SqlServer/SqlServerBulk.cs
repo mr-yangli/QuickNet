@@ -7,7 +7,7 @@ namespace FastSql.Providers.SqlServer;
 
 /// <summary>批量高速层（§12.1）在这一家的三档：<b>L1 <c>SqlBulkCopy</c> + L3 多值语句 + L5 逐条</b>，
 /// 而 L2 数组绑定与 L4 临时表在这一家没有对应实现，所以 <see cref="BulkMethod"/> 里也没有那两个成员。
-/// <b>分块按参数个数算而不是按行数</b>（§12.3）：500 行 × 30 列在 2100 上限下是 5 块而不是 1 块。</summary>
+/// <b>分块按参数个数算而不是按行数</b>（§12.3）：500 行 × 30 列在 2100 预算下是 8 块、每块 65 行（29 × 65 = 1 885；要 5 块得每块 100 行 = 2 900 颗，超预算）。</summary>
 /// <remarks><c>ResolveCopyChannel</c> 那一颗是本版补的接线：能力位 <see cref="DbCapabilities.Bulk_Copy"/> 从第一天就报 true，
 /// 而 SPI 上根本没有通道可取 —— 那是「规格里写了设计、今天没接线」那一格的本家样本。今天两边对齐了：
 /// 报这颗位的地方与交得出通道的是同一份实现。</remarks>
