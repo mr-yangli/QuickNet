@@ -132,7 +132,7 @@ public static class EntityContractFactory
 
     /// <summary>分片声明 → 已换算的声明，顺手把四条启动期判据比一遍：分片键得是一列、
     /// 表名模板得配得上那一档、哈希档得有桶、主键不许自增。
-    /// <b>自增那一条是硬的</b>（规格 §15.4 同一族）：跨片唯一由库自己给的话，两张表能各自发出
+    /// <b>自增那一条是硬的</b>（规格 §16.4 同一族）：跨片唯一由库自己给的话，两张表能各自发出
     /// 同一个号，而"谁冲突"这件事要到合并统计时才看得见。</summary>
     static SplitFacts CompleteSplit(SplitFacts split, ColumnContract[] columns, TableInfo table, string entityName)
     {

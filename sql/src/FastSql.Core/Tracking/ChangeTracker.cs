@@ -225,7 +225,7 @@ sealed class ChangeTracker(FastSqlOrm orm) : DbChangeTracker
     ///
     /// <para><b>为什么不是"实现一半"</b>：会话的账按主键记，而分表里"同键的两行"是能存在的两行
     /// （<c>Id</c> 自增而表按月切时，两张片各自的 1 号互不相干），身份映射因此不成立 ——
-    /// 那不是补一条 WHERE 就能修的，要先定"跨片的一行由什么指认"。规格 §15.4 把这一格记为已裁，
+    /// 那不是补一条 WHERE 就能修的，要先定"跨片的一行由什么指认"。规格 §16.4 把这一格记为已裁，
     /// 出路写在消息里（写侧那三条链按行的分片键值定表，本来就不需要会话）。</para></summary>
     internal void EnsureNoSplitWrites()
     {
