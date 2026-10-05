@@ -25,6 +25,12 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
 {
     readonly FastSqlOrm _orm;
     readonly EntityContract _contract;
+
+    /// <summary>这一类实体所属的集群（§16.4），从契约的表位算一次。<b>存在而不是每句现算，是因为
+    /// 删除与并发回读那两条路是逐行建 tag 的</b>，而这一格对整个类型是常量。写侧的结论永远是主库，
+    /// 所以这一颗只带集群名；角色那一格由 <c>AdoExecutor.RentAsync</c> 判。</summary>
+    readonly string _cluster;
+
     readonly IEntityTypeSchema<T> _schema;
     readonly ColumnContract[] _columns;
 
@@ -99,6 +105,7 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
         _session = session;
         _schema = orm.Schemas.Schema<T>();
         _contract = _schema.Contract;
+        _cluster = DataSourceRouting.ClusterOf(_contract.Table);
         _columns = _contract.Columns;
 
         var keys = new List<int>();
@@ -838,7 +845,7 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
 
         List<Bucket>? buckets = null;
         Dictionary<string, int>? index = null;
-        var tag = new ExecutionTag("update", [_contract.Table.Name]);
+        var tag = new ExecutionTag("update", [_contract.Table.Name], _cluster);
 
         // 第一遍只判脏与取值，一条语句都不发：合并的前提是"先看清同一种改动在这一批里有几行"，
         // 而逐行发射看不到后面还有没有同伴 —— v0.16 那份"只分桶、不合并"的形状正是这么来的。
@@ -1150,7 +1157,7 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
             object?[] key = [.. _keyOrdinals.Select(ordinal => node.Snapshot[ordinal])];
             var sql = Emit(new DeleteStatement { Table = _table, Where = WhereWithTokens(key, node.Snapshot) }, key.Length + _tokens.Length, traces, ref step);
 
-            var affected = await _orm.Ado.NonQueryAsync(sql, new ExecutionTag("delete", [_contract.Table.Name]), ct).ConfigureAwait(false);
+            var affected = await _orm.Ado.NonQueryAsync(sql, new ExecutionTag("delete", [_contract.Table.Name], _cluster), ct).ConfigureAwait(false);
 
             // 删除的并发谓词同样取快照：意图是「删掉我读到的那一版」，那一版被人改过就不是这一行了。
             // 这一档不回填任何东西 —— 语句成功就意味着行不在了，<c>deleted</c> 侧没有要留下的值。
@@ -1596,6 +1603,6 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
             return values;
         }
 
-        return await _orm.Ado.FirstAsync(sql, Map, new ExecutionTag("concurrency-read", [_contract.Table.Name]), ct).ConfigureAwait(false);
+        return await _orm.Ado.FirstAsync(sql, Map, new ExecutionTag("concurrency-read", [_contract.Table.Name], _cluster), ct).ConfigureAwait(false);
     }
 }

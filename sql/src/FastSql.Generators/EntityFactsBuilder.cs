@@ -22,6 +22,7 @@ static class EntityFactsBuilder
     const string FastSqlColumn = "FastSql.Metadata.ColumnAttribute";
     const string FastSqlIndex = "FastSql.Metadata.IndexAttribute";
     const string FastSqlSplit = "FastSql.Metadata.SplitTableAttribute";
+    const string FastSqlDataSource = "FastSql.Metadata.DataSourceAttribute";
     const string FastSqlConcurrency = "FastSql.Metadata.ConcurrencyTokenAttribute";
     const string DataSchemaTable = "System.ComponentModel.DataAnnotations.Schema.TableAttribute";
     const string DataSchemaColumn = "System.ComponentModel.DataAnnotations.Schema.ColumnAttribute";
@@ -86,6 +87,7 @@ static class EntityFactsBuilder
             TableName = Text(table, 0, "Name") ?? Text(dataTable, 0, "Name") ?? entity.Name,
             TableSchema = Text(table, -1, "Schema") ?? Text(dataTable, -1, "Schema"),
             Split = SplitOf(attributes),
+            Source = SourceOf(attributes),
         };
 
         var conflicts = false;
@@ -499,6 +501,18 @@ static class EntityFactsBuilder
             Member = Text(split, 1, "Field") ?? "",
             Buckets = (int)(Number(split, -1, "Buckets") ?? 0),
         };
+    }
+
+    /// <summary><c>[DataSource]</c> 的抄本：只抄集群名那一个字符串，<b>没打注解才是 null</b>。
+    /// 打了注解却交出空值（<c>[DataSource(null)]</c>）要落成 <c>""</c> 而不是 null：反射侧那种写法交回的是
+    /// <c>DataSourceFacts(null)</c>，两侧到 <c>EntityContractFactory</c> 撞的是同一句「名字是空的」（与
+    /// <see cref="SplitOf"/> 里 <c>Member ?? ""</c> 同一 handoff）。在这里咽成 null 就成了
+    /// 「G1 当没声明而照跑、G2 启动期抛」——那正是两侧不一致里最难查的那一种。</summary>
+    static string? SourceOf(IEnumerable<AttributeData> attributes)
+    {
+        var source = Find(attributes, FastSqlDataSource);
+
+        return source is null ? null : Text(source, 0, "Cluster") ?? "";
     }
 
     /// <summary>把枚举实参写成 <c>global::…SplitKind.Month</c>；按数值找不到成员名时退回强制转换。

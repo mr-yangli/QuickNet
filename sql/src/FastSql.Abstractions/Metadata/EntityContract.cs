@@ -6,7 +6,11 @@ namespace FastSql.Metadata;
 /// <see cref="Name"/> 里带着 <c>{year}</c> 一类的占位符，要经 <see cref="SplitRouting"/> 换算成某一张
 /// 物理表才能发射。发射口按这一格<em>在场与否</em>决定要不要报错，所以"忘了换算就把模板原样发出去"
 /// 这种事故有一份结构性的兜底（<c>DialectBase.EmitTableName</c>）。</param>
-public sealed record TableInfo(string? Schema, string Name, SplitFacts? Split = null);
+/// <param name="Source">这一张表属于哪座具名集群（<see cref="DataSourceRouting"/>）。
+/// <b>null 说的是"没声明"，不是"没有归属"</b>：没声明即 <see cref="DataSourceRouting.DefaultCluster"/>，
+/// 而那一座就是 <c>FastSqlOrmOptions.ConnectionString</c> 那条串。留着 null 而不是填上 <c>main</c>，
+/// 为的是让"用户一个字没写"与"用户显式写了 main"在换算前后留得住区别。</param>
+public sealed record TableInfo(string? Schema, string Name, SplitFacts? Split = null, DataSourceFacts? Source = null);
 
 /// <summary>一条引用导航（to-one 关系）的已解析事实。<b>只有依赖侧</b>：外键列就在这张表上，
 /// 而主端那一半要另一份契约才算得出来（<see cref="TargetType"/> 是唯一的跨实体线索）。

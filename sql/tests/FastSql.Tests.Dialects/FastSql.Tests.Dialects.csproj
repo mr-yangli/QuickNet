@@ -9,6 +9,10 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="xunit.v3" />
+    <!-- 只为钉住 DI 注册期那两道闸门（<c>AddFastSqlOrm</c> 的工厂串×静态从库、注册期把 ConnectionSources
+         建一遍）。库侧只引 Abstractions，实现这一颗在这里才有家 —— 判据是"注册口是一个闸门，闸门要有人推一推"，
+         不是"顺带把容器也测一遍"：容器行为归宿主，本仓库不测。 -->
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
   </ItemGroup>
 
   <ItemGroup>

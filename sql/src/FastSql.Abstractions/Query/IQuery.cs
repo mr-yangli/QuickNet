@@ -132,6 +132,23 @@ public interface IQuery<T> : IAsyncEnumerable<T>
     /// 送到两张表），口径见 <see cref="FastSql.Metadata.SplitKind.Hash"/>。</summary>
     IQuery<T> SplitTables(params int[] buckets);
 
+    /// <summary>这一条链点名落在<em>主库</em>上（§16.4 的读写分离）。<b>它与"三格自动强制主库"是同一颗开关的
+    /// 两面</b>：事务内、同一条执行流上这座集群写过、这座集群一个从库都没配 —— 那三格不用点名也走主库，
+    /// 这一颗是给"我知道我从库上此刻读不到我要的那一行"的调用方用的（刚切完复制、批处理尾巴上的核对读）。
+    /// <b>它不改 SQL 文本</b>：点的只是连接，所以 <c>Explain()</c> 的模型文本与不点的那一条逐字相等，
+    /// 而"这句实际走了哪条"在 <c>CommandLogEvent.Route</c> 那一格里看得见（那才是它的验收面）。
+    /// <b>只落在 arity 1 这一档</b>，与 <see cref="WithSql"/> 同一处已记名的缺口。</summary>
+    IQuery<T> FromPrimary();
+
+    /// <summary>这一条链点名落在<em>从库</em>上（§16.4）。<b>它是三格强制主库的显式反命</b>，因此有两处
+    /// <em>当场抛</em>而不是静默改道：在这条事务里点它（事务内的读必须落在被这条事务独占的那条连接上，
+    /// 换一条去读说的就不是这个事务里的数据）、以及这座集群根本没配从库（"你要从库而这里没有"落不了地，
+    /// 把它悄悄收成主库就是"看起来能用"那一类，而那条路的症状是容量与延迟，不是报错）。
+    /// <b>没有权重、没有延迟探测</b>：从库按 <c>FastSqlOrmOptions.Replicas</c> 给出的顺序轮询，
+    /// 而复制延迟本家测不到（没有承接它的 SPI 槽位），所以这一颗要读"够新的"数据时请改用
+    /// <see cref="FromPrimary"/>。</summary>
+    IQuery<T> FromReplica();
+
     IQuery<T> WithCache(string cacheKey, TimeSpan ttl);
 
     IQuery<T> Distinct();

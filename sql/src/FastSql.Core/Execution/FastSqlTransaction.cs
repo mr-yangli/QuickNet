@@ -54,22 +54,26 @@ public sealed class FastSqlTransaction : IFastSqlTransaction
     internal int _nextSavepointId;
 
     /// <summary>根事务构造：持有连接与 DbTransaction 的所有权。
+    /// <paramref name="cluster"/> 是这场事务<em>钉住的那座集群</em>（§16.4）：之后这条流上任何要落别座集群的
+    /// 语句都在取连接那一支被拒，判据只有 <see cref="AdoExecutor"/> 一处。
     /// <paramref name="suspended"/> 是 <c>RequiresNew</c> 挂起的上一条环境事务，Finish 时恢复它。</summary>
-    internal FastSqlTransaction(AdoExecutor executor, DbConnection connection, DbTransaction transaction, bool ownsConnection = true, FastSqlTransaction? suspended = null)
+    internal FastSqlTransaction(AdoExecutor executor, string cluster, DbConnection connection, DbTransaction transaction, bool ownsConnection = true, FastSqlTransaction? suspended = null)
     {
         Executor = executor;
+        Cluster = cluster;
         _connection = connection;
         _transaction = transaction;
         _ownsConnection = ownsConnection;
         _suspended = suspended;
     }
 
-    /// <summary>保存点事务构造：共享外层的连接与 DbTransaction，不占有它们。
+    /// <summary>保存点事务构造：共享外层的连接、DbTransaction <b>与那座集群</b>，不占有它们。
     /// <paramref name="textSavepoints"/> 是创建它时走过的那条路（true = 文本，false = 驱动），
     /// 由 <see cref="AdoExecutor.BeginTransaction"/> 传进来，理由写在 <see cref="_textSavepoints"/>。</summary>
     internal FastSqlTransaction(FastSqlTransaction parent, string savepointName, bool textSavepoints)
     {
         Executor = parent.Executor;
+        Cluster = parent.Cluster;
         _connection = parent._connection;
         _transaction = parent._transaction;
         _ownsConnection = false;
@@ -93,6 +97,10 @@ public sealed class FastSqlTransaction : IFastSqlTransaction
     internal static void ClearAmbient() => _ambient.Value = null;
 
     internal AdoExecutor Executor { get; }
+
+    /// <summary>这场事务钉住的那座集群。取连接那一支按它判"这条语句能不能进这场事务"，
+    /// 所以公开它不是为了读数，是为了让会话侧能在开事务之前给出同一句话（<c>DbContext</c> 与测试都读它）。</summary>
+    internal string Cluster { get; }
 
     internal DbConnection Connection => _connection;
 

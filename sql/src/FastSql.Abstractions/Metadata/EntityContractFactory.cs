@@ -126,6 +126,11 @@ public static class EntityContractFactory
         if (table.Split is { } split)
             table = table with { Split = CompleteSplit(split, resolved, table, clrType.Name) };
 
+        // 集群归属只有名字要判（连接串的事判不到这一层，那是组装根的启动判据），
+        // 而名字判完就得落回 table：两侧（G1 生成的事实、G2 反射读到的注解）从这里同一处收口。
+        if (table.Source is { } source)
+            table = table with { Source = source with { Name = DataSourceRouting.ValidateName(source.Name, clrType.Name) } };
+
         return new EntityContract(clrType, table, resolved, MapIndexes(indexes, resolved, clrType.Name),
             MapRelationships(relationships, resolved));
     }

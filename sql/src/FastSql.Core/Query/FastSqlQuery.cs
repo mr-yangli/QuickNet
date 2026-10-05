@@ -1,3 +1,4 @@
+using FastSql.Metadata;
 using FastSql.Sql;
 using FastSql.Sql.Ast;
 using System.Diagnostics.CodeAnalysis;
@@ -85,6 +86,12 @@ public class FastSqlQuery<T> : IQuery<T>, IEngineCarrier
     public IQuery<T> SplitTables(DateTime from, DateTime to) => new FastSqlQuery<T>(Engine.SplitTables(from, to));
 
     public IQuery<T> SplitTables(params int[] buckets) => new FastSqlQuery<T>(Engine.SplitTables(buckets));
+
+    /// <summary>两颗点名角色的口径都在 <see cref="IQuery{T}"/> 上（§16.4）：这里只是把 <see cref="ChainChoice"/>
+    /// 落进模型，判"能不能"的那一处是执行时取连接的那个门口，不在链上。</summary>
+    public IQuery<T> FromPrimary() => new FastSqlQuery<T>(Engine.Role(ChainChoice.Primary));
+
+    public IQuery<T> FromReplica() => new FastSqlQuery<T>(Engine.Role(ChainChoice.Replica));
 
     public IQuery<T, T2> LeftJoin<T2>(Expression<Func<T, T2, bool>> on) where T2 : class
         => new FastSqlJoinQuery<T, T2>(Engine.Join(JoinKind.Left, on));

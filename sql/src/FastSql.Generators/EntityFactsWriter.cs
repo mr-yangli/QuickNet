@@ -172,13 +172,19 @@ static class EntityFactsWriter
             ? ", new " + Metadata + "SplitFacts(" + declared.Kind + ", " + Lit(declared.Member) + ", " + declared.Buckets + ")"
             : ", null";
 
+        // 集群归属同一做法：没声明写 null，声明了就把那一个名字原样抄成第四颗参数。
+        // 反射侧交的是 <c>new DataSourceFacts(source.Cluster)</c>，两侧到 EntityContractFactory 之前形状一致。
+        var source = m.Source is { } cluster
+            ? ", new " + Metadata + "DataSourceFacts(" + Lit(cluster) + ")"
+            : ", null";
+
         b.AppendLine("/// <summary>编译期算好的实体事实。provider 那一半（storage defaults、自增约定、索引与外键的列名换算）")
          .AppendLine("/// 由运行期的 EntityContractFactory 补上——只有 provider 知道自己是 nvarchar 还是 VARCHAR2(n BYTE)（§10.4）。</summary>")
          .AppendLine("static class " + m.Name + "Metadata")
          .AppendLine("{")
          .AppendLine("    public static " + Schema + "GeneratedEntityMetadata Facts { get; } = new(")
          .AppendLine("        typeof(" + m.Entity + "),")
-         .AppendLine("        new " + Metadata + "TableInfo(" + Lit(m.TableSchema) + ", " + Lit(m.TableName) + split + "),")
+         .AppendLine("        new " + Metadata + "TableInfo(" + Lit(m.TableSchema) + ", " + Lit(m.TableName) + split + source + "),")
          .AppendLine("        [");
 
         foreach (var column in m.Columns)

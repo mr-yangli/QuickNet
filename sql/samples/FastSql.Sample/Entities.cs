@@ -127,3 +127,22 @@ public class TicketRow
     [Column(Length = 64)]
     public string? Title { get; set; }
 }
+
+// ── 读写分离与分库（示例 §13）：一张声明在另一座库上的靶子 ────────────────
+
+/// <summary>销售汇总行：类上那一句 <c>[DataSource("report")]</c> 把它钉在 report 那座集群上。
+/// <b>这一句只说"住在哪座库"，不说"走哪条连接"</b>：写与事务落那座集群的主库，缺省读只在
+/// <em>那座集群配了</em>从库时才走从库 —— 这里没给它配，所以它每一句都落自己的主库。
+/// 名字必须与 <c>FastSqlOrmOptions.Clusters</c> 里那一条对上：对不上是启动期一句带在册清单的抛，
+/// 而不是"到库里才发现表建在没人看的那座"。</summary>
+[Table("SalesTotals")]
+[DataSource("report")]
+public class SalesTotal
+{
+    public int Id { get; set; }
+
+    [Column(Length = 64)]
+    public string? Metric { get; set; }
+
+    public decimal Value { get; set; }
+}

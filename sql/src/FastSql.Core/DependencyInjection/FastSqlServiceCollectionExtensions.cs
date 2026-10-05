@@ -1,6 +1,7 @@
 using System.Data.Common;
 using System.Diagnostics.CodeAnalysis;
 using FastSql.DriverLoading;
+using FastSql.Execution;
 using FastSql.Metadata;
 using FastSql.Metadata.Fluent;
 using FastSql.Providers;
@@ -22,6 +23,16 @@ public sealed class FastSqlOrmBuilder
     internal Func<IServiceProvider, string>? ConnectionStringFactory { get; set; }
     internal DbProviderFactory? DriverFactory { get; set; }
 
+    /// <summary>缺省集群 <c>main</c> 的从库清单（§16.4② 的读写分离那一档），按给出的顺序轮询。
+    /// 空清单 = 这座库不分读写，读与写落在 <see cref="ConnectionString"/> 那一条串上，
+    /// 也就是这一格落地之前的行为。</summary>
+    public IReadOnlyList<string> Replicas { get; set; } = [];
+
+    /// <summary><c>main</c> 之外的具名集群（分库那一档）。实体用 <c>[DataSource("名字")]</c> 点名自己住哪一座。
+    /// <b>这里的串都是启动期常量</b>：按请求解析的那颗工厂只管 <c>main</c> 的主库串（多租户每库一串），
+    /// 要让一座集群按请求换串，请为那一座另建一颗 orm，而不是在这一格里塞工厂。</summary>
+    public IReadOnlyList<ClusterConfig> Clusters { get; set; } = [];
+
     /// <summary>Fluent 模型配置（§10.2 优先级 1）。null 表示只用 DataAnnotations 与约定。</summary>
     public ModelConfiguration? Model { get; set; }
 
@@ -41,6 +52,8 @@ public sealed class FastSqlOrmBuilder
     {
         Provider = provider,
         ConnectionString = connectionString,
+        Replicas = Replicas,
+        Clusters = Clusters,
         Model = Model,
         CommandTimeoutSeconds = CommandTimeoutSeconds,
         PagingOrdering = PagingOrdering,
@@ -129,6 +142,19 @@ public static class FastSqlServiceCollectionExtensions
         // 启动期只校验静态串；工厂模式延到 Scoped 解析时再判。
         if (builder.ConnectionStringFactory is null && string.IsNullOrEmpty(builder.ConnectionString))
             throw new InvalidOperationException($"AddFastSqlOrm：DbKind.{builder.Kind} 的连接串为空。");
+
+        // 从库与具名集群是启动期常量，而工厂解析的主库串每个请求一条：两者配在一起时
+        // main 的主库属于当前租户、它的从库属于写配置时那一条串，症状是"读到别的租户的数据"。
+        // 这一格不给静默的机会（要按请求换整座集群就为那一座另建一颗 orm，判据在 FastSqlOrmBuilder.Clusters）。
+        if (builder.ConnectionStringFactory is not null && (builder.Replicas.Count > 0 || builder.Clusters.Count > 0))
+            throw new InvalidOperationException(
+                "AddFastSqlOrm：连接串工厂是按请求解析的，而从库与具名集群是启动期常量——两者混用会让 main 的主库与从库属于不同的租户。" +
+                "要么整座集群都用静态串（去掉工厂），要么按请求换库时另建一颗 orm。");
+
+        // 静态配置在这一格就把 ConnectionSources 建出来判一次：具名集群里出现 main、
+        // 从库清单里有空串，都在注册期红，而不是等到第一条语句。
+        if (builder.ConnectionStringFactory is null)
+            new ConnectionSources(builder.ConnectionString, builder.Replicas, builder.Clusters);
 
         services.AddSingleton(sp =>
         {

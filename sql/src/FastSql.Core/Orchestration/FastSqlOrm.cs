@@ -26,8 +26,17 @@ public sealed class FastSqlOrmOptions
 {
     public required IDbProvider Provider { get; init; }
 
-    /// <summary>连接串留在字符串形态：内核不认识任何驱动的连接串构建器（§1.2 原则 3）。</summary>
+    /// <summary>连接串留在字符串形态：内核不认识任何驱动的连接串构建器（§1.2 原则 3）。
+    /// <b>这一颗说的是缺省集群 <c>main</c> 的主库</b>，从库与其余具名集群走下面那两颗 ——
+    /// 只写这一颗的调用方与今天逐字同形（一个实例、一条串、读不分离）。</summary>
     public required string ConnectionString { get; init; }
+
+    /// <summary>缺省集群的从库清单，按给出的顺序轮询。为空即"这座库没有从库"，读落主库。</summary>
+    public IReadOnlyList<string> Replicas { get; init; } = [];
+
+    /// <summary>除 <c>main</c> 之外的具名集群。实体用 <c>[DataSource("名字")]</c> 点名自己住哪一座
+    /// （规格 §16.4① 那颗"解析键按表还是按实体"的裁决：按实体）。</summary>
+    public IReadOnlyList<ClusterConfig> Clusters { get; init; } = [];
 
     public FastSqlAop Aop { get; init; } = new();
 
@@ -46,6 +55,14 @@ public sealed class FastSqlOrmOptions
     /// <summary>§9.5。非 Development 环境下强制执行结构同步的开关。默认 false：光设 <see cref="SchemaSync"/> 不够，还要这一颗显式环境变量才放行。</summary>
     public bool ForceSchemaSync { get; init; } = false;
 }
+
+/// <summary>一座具名集群：<b>一个名字、一颗主库、若干从库</b>。直给的记录形状，没有 <c>UseReplicaOn()</c>
+/// 那一族方法——加一座库就是往 <see cref="FastSqlOrmOptions.Clusters"/> 的清单里添一条。</summary>
+/// <param name="Name">集群名，实体侧 <c>[DataSource(Name)]</c> 点的就是它。<c>main</c> 是保留名，
+/// 由 <see cref="FastSqlOrmOptions.ConnectionString"/> 占着。</param>
+/// <param name="Primary">主库串。写、事务与三档强制主库都落它。</param>
+/// <param name="Replicas">从库，按顺序轮询。null 或空即这座集群不分读写。</param>
+public sealed record ClusterConfig(string Name, string Primary, IReadOnlyList<string>? Replicas = null);
 
 /// <summary>组合根（§7 生命周期表里的单例）。只持有连接工厂、元数据缓存与方言，<b>不持有连接</b>：
 /// 连接按语句从驱动的连接池取（§3 第 5 层）。可以跨线程共享，<see cref="DbContext"/> 才需要 Scoped。</summary>
@@ -75,8 +92,9 @@ public sealed class FastSqlOrm
         Schemas = schemas;
         Aop = options.Aop;
         PagingOrdering = options.PagingOrdering;
+        Sources = new ConnectionSources(options.ConnectionString, options.Replicas, options.Clusters);
         Compiler = new QueryCompiler(Provider);
-        Ado = new AdoExecutor(Provider, options.ConnectionString, options.Aop, options.CommandTimeoutSeconds);
+        Ado = new AdoExecutor(Provider, Sources, options.Aop, options.CommandTimeoutSeconds);
         Filters = new FilterRegistry(this);
     }
 
@@ -124,6 +142,10 @@ public sealed class FastSqlOrm
     public QueryCompiler Compiler { get; }
 
     public AdoExecutor Ado { get; }
+
+    /// <summary>在册的集群与各自的串。<b>它与 <see cref="Options"/> 一样是"配置"的一侧</b>：
+    /// 实体上只有集群名，串只在这一颗与 <see cref="Options"/> 上看得见，因此也只在它们该被读的地方被读。</summary>
+    public ConnectionSources Sources { get; }
 
     public PagingOrderingPolicy PagingOrdering { get; }
 
@@ -293,6 +315,15 @@ public sealed class FastSqlOrm
     /// 而直接出 <c>using</c> 块 = 回滚。<b>同步方法是有原因的</b>，见 <see cref="IFastSqlTransaction"/>。</summary>
     public IFastSqlTransaction BeginTransaction(IsolationLevel level = IsolationLevel.ReadCommitted, TransactionPropagation propagation = TransactionPropagation.Requires) => Ado.BeginTransaction(level, propagation);
 
+    /// <summary>钉住一座集群开事务（§16.4 的"事务有了归属"）。<b>之后这条事务里的每一条语句都必须说同一座
+    /// 集群</b>：要另一座的那一句当场拒（判据在 <c>AdoExecutor.RentAsync</c> 的 ambient 那一支，与
+    /// <c>BeginTransaction</c> 里跨集群嵌套那一句共用同一条）。这不是懒：一场事务底下只有一条连接，
+    /// 而"跨集群的一场事务"要的是两阶段提交那一族协议（规格 §16.4① 没有裁它），本家不给它一个能写出来的形状。
+    /// 上面那一颗缺省的重载说的就是 <see cref="DataSourceRouting.DefaultCluster"/>，所以不点名集群的调用方
+    /// 与这一格落地之前逐字同形。</summary>
+    public IFastSqlTransaction BeginTransaction(string cluster, IsolationLevel level = IsolationLevel.ReadCommitted, TransactionPropagation propagation = TransactionPropagation.Requires)
+        => Ado.BeginTransaction(cluster, level, propagation);
+
     /// <summary>形态 (3)：环境事务。与 <see cref="BeginTransaction"/> 是同一个机制（AsyncLocal 槽位），
     /// 只是调用方想说的是"后面所有调用自动进来"，而不是"我要亲手 commit 这一笔"。</summary>
     public IFastSqlTransaction BeginAmbientTransaction() => Ado.BeginTransaction(IsolationLevel.ReadCommitted);
@@ -362,7 +393,7 @@ public sealed class FastSqlOrm
         if (policy == SchemaSyncPolicy.Execute)
             GuardSchemaSyncAllowed();
 
-        var syncer = new Core.Schema.SchemaSyncer(Provider, Schemas, Options.ConnectionString);
+        var syncer = new Core.Schema.SchemaSyncer(Provider, Schemas, Sources);
 
         return await syncer.SyncAsync(policy, ct).ConfigureAwait(false);
     }
@@ -386,7 +417,7 @@ public sealed class FastSqlOrm
         GuardSchemaSyncAllowed();
 
         var (template, shards) = SplitShards<T>(from, to);
-        var syncer = new Core.Schema.SchemaSyncer(Provider, Schemas, Options.ConnectionString);
+        var syncer = new Core.Schema.SchemaSyncer(Provider, Schemas, Sources);
 
         return await syncer.CreateShardsAsync(template, shards, ct).ConfigureAwait(false);
     }
@@ -402,7 +433,7 @@ public sealed class FastSqlOrm
         GuardSchemaSyncAllowed();
 
         var (template, shards) = SplitShards<T>(buckets);
-        var syncer = new Core.Schema.SchemaSyncer(Provider, Schemas, Options.ConnectionString);
+        var syncer = new Core.Schema.SchemaSyncer(Provider, Schemas, Sources);
 
         return await syncer.CreateShardsAsync(template, shards, ct).ConfigureAwait(false);
     }
@@ -418,7 +449,7 @@ public sealed class FastSqlOrm
     {
         var (template, shards) = SplitShards<T>(from, to);
 
-        return new Core.Schema.SchemaSyncer(Provider, Schemas, Options.ConnectionString).ShardsScript(template, shards);
+        return new Core.Schema.SchemaSyncer(Provider, Schemas, Sources).ShardsScript(template, shards);
     }
 
     /// <summary><see cref="SplitTablesScript{T}(DateTime,DateTime)"/> 的哈希档。</summary>
@@ -426,7 +457,7 @@ public sealed class FastSqlOrm
     {
         var (template, shards) = SplitShards<T>(buckets);
 
-        return new Core.Schema.SchemaSyncer(Provider, Schemas, Options.ConnectionString).ShardsScript(template, shards);
+        return new Core.Schema.SchemaSyncer(Provider, Schemas, Sources).ShardsScript(template, shards);
     }
 
     /// <summary>契约 + 换算好的片清单。<b>档不匹配的那一句由 <see cref="SplitRouting"/> 说</b>

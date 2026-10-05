@@ -28,6 +28,13 @@ sealed class QueryEngine
 {
     readonly string[] _tables;
 
+    /// <summary>这条链要去的那座集群 = 根表位的声明（§16.4）。<b>读"根"而不是读"全部表位"是有配套的</b>：
+    /// 跨集群的连接与急切加载在编译口就拒掉了（<c>QueryCompiler</c> 里那一颗），所以能走到执行的句子
+    /// 只可能说一座集群的名字，而那一座就是根表位那一张表住的那一座。
+    /// 集合导航的第二条查询<em>不</em>受这一格约束：它是一条独立的 SELECT，根表位是子实体自己，
+    /// 于是"父在 A 库、子在 B 库、内存里缝起来"天然成立 —— 那正是分库要的东西，不是漏洞。</summary>
+    readonly string _cluster;
+
     /// <summary>会话的跟踪器，<b>null 表示这一条链不跟踪</b>（<c>orm.Select&lt;T&gt;()</c> 与
     /// <c>AsNoTracking()</c> 之后都是 null）。v0.16 之前这个位落在 <c>QueryModel.NoTracking</c> 上，
     /// 挪到这里才让 §8.1 那句「跟踪与否不是两套 API」成为事实：模型里没有跟不跟踪这件事，
@@ -58,6 +65,7 @@ sealed class QueryEngine
         _ignoresFilters = ignoresFilters;
         _grouping = grouping;
         _tables = [.. model.Tables.Select(t => t.Table.Name)];
+        _cluster = DataSourceRouting.ClusterOf(model.Root.Table);
     }
 
     public FastSqlOrm Orm { get; }
@@ -213,6 +221,14 @@ sealed class QueryEngine
     }
 
     public QueryEngine Cache(string cacheKey, TimeSpan ttl) => Derive(Model with { CacheKey = cacheKey, CacheTtl = ttl });
+
+    /// <summary><c>FromPrimary()</c> / <c>FromReplica()</c> 的落点（§16.4 的链上显式表态）。
+    /// <b>与 <see cref="NoTracking"/> 同一形状：改的是这一次执行的去向，模型里的查询形状一个字不动</b>
+    /// （那一格进的是 <see cref="QueryModel.Role"/>，它不参与规范文本，理由写在那里）。
+    /// 它<em>不</em>在这里判"能不能"：事务里点从库、没配从库还点从库，那两件事的判据在
+    /// <see cref="DataSourceRouting.Resolve"/> 一处，由执行时的那次取连接兑现 —— 在这里判等于两处各写一套，
+    /// 而"这一句到底走了哪条"从此有了两个答案。</summary>
+    public QueryEngine Role(ChainChoice choice) => Derive(Model with { Role = choice });
 
     public QueryEngine Alias(string alias)
     {
@@ -1305,7 +1321,7 @@ sealed class QueryEngine
             ? Materializer.CreateWithIncludes<TResult>(model, Orm.Schemas)
             : Materializer.Create<TResult>(model, Orm.Schemas);
 
-    ExecutionTag Tag(string operation) => new(operation, _tables);
+    ExecutionTag Tag(string operation) => new(operation, _tables, _cluster, Model.Role);
 
     /// <summary>缓存只在 <c>WithCache</c> 与 <see cref="ICacheAdapter"/> 同时就位时生效。宿主没装缓存适配器时
     /// 这一层就是没有缓存 —— 结果集不受影响，所以这不是 §12.2 意义上的降级，不需要留痕。</summary>

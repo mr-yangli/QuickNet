@@ -81,11 +81,19 @@ public sealed class SqlServerProvider : IDbProvider
     public async Task EnsureDatabaseExistsAsync(string connectionString, CancellationToken ct = default)
     {
         var builder = new DbConnectionStringBuilder { ConnectionString = connectionString };
-        if (!builder.TryGetValue("Database", out var dbNameObj) || dbNameObj is not string dbName || dbName.Length == 0)
-            return;
 
+        // 两颗名字都要读：它们在 SqlClient 里是同义词，而<em>裸</em> <c>DbConnectionStringBuilder</c> 不做同义词归一
+        // （<c>Database</c> 与 <c>Initial Catalog</c> 在它眼里是两个互不相干的键）。只认 <c>Database</c> 的那一版
+        // 对着一条写 <c>Initial Catalog</c> 的串会走到"没库名"那一岔、<em>静默不建库</em>，
+        // 症状要到调用方连那座不存在的库时才现形，而那时候报错里已经没有"本应建库"这件事了。
+        var catalog = ReadCatalog(builder);
+
+        if (catalog is null) return;
+
+        // 两颗都改写、改完只留一份：留两份互相矛盾的键等于把"哪一颗说了算"交给解析顺序。
         builder.Remove("Database");
-        builder["Database"] = "master";
+        builder.Remove("Initial Catalog");
+        builder["Initial Catalog"] = "master";
 
         await using var connection = Connectors.CreateConnection(builder.ConnectionString);
         await connection.OpenAsync(ct).ConfigureAwait(false);
@@ -94,13 +102,33 @@ public sealed class SqlServerProvider : IDbProvider
         checkCmd.CommandText = "SELECT COUNT(*) FROM sys.databases WHERE name = @name";
         var p = checkCmd.CreateParameter();
         p.ParameterName = "@name";
-        p.Value = dbName;
+        p.Value = catalog;
         checkCmd.Parameters.Add(p);
         var exists = Convert.ToInt32(await checkCmd.ExecuteScalarAsync(ct).ConfigureAwait(false)) > 0;
         if (exists) return;
 
         await using var createCmd = Connectors.CreateCommand(connection);
-        createCmd.CommandText = $"CREATE DATABASE [{dbName.Replace("]", "]]")}]";
+        createCmd.CommandText = $"CREATE DATABASE [{catalog.Replace("]", "]]")}]";
         await createCmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+    }
+
+    /// <summary>那颗目标库名。<c>null</c> 即"这条串没指名字"，调用方按原样跳过建库。
+    /// <b>两颗同义词都在场且不同名时抛而不是挑一颗</b>：这一格的产出是"建哪座库"，挑错的那一种结果是
+    /// 建了一座没人要的库、而连接还是连不上原来那座 —— 静默挑一颗在这里比抛更贵。</summary>
+    static string? ReadCatalog(DbConnectionStringBuilder builder)
+    {
+        var database = Read(builder, "Database");
+        var initial = Read(builder, "Initial Catalog");
+
+        if (database is null) return initial;
+        if (initial is null) return database;
+        if (string.Equals(database, initial, StringComparison.OrdinalIgnoreCase)) return database;
+
+        throw new FastSqlException(
+            $"这条连接串里有两颗互相矛盾的库名：Database={database} 与 Initial Catalog={initial}。" +
+            "本方法要按那个名字建库，所以不能替你挑一颗 —— 请把它们改成同一个名字（或删掉其中一颗）。");
+
+        static string? Read(DbConnectionStringBuilder builder, string key)
+            => builder.TryGetValue(key, out var value) && value is string name && name.Length > 0 ? name : null;
     }
 }

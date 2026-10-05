@@ -1,15 +1,17 @@
 using System.Data.Common;
 using System.Diagnostics.CodeAnalysis;
 using FastSql.Execution;
+using FastSql.Metadata;
 using FastSql.Query;
 using FastSql.Tracking;
 using FastSql.Write;
 
 namespace FastSql;
 
-/// <summary>工作单元（§8）。<b>会话级连接复用（§8.4）</b>：首次执行时懒建一条连接并绑到当前 async 执行流，
-/// 之后同一会话内的所有语句（读/写/事务）都走这条连接，而不是每条语句各取一条再还回池。
-/// <see cref="DisposeAsync"/> 归还连接——关连接还池，AsyncLocal 槽位一并清理。
+/// <summary>工作单元（§8）。<b>会话级连接复用（§8.4）</b>：某一格首次执行时懒建连接并绑到当前 async 执行流，
+/// 之后同一会话里用到那一格的语句（读/写/事务）都走它，而不是每条语句各取一条再还回池。
+/// 读写分离与分库之后"那一格"是 <b>(集群, 角色)</b> 而不是"整个会话"，所以一个会话可以持有两条连接；
+/// <see cref="DisposeAsync"/> 逐条归还——关连接还池，AsyncLocal 的格子一并清理。
 ///
 /// <b>生命周期：Scoped / Transient，绝不能单例</b>（§7 的表）。身份映射与脏标记都是它的状态，
 /// 跨请求共享一个会话得到的不是缓存而是别人的未提交改动。
@@ -24,7 +26,12 @@ public class DbContext(FastSqlOrm orm) : IAsyncDisposable, IDisposable
 {
     readonly ChangeTracker _tracker = new(orm);
     readonly Dictionary<Type, object> _sets = [];
-    DbConnection? _sessionConnection;
+    readonly List<DbConnection> _sessionConnections = [];
+
+    /// <summary>"这一条流上哪几座集群写过"的账本把手（§16.4 的写后读那一档）。
+    /// 挂在<b>构造</b>而不是首次执行上，理由与 <c>FastSqlTransaction.Install</c> 同一条：
+    /// <c>AsyncLocal</c> 只有同步被调方才写得回调用方的帧，而会话正是被调用方同步 <c>new</c> 出来的。</summary>
+    readonly IDisposable _flowWrites = AdoExecutor.InstallFlowWrites();
 
     public FastSqlOrm Orm { get; } = orm;
 
@@ -175,13 +182,18 @@ public class DbContext(FastSqlOrm orm) : IAsyncDisposable, IDisposable
         // 不该在库里留一个开过又回滚的事务。
         _tracker.EnsureNoSplitWrites();
 
+        // 同一格位置上的第三道元数据闸门：这一批<em>只能落一座集群</em>，而那座集群的名字就是下面那场事务
+        // 要钉的那一格（§16.4）。判它仍然在开事务之前，同前两道一条理由：跨集群的保存注定失败，
+        // 不该先在库里留一个开过又回滚的事务。
+        var cluster = _tracker.WriteCluster();
+
         // 确保会话连接工厂在位：SaveChanges 的事务会复用它（§8.4），而不是另取一条。
         EnsureSessionFactory();
 
         if (FastSqlTransaction.For(Orm.Ado) is not null)
             return await _tracker.FlushDueAsync(ct).ConfigureAwait(false);
 
-        using var tran = Orm.BeginTransaction();
+        using var tran = Orm.BeginTransaction(cluster ?? DataSourceRouting.DefaultCluster);
         var report = await _tracker.FlushDueAsync(ct).ConfigureAwait(false);
         tran.Commit();
 
@@ -191,46 +203,65 @@ public class DbContext(FastSqlOrm orm) : IAsyncDisposable, IDisposable
     // ── 会话级连接复用（§8.4） ───────────────────────────────────────
 
     /// <summary>注册连接工厂——只挂一只 delegate，不建连接。连接在首条语句执行时由
-    /// <c>AdoExecutor.OpenAsync</c> 调工厂懒建，之后同一会话的所有语句复用。</summary>
+    /// <c>AdoExecutor.OpenAsync</c> 按 (集群, 角色) 调工厂懒建，之后同一会话用到那一格的语句都复用它。</summary>
     internal void EnsureSessionFactory()
     {
-        if (_sessionConnection is not null)
+        if (_sessionConnections.Count > 0)
             return;
 
         AdoExecutor.SetSessionFactory(CreateSessionConnection);
     }
 
-    /// <summary>连接工厂本体：<c>AdoExecutor.OpenAsync</c> 在首条语句执行时调它。
-    /// 创建、打开、绑定，一步到位。后续语句走已绑定的连接，不再调工厂。</summary>
-    DbConnection CreateSessionConnection()
+    /// <summary>连接工厂本体：<c>AdoExecutor.RentAsync</c> 在某一格第一次要用连接时调它。
+    /// 创建、打开、绑定，一步到位。同一格（同一座集群的同一个角色）之后的语句走已绑定的那一条，不再调工厂。
+    ///
+    /// <para><b>会话因此可以持有两条连接</b>：读写分离之后"会话的那一条连接"这句话不成立了，成立的是
+    /// "会话对每一格只有一条"。从库那一格的轮询因此<em>落在会话上</em>——一个会话钉住一颗从库，
+    /// 而不是每条语句换一颗。这既是要的语义（会话内两次读要能在同一份副本上看对账），
+    /// 也是省下的代价（不至于每句都过一遍池）。</para></summary>
+    DbConnection CreateSessionConnection(string cluster, ConnectionRole role)
     {
         var connectors = Orm.Provider.Connectors;
 
         if (!connectors.TryEnsureLoaded(out var failure))
             throw new DriverNotAvailableException(Orm.Provider.Kind.ToString().ToLowerInvariant(), failure);
 
-        var connection = connectors.CreateConnection(Orm.Options.ConnectionString);
+        var connection = connectors.CreateConnection(Orm.Sources.ConnectionStringFor(cluster, role));
         connection.Open();
 
-        _sessionConnection = connection;
-        AdoExecutor.BindSessionConnection(connection);
+        _sessionConnections.Add(connection);
+        AdoExecutor.BindSessionConnection(cluster, role, connection);
 
         return connection;
     }
 
-    /// <summary>归还会话连接——关连接还池，AsyncLocal 槽位一并清理。
-    /// 同步 <c>Dispose</c> 与异步 <c>DisposeAsync</c> 都走同一条路径：<c>DbConnection.Close</c>
-    /// 本身就是同步的，<c>DisposeAsync</c> 只是多一层 <c>await</c> 壳。</summary>
-    public async ValueTask DisposeAsync()
+    /// <summary>归还会话连接——AsyncLocal 的格子先同步注销，再逐条关连接还池。
+    ///
+    /// <para><b>这个方法本身不能是 <c>async</c></b>，而这不是排版顺序：<c>AsyncLocal</c> 的值只有<b>同步被调方</b>
+    /// 写得回调用方的帧，一个 <c>async</c> 方法里哪怕在第一个 <c>await</c> 之前赋值，那份写也只活在它自己的副本上
+    /// （同一条规则写在 <see cref="FastSqlTransaction"/> 的 remarks 与 <c>AdoExecutor._flowWrites</c> 的注释里）。
+    /// 加了 <c>async</c> 的后果是：调用方那条流从此一直留着"本座集群写过"的戳子，而会话早就 dispose 了 ——
+    /// 这一条流上后面每一句缺省读都被送回主库，读写分离静默失效并且绿得看不出来（示例第一跑撞在这格上）。
+    /// 所以这里同步注销两颗槽位，把 <c>await</c> 只留给连接回收那一段。</para>
+    ///
+    /// <para>同步 <c>Dispose</c> 走的是同一颗注销，只是连接关闭也同步。</para></summary>
+    public ValueTask DisposeAsync()
     {
         AdoExecutor.ClearSessionFactory();
+        _flowWrites.Dispose();
 
-        if (_sessionConnection is { } conn)
+        return CloseSessionConnectionsAsync();
+    }
+
+    async ValueTask CloseSessionConnectionsAsync()
+    {
+        foreach (var connection in _sessionConnections)
         {
-            _sessionConnection = null;
-            AdoExecutor.UnbindSessionConnection(conn);
-            await conn.DisposeAsync().ConfigureAwait(false);
+            AdoExecutor.UnbindSessionConnection(connection);
+            await connection.DisposeAsync().ConfigureAwait(false);
         }
+
+        _sessionConnections.Clear();
 
         GC.SuppressFinalize(this);
     }
@@ -240,12 +271,14 @@ public class DbContext(FastSqlOrm orm) : IAsyncDisposable, IDisposable
     {
         AdoExecutor.ClearSessionFactory();
 
-        if (_sessionConnection is { } conn)
+        foreach (var connection in _sessionConnections)
         {
-            _sessionConnection = null;
-            AdoExecutor.UnbindSessionConnection(conn);
-            conn.Dispose();
+            AdoExecutor.UnbindSessionConnection(connection);
+            connection.Dispose();
         }
+
+        _sessionConnections.Clear();
+        _flowWrites.Dispose();
 
         GC.SuppressFinalize(this);
     }

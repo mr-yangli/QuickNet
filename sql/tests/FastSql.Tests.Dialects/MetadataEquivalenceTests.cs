@@ -50,6 +50,11 @@ public sealed class MetadataEquivalenceTests
     // 换算后的列名），落进库里的就是两张不同的表 —— 那种分叉不会让任何一条 SQL 变红。
     [InlineData(typeof(ShardLog))]
     [InlineData(typeof(TenantRow))]
+    // 集群归属这两张（§16.4①）同一取向：G1 那颗集群名是从注解实参抄成<em>字符串字面量</em>的，
+    // G2 读的是注解实例。那一格分叉不会让任何一条 SQL 变红 —— 它让一句读发到另一座库里去。
+    // ArchiveNote 是第三、第四颗参数同时非空的那一张：漏抄任一颗都是"片名对、库错"。
+    [InlineData(typeof(ReportRow))]
+    [InlineData(typeof(ArchiveNote))]
     public void Both_paths_produce_the_same_contract(Type clrType)
         => Assert.Equal(Shape(Reflected().Contract(clrType)), Shape(Generated().Contract(clrType)));
 
@@ -61,6 +66,7 @@ public sealed class MetadataEquivalenceTests
     [InlineData(typeof(Milestone), "nav Project → FastSql.TestInfra.Project fk=(ProjectId) cols=(ProjectId) origin=Convention: 约定：Project ⇒ ProjectId")]
     [InlineData(typeof(SelfRef), "nav Manager → FastSql.TestInfra.SelfRef fk=(ManagerId) cols=(ManagerId)")]
     [InlineData(typeof(TwoKeys), "nav = (0)")]
+    [InlineData(typeof(ReportRow), "source = report")]
     public void Contract_carries_the_layer_it_claims(Type clrType, params string[] expected)
     {
         var shape = Shape(Generated().Contract(clrType));
@@ -89,6 +95,10 @@ public sealed class MetadataEquivalenceTests
             // 分表那一格（§16.4）：表名之外还要比"这一张是模板、按哪一档、从哪一列换算"。
             // 只比表名的话，G1 把桶数抄成 0 而 G2 抄成 4 也照样绿，而两侧算出的物理片名从第一天起就不同。
             $"split = {(contract.Table.Split is { } split ? $"{split.Kind} member={split.MemberName} column={split.ColumnName} buckets={split.Buckets} time={split.IsTime}" : "-")}",
+
+            // 集群归属那一格（§16.4①）：不加进来的话「逐字段相同」又是一句假话 —— G1 把 report 抄成
+            // archive 时两侧各自都能建出表、都能出 SQL，只是发往两座不同的库。
+            $"source = {contract.Table.Source?.Name ?? "-"}",
 
             $"primary = {string.Join(",", contract.PrimaryKey.Select(c => c.MemberName))}",
             $"nav = ({contract.Relationships.Count})",
@@ -133,6 +143,11 @@ public sealed class MetadataEquivalenceTests
         // 在 G2 读的是注解实例 —— 只有两边都真的走自己的那条路，相等才有内容。
         Assert.Equal("FastSqlGeneratedShardLogSchema", Generated().Schema<ShardLog>().GetType().Name);
         Assert.Equal("FastSqlGeneratedTenantRowSchema", Generated().Schema<TenantRow>().GetType().Name);
+
+        // 集群那两张同理：`[DataSource]` 在 G1 是抄进第四颗参数字面量的，在 G2 是注解实例，
+        // 只有两边都真走自己那条路，上面那两条对拍才有内容。
+        Assert.Equal("FastSqlGeneratedReportRowSchema", Generated().Schema<ReportRow>().GetType().Name);
+        Assert.Equal("FastSqlGeneratedArchiveNoteSchema", Generated().Schema<ArchiveNote>().GetType().Name);
     }
 
     [Fact]

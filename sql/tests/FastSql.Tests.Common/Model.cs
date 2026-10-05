@@ -348,3 +348,74 @@ public class TenantRow
     [Column(Length = 64)]
     public string? Name { get; set; }
 }
+
+/// <summary>§16.4① 具名集群的靶子：这一张表<em>声明</em>住在 <c>report</c> 那一座库里。</summary>
+/// <remarks>
+/// 注解里只有集群名、没有连接串，所以这一张可以进版本库而那条串不能（分工写在
+/// <see cref="DataSourceAttribute"/> 上）。它在离线册里的价值是"G1 抄出来的 <c>TableInfo</c>
+/// 第四颗参数与 G2 反射读到的注解实例逐字段相等"：那一格只要差一次，读侧与写侧就会
+/// 一条打主库、一条打另一座库，而两边的 SQL 文本各自都完全合理。
+/// <para>故意不复用 <see cref="Order"/>：那张表的列序被几十份黄金样本钉死，而这里要的是一张
+/// <em>归属不是 main</em> 的表 —— 任何打在 <c>FastSqlOrder</c> 上的路由断言都会把整片样本拖红。</para></remarks>
+[Table("FastSqlReportRow")]
+[DataSource("report")]
+public class ReportRow
+{
+    public int Id { get; set; }
+
+    [Column(Length = 64)]
+    public string? Metric { get; set; }
+
+    public decimal Value { get; set; }
+
+    public DateTime CapturedAt { get; set; }
+
+    /// <summary>指向 <see cref="Customer"/>（那张在 <c>main</c> 上）的外键列。这一根边给的是
+    /// <b>跨集群 Include 的负样本</b>：Include 落成 LEFT JOIN，而一条 SQL 打不到两座库。</summary>
+    public int CustomerId { get; set; }
+
+    /// <summary>引用导航：report 的表连 main 的表。选它做目标与 <see cref="ShardLog.Customer"/> 同一理由 ——
+    /// 那张在 main、有整型主键，于是这一句拒的是集群而不是"边本身不合法"。</summary>
+    public Customer? Customer { get; set; }
+}
+
+/// <summary>与 <see cref="ReportRow"/> <b>同一座</b>集群的第二张表：跨集群那道闸门需要一个"不该拒"的正样本，
+/// 否则"只要写了 <c>[DataSource]</c> 就一律拒"这一版实现也能全绿。</summary>
+/// <remarks>列序、表名都不被金标钉：它只活在路由册里。导航按约定 <c>属性名 + Id</c> 命中 <see cref="ReportRowId"/>
+/// （与 <see cref="Order.Customer"/> 同一形状，所以命名跟着目标类型走），于是
+/// <c>Include(t =&gt; t.ReportRow)</c> 走的正是 report 内部那条 LEFT JOIN。</remarks>
+[Table("FastSqlReportTotal")]
+[DataSource("report")]
+public class ReportTotal
+{
+    public int Id { get; set; }
+
+    public decimal Total { get; set; }
+
+    public int ReportRowId { get; set; }
+
+    /// <summary>同集群的引用导航：Include 允许，句子照常发（对照 <see cref="ReportRow.Customer"/>）。</summary>
+    public ReportRow? ReportRow { get; set; }
+}
+
+/// <summary>分表 × 分库那一格组合的靶子：一张按年分片的表，同时住在 <c>archive</c> 那一座库里。</summary>
+/// <remarks>
+/// 这一张存在的理由只有一条：<c>TableInfo</c> 的第三、第四颗参数<em>同时</em>非空时的形状。
+/// 两侧各只有一处发射点（<c>EntityFactsWriter</c> 的那一行、<c>ContractResolver.ResolveTable</c> 的那一行），
+/// 而组合漏抄一颗的表现是"物理片名算对了、语句发到了另一座库"—— 那是比表名算错更贵的一种错。
+/// 主键仍是 <see cref="Guid"/>（分表禁自增主键那条硬判据，见 <see cref="ShardLog"/>）；
+/// 每一片落在模板所属的那座集群上，由 <c>DataSourceRouting.ClusterOf</c> 从模板表位算出。
+/// </remarks>
+[Table("FastSqlArchiveNote_{year}")]
+[SplitTable(SplitKind.Year, nameof(WrittenAt))]
+[DataSource("archive")]
+public class ArchiveNote
+{
+    public Guid Id { get; set; }
+
+    /// <summary>分片键（时间档，年）。</summary>
+    public DateTime WrittenAt { get; set; }
+
+    [Column(Length = 128)]
+    public string? Body { get; set; }
+}

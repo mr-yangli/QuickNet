@@ -1,4 +1,5 @@
 using FastSql.Aop;
+using FastSql.Metadata;
 
 namespace FastSql.Tracking;
 
@@ -241,6 +242,51 @@ sealed class ChangeTracker(FastSqlOrm orm) : DbChangeTracker
                         "会话的账按主键记，而同一个主键在分表里可以占着两张片上的各一行，身份映射认不出“要写的是哪一行”。" +
                         "分表的写请用 orm.Insert/InsertRange/Update/Delete 那几条链（它们按行的分片键值算目标表）。");
         }
+    }
+
+    /// <summary>这一批写要落的那座集群（§16.4 的分库那一档），<b>跨集群就整批拒</b>。
+    /// 判据与 <see cref="EnsureNoSplitWrites"/> 同一颗 <see cref="ITypeTracker.WillWrite"/>：只把另一座
+    /// 集群的实体<em>读</em>进会话不构成一批跨集群的写。
+    ///
+    /// <para><b>为什么是"整批拒"而不是"按集群拆成几场事务依次提交"</b>：后者看着是把同一件事做完了，
+    /// 实际改了 <c>SaveChanges</c> 那句"一批=一场事务"的承诺 —— 第二批失败时第一批已经进了库，而报告里
+    /// 只有一份 <c>Success=false</c>，调用方无从知道哪几行已经在库里。那种形状正是要避开的那一类
+    /// "看着像原子，其实不是"。要分库写就自己分次 <c>SaveChanges</c>（每次都在一座集群上、每次都提交得明明白白），
+    /// 或者按集群各开一条会话 —— 会话本来就是 Scoped 的。</para>
+    ///
+    /// <para>返回 <c>null</c> 说"这一批没有要写出去的行"，调用方按缺省集群开事务（那一批本来一条语句都不发，
+    /// <c>SaveChangesAsync</c> 在更前面就交了空报告）。名字不叫 <c>EnsureSingleClusterWrites</c>：它除了判
+    /// 还要<em>给出结论</em>，而那个结论是开事务那一格要的参数。</para></summary>
+    internal string? WriteCluster()
+    {
+        string? cluster = null;
+
+        foreach (var tracker in _order)
+        {
+            if (!tracker.MayHaveWrites)
+                continue;
+
+            var named = DataSourceRouting.ClusterOf(tracker.Contract.Table);
+
+            foreach (var node in tracker.Nodes)
+            {
+                if (!tracker.WillWrite(node))
+                    continue;
+
+                if (cluster is null)
+                {
+                    cluster = named;
+                    continue;
+                }
+
+                if (!string.Equals(cluster, named, StringComparison.Ordinal))
+                    throw new FastSqlException(
+                        $"这一批同时有集群 {cluster}（{tracker.EntityType.Name} 在集群 {named} 上）与集群 {named} 的写：一场事务只有一条连接，跨集群的保存拒。" +
+                        "请按集群分两次 SaveChanges，或为每一座集群各开一条会话。");
+            }
+        }
+
+        return cluster;
     }
 
     /// <summary>档内的类型序按外键依赖排：被依赖的（主端）在前。判据只有一个来源——契约上那条

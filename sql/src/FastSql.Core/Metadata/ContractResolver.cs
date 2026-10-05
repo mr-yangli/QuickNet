@@ -66,8 +66,13 @@ public sealed class ContractResolver(IDbProvider provider, ModelConfiguration? c
         // 是两件事，把它们绑在同一层会让 [Table(DataAnnotations)] + [SplitTable] 这种组合没法写。
         var split = clrType.GetCustomAttribute<SplitTableAttribute>();
 
+        // 集群归属与分表同一取向：只认自研属性那一层、不落 Fluent。落 Fluent 的那一条路会让
+        // "同一张表在两条路径上属于两座库"有能发生的形状，而那一格的代价是语句发到另一座库里去。
+        var source = clrType.GetCustomAttribute<DataSourceAttribute>();
+
         return new TableInfo(fluent?.Schema ?? fastsql?.Schema ?? data?.Schema, name,
-            split is null ? null : new SplitFacts(split.Kind, split.Field, split.Buckets));
+            split is null ? null : new SplitFacts(split.Kind, split.Field, split.Buckets),
+            source is null ? null : new DataSourceFacts(source.Cluster));
     }
 
     [RequiresUnreferencedCode("按 Type 扫描公共属性。")]

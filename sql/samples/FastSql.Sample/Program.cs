@@ -1,4 +1,6 @@
 using FastSql;
+using FastSql.Aop;
+using FastSql.Metadata;
 using FastSql.Providers;
 using FastSql.Query;
 using FastSql.Sample;
@@ -741,6 +743,172 @@ Console.WriteLine($"  桶 1 里是租户 {string.Join("、", inBucket1.Select(t 
 foreach (var bucket in new[] { 0, 1, 2, 3 })
     Console.WriteLine($"  逐桶读：SplitTables({bucket}) → {string.Join("、", (await orm.Select<TicketRow>().SplitTables(bucket).ToListAsync()).Select(t => t.TenantId))}");
 
+// ── 13. 读写分离与分库（[DataSource] / Replicas / Clusters） ──────────────
+Console.WriteLine("═══ 13. 读写分离与分库 ═══");
+Console.WriteLine();
+
+// §3 起那只 Scoped 会话一直活到这里（真实应用里请求一结束就收），而会话构造时挂上的那帧「本条流写过哪几座集群」
+// 的账本也跟着活着：它写过 main，于是同一条流上 main 的缺省读会被送回主库。
+// 本节要的读数是一条没写过 main 的流，所以先把它收掉 —— 这一格本身就是用法：<b>写后读那只帧长在会话上</b>，
+// 裸链（orm.Select / orm.Insert）没有会话可问，所以它不知道刚才那条流放进了哪座库。
+// 收它用的是 DisposeAsync，而那颗戳子的注销必须留在<em>同步</em>那一段：async 方法里换 AsyncLocal 的值
+// 写不回调用方的帧（哪怕排在第一个 await 之前也一样），戳子就会一直挂在调用方这条流上 —— 本节第一跑
+// 正是那个形状，读起来像读写分离没生效，于是把源码的 DisposeAsync 拆成"同步注销 + 异步关连接"两段。
+await db.DisposeAsync();
+
+// ① 三座库、一个实例：main 的主库与它的一颗从库，加上 report 那座集群的主库。三颗都是文件。
+//    从库在这里是<em>另一颗文件</em>而不是一份真复制过来的副本 —— 本机没有配了复制的实例，
+//    所以这一格能证的是"缺省读真的换了一条连接、落到另一座库"，它<em>不</em>证复制延迟。
+var routedMainFile = "fastsql-sample-routed-main.db";
+var replicaFile = "fastsql-sample-routed-replica.db";
+var reportFile = "fastsql-sample-routed-report.db";
+
+foreach (var file in new[] { routedMainFile, replicaFile, reportFile })
+    if (File.Exists(file)) File.Delete(file);
+
+// 路由的读数是订阅出来的：Executed 手上一定有那句实际走的那条连接（CommandLogEvent.Route 是必填的一格），
+// 所以"这一句落在哪座库、哪个角色、按哪一档"是读得出的事实，不是靠翻库猜出来的。
+var routes = new List<string>();
+var routedAop = new FastSqlAop();
+routedAop.Executed = e => routes.Add($"{e.OperationKind} → {e.Route.Cluster}/{(e.Route.IsPrimary ? "主" : "从")}（{e.Route.Reason}）");
+
+var routed = new FastSqlOrm(new FastSqlOrmOptions
+{
+    Provider = orm.Provider,
+    ConnectionString = $"Data Source={routedMainFile}",
+    Replicas = [$"Data Source={replicaFile}"],
+    Clusters = [new ClusterConfig("report", $"Data Source={reportFile}")],
+    Aop = routedAop,
+    SchemaSync = SchemaSyncPolicy.Execute,
+    ForceSchemaSync = true,
+});
+
+// ② 声明在契约上读得回来；没点名的实体落在缺省的 main，与这一格落地之前逐字同形。
+Console.WriteLine($"SalesTotal 住在集群 {routed.Schemas.Contract<SalesTotal>().Table.Source!.Name} ∶ Customer 住在 {DataSourceRouting.ClusterOf(routed.Schemas.Contract<Customer>().Table)}");
+Console.WriteLine($"  在册的集群：{string.Join("、", routed.Sources.ClusterNames)}（main 之外只有点名那一座；按 Ordinal 排过）");
+
+// ③ 一次建表，DDL 按集群分组：两张表落在两座库里。从库那座<em>另建一遍</em>——一座真的从库有的是
+//    同样的表、旧一份的内容，所以这里给它表而不给它行，那才是"落后一个复制窗口"的形状。
+_ = routed.Select<Customer>();
+_ = routed.Select<SalesTotal>();
+
+var replicaSeed = new FastSqlOrm(new FastSqlOrmOptions
+{
+    Provider = orm.Provider,
+    ConnectionString = $"Data Source={replicaFile}",
+    SchemaSync = SchemaSyncPolicy.Execute,
+    ForceSchemaSync = true,
+});
+
+_ = replicaSeed.Select<Customer>();
+
+var routedSync = await routed.SyncStructureAsync();
+_ = await replicaSeed.SyncStructureAsync();
+
+Console.WriteLine($"一次 SyncStructure 建出：{string.Join("、", routedSync.CreatedTables)}");
+Console.WriteLine($"  Customers：main 有 {HasTable(routedMainFile, "Customers")} ∶ report 有 {HasTable(reportFile, "Customers")}");
+Console.WriteLine($"  SalesTotals：report 有 {HasTable(reportFile, "SalesTotals")} ∶ main 有 {HasTable(routedMainFile, "SalesTotals")}");
+Console.WriteLine($"  从库那座：表在 {HasTable(replicaFile, "Customers")}（有表而没有下面要写的那一行，才是「落后」而不是「没建」）");
+
+// ④ 写落主库、缺省读落从库：同一句读、同一个实例，差别只在那条连接。
+var chainName = "读写分离-" + Guid.NewGuid().ToString("N")[..6];
+
+await routed.Insert(new Customer { Name = chainName, City = "从库本来就没有" }).ExecuteAffrowsAsync();
+Console.WriteLine($"  写那一句：{routes[^1]}");
+
+var onReplica = (await routed.Select<Customer>().Where(c => c.Name == chainName).ToListAsync()).Count;
+Console.WriteLine($"  缺省读落到从库：{onReplica} 行 ∶ {routes[^1]}");
+
+var onPrimary = (await routed.Select<Customer>().Where(c => c.Name == chainName).FromPrimary().ToListAsync()).Count;
+Console.WriteLine($"  同一句点明 FromPrimary()：{onPrimary} 行 ∶ {routes[^1]}");
+Console.WriteLine("  链式这一侧写过之后缺省读仍去从库：那张「写过」的帧长在会话（DbContext）上，裸链没有会话可问");
+
+// ⑤ 会话里就是另一回事：本座集群写过之后，缺省读被送回主库，而那一份正是自己刚写的。
+var sessionName = "写后读-" + Guid.NewGuid().ToString("N")[..6];
+
+using (var session = new DbContext(routed))
+{
+    session.Set<Customer>().Add(new Customer { Name = sessionName, City = "自己写的" });
+    _ = session.SaveChanges();
+
+    var own = session.Set<Customer>().Where(c => c.Name == sessionName).ToList().Count;
+    Console.WriteLine($"  会话里刚写过，缺省读回的是自己那一份：{own} 行 ∶ {routes[^1]}");
+
+    var stale = session.Set<Customer>().Where(c => c.Name == sessionName).FromReplica().ToList().Count;
+    Console.WriteLine($"  同一句点明 FromReplica() 就仍然去从库、读到旧的那一份：{stale} 行 ∶ {routes[^1]}");
+    Console.WriteLine("  显式表态压过写后读：库不替你兜那份「新读旧」，这一格要由调用方自己负责");
+}
+
+// ⑥ report 那座没配从库，所以缺省读落它自己的主库。写过之后同一座库、同一个理由 ——
+//    因为「本条流刚写过」那格只有会话才记账（④ 末尾那句），裸链插完之后缺省读仍按「这座不分读写」落主库。
+//    落处没变，所以这一格真正要说的是 Reason 读的是<em>决策</em>不是<em>落处</em>：同一座主库能由四种理由抵达。
+var gmvBefore = (await routed.Select<SalesTotal>().ToListAsync()).Count;
+Console.WriteLine($"  report 没配从库，缺省读落它自己的主库：{gmvBefore} 行 ∶ {routes[^1]}");
+
+await routed.Insert(new SalesTotal { Metric = "GMV", Value = 128m }).ExecuteAffrowsAsync();
+
+var gmvAfter = (await routed.Select<SalesTotal>().ToListAsync()).Count;
+Console.WriteLine($"  写过之后落处与理由都不变（裸链不记写后读）：{gmvAfter} 行 ∶ {routes[^1]}");
+
+// ⑦ 四格拒绝，每一格都在动手之前，而报错给的是走得通的那条路。
+try
+{
+    using var ambient = routed.BeginAmbientTransaction();
+    await routed.Select<Customer>().FromReplica().ToListAsync();
+}
+catch (FastSqlException ex)
+{
+    Console.WriteLine($"  事务里点 FromReplica()：{Head(ex.Message)}");
+}
+
+try
+{
+    _ = routed.Select<Customer>().InnerJoin<SalesTotal>((c, s) => c.Id == s.Id).ToSql();
+}
+catch (FastSqlException ex)
+{
+    Console.WriteLine($"  跨集群 JOIN：{Head(ex.Message)}");
+}
+
+try
+{
+    using var mixed = new DbContext(routed);
+
+    mixed.Set<Customer>().Add(new Customer { Name = "混批", City = "要拒" });
+    mixed.Set<SalesTotal>().Add(new SalesTotal { Metric = "混批", Value = 1m });
+    _ = mixed.SaveChanges();
+}
+catch (FastSqlException ex)
+{
+    Console.WriteLine($"  一批跨两座集群：{Head(ex.Message)}");
+}
+
+// ⑧ 脚本模式不连库，而一座集群一段：那几行段头是给 DBA 的"这一段要落在哪座库的主库上"。
+var scriptOrm = new FastSqlOrm(new FastSqlOrmOptions
+{
+    Provider = orm.Provider,
+    ConnectionString = $"Data Source={routedMainFile}",
+    Clusters = [new ClusterConfig("report", $"Data Source={reportFile}")],
+    SchemaSync = SchemaSyncPolicy.Script,
+});
+
+_ = scriptOrm.Select<Customer>();
+_ = scriptOrm.Select<SalesTotal>();
+
+var ddl = (await scriptOrm.SyncStructureAsync()).Ddl;
+
+Console.WriteLine("  脚本模式分段（只打段头与建表那一句的头）：");
+
+foreach (var line in ddl.Replace("\r\n", "\n").Split('\n'))
+    if (line.StartsWith("-- 集群") || line.Contains("CREATE TABLE", StringComparison.OrdinalIgnoreCase))
+        Console.WriteLine("    " + Head(line.Trim(), 96));
+
+// ⑨ 这一档今天没有的三格，写在这里而不是等使用者撞：
+//    · 原生 SQL 那一族（orm.Ado 的字符串口）只认 main 那座集群——句子里没有"哪座库"这一颗可给；
+//      而它在 main 配了从库时，一句<em>读</em>照样按缺省档落到从库上去（判据与链式同一条）。
+//    · 从库按声明顺序轮询：没有权重、不做延迟探测、也不问哪颗活着。
+//    · 没有"库里现有哪些库、哪些片"的反查口：在册清单读得出（上面那句 ClusterNames），
+//      库里的现状读不出 —— 所以建片仍然要业务给范围，分库仍然要启动期给全清单。
 Console.WriteLine();
 Console.WriteLine("═══ 示例完成 ═══");
 
@@ -756,4 +924,30 @@ Console.WriteLine("═══ 示例完成 ═══");
 //     builder.SchemaSync = SchemaSyncPolicy.Execute;
 // });
 //
-// 每个请求的 Scoped FastSqlOrm 会调一次工厂，按当前租户拿到不同的连接串。
+// 每个请求的 Scoped FastSqlOrm 会调一次工厂，按当前租户拿到不同的主库串。
+//
+// ── 附注：那一颗工厂与 Replicas / Clusters 不同时在场 ────────────────────
+//
+// builder.Replicas = ["…"]; builder.Clusters = [new ClusterConfig("report", "…")];
+//
+// 与按请求解析的那颗工厂同时给出时，注册期就抛（不是运行到某一句才发现）：从库与具名集群是<em>启动期常量</em>，
+// 而那颗工厂每个请求换一个串。要多租户各配一座从库，就为每一座租户另建一颗 orm，而不是在这一格里塞工厂。
+//
+// 上面 §13 用的是直给形状（new FastSqlOrm(new FastSqlOrmOptions { Replicas = …, Clusters = … })），
+// 与 DI 那两格是同一份输入：AddFastSqlOrm 的 builder 上就是这两颗公开属性。
+
+static bool HasTable(string file, string table)
+{
+    // 问库而不是问被测的那条路由：这一格的裁判要是"路由说它落在 report"，那它说什么都是绿。
+    using var connection = new SqliteConnection($"Data Source={file}");
+
+    connection.Open();
+
+    using var command = connection.CreateCommand();
+    command.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = $name";
+    command.Parameters.AddWithValue("$name", table);
+
+    return Convert.ToInt32(command.ExecuteScalar()) > 0;
+}
+
+static string Head(string text, int take = 64) => text.Length <= take ? text : text[..take] + "…";

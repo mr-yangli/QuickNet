@@ -852,7 +852,14 @@ sealed class InsertEngine<T> : IInsert<T> where T : class
         return length;
     }
 
-    ExecutionTag Tag() => new("insert", [Prepare().Contract.Table.Name]);
+    /// <summary>集群从契约的表位算（§16.4）：写侧永远是主库那一格，所以这里只带名字，不带角色 ——
+    /// 那个结论由 <c>AdoExecutor.RentAsync</c> 一处下，两处各下一遍就会漂移。</summary>
+    ExecutionTag Tag()
+    {
+        var table = Prepare().Contract.Table;
+
+        return new ExecutionTag("insert", [table.Name], DataSourceRouting.ClusterOf(table));
+    }
 
     /// <summary>取值段的产物。<see cref="Cells"/> 已经是 <c>AuditValue</c> 之后的值，
     /// 所以三个出口共用它 = 同一份数据、几种文本。</summary>

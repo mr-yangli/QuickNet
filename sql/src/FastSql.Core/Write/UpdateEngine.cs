@@ -286,8 +286,14 @@ sealed class UpdateEngine<T> : IUpdate<T> where T : class
     }
 
     /// <summary>日志与 AOP 上的表名给<em>物理片</em>而不是模板：一次 <c>UpdateTable</c> 只打一张片，
-    /// 而看日志的人要的是"改了哪张表"。</summary>
-    ExecutionTag Tag() => new("update", [Target().Name]);
+    /// 而看日志的人要的是"改了哪张表"。集群也从同一张片上读（分片的 <c>Source</c> 继承模板，
+    /// 所以"分库 + 分表"叠在一起时这一句说的是那座库里的那张片，§16.4 两档共用一条链）。</summary>
+    ExecutionTag Tag()
+    {
+        var table = Target();
+
+        return new ExecutionTag("update", [table.Name], DataSourceRouting.ClusterOf(table));
+    }
 
     static int IdentifierChars(UpdateStatement ast)
         => ast.Table.Table.Name.Length + ast.Table.Alias.Length * 3 + ast.Sets.Sum(s => s.Column.ColumnName.Length) + 128;
@@ -432,8 +438,13 @@ sealed class DeleteEngine<T> : IDelete<T> where T : class
     Scope ScopeOf(LambdaExpression lambda)
         => Scope.Create(new QueryModel { Tables = [_table], Plan = new EntityProjection(0) }, lambda);
 
-    /// <summary>与 UPDATE 同一条口径：日志与 AOP 上给<em>物理片</em>的名字，一次只打一张片。</summary>
-    ExecutionTag Tag() => new("delete", [Target().Name]);
+    /// <summary>与 UPDATE 同一条口径：日志与 AOP 上给<em>物理片</em>的名字，一次只打一张片，集群也从同一张片读。</summary>
+    ExecutionTag Tag()
+    {
+        var table = Target();
+
+        return new ExecutionTag("delete", [table.Name], DataSourceRouting.ClusterOf(table));
+    }
 }
 
 /// <summary>两条链共用的那句拒绝。<b>构建期硬拦</b>：没有 WHERE 的 UPDATE/DELETE 在语句还没生成时就抛，

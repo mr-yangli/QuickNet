@@ -15,6 +15,10 @@ public sealed class QueryCompiler(IDbProvider provider)
 
     public SelectStatement Compile(QueryModel model)
     {
+        // 一座集群一句 SQL：这一道门在分表那道门之前，因为"跨库的连接"要拒的是整句，
+        // 而分片剪枝只改根表位的名字——两道的判据不一样，先判那个更根本的。
+        EnsureSingleCluster(model);
+
         // 分表实体在"没选片"与"选了多片"这两种情况下要发的是完全不同的句子，所以先过这一道门。
         // 派生表与覆盖源那两种来路不在这里插手：内层自己会回到这个门口，外层只剩一个表位。
         if (model.Root.Table.Split is not null && model.DerivedFrom is null && model.Source is null)
@@ -40,7 +44,7 @@ public sealed class QueryCompiler(IDbProvider provider)
         var allJoins = model.Joins;
         var columns = Columns(model);
 
-        if (model.Includes.Count > 0 && model.Plan is EntityProjection && !model.SplitQuery)
+        if (UsesIncludeJoins(model))
         {
             var includeJoins = new List<JoinClause>(model.Includes.Count);
             var includeColumns = new List<Projection>();
@@ -66,6 +70,81 @@ public sealed class QueryCompiler(IDbProvider provider)
             Distinct = model.Distinct,
         };
     }
+
+    /// <summary>Include 的 LEFT JOIN 这一版到底加不加（编译口与物化口的同一个判据）：
+    /// 只有"实体投影 + 没拆成第二条查询"才是真加进这一句 SQL。<c>SplitQuery</c> 那条路上导航是主查询之后
+    /// 另发的 SELECT，跨集群因此天然成立（那一颗的根表位是子实体自己，它自己去算自己那一座）。</summary>
+    static bool UsesIncludeJoins(QueryModel model)
+        => model.Includes.Count > 0 && model.Plan is EntityProjection && !model.SplitQuery;
+
+    /// <summary>一句 SELECT 只能说一座集群（§16.4）。判据只看<em>真的进这一句</em>的那些表位：
+    /// 根表位与显式 <c>JOIN</c> 的表位（都在 <see cref="QueryModel.Tables"/> 里）、以及在这一版落成
+    /// LEFT JOIN 的那些 Include 目标。<b>拒的不是"模型里出现了两座集群"，而是"这一句要两座集群才答得出"</b>——
+    /// 后者才是没有出路的那件事：一条跨库的 <c>JOIN</c> 在任何一家都不是能用一句 SQL 表达的东西，
+    /// 而"发两条、在内存里拼"要的是一套本家没有的东西（两侧的行序、分页单位、聚合归并都得重定）。
+    /// 规格 §16.4① 对"跨集群读"点的正是这一格。</summary>
+    /// <remarks>内层的派生表不在这里查：它是同一句 SQL 的一部分，而它自己会回到 <see cref="Compile"/>
+    /// 这个门口（内层自己的表位由内层那一趟判）。<see cref="QueryModel.Source"/> 那一段用户自己写的
+    /// 文本更无从判起——它连表名都不告诉库，判据在 <c>RawSql</c> 那一格已经说过"这里没有模型"。</remarks>
+    static void EnsureSingleCluster(QueryModel model)
+    {
+        string? cluster = null;
+        TableInfo? first = null;
+
+        foreach (var table in model.Tables)
+            if (Note(ref cluster, ref first, table.Table))
+                throw CrossCluster(first!, table.Table);
+
+        if (!UsesIncludeJoins(model))
+            return;
+
+        foreach (var include in FlattenIncludes(model.Includes))
+            if (Note(ref cluster, ref first, include.TargetTable.Table))
+                throw CrossCluster(first!, include.TargetTable.Table);
+    }
+
+    /// <summary>把一座集群记进那一只"已经说过谁"的格子：与已知的那座相同返回 false（继续），
+    /// 不同返回 true（调用方去造那句拒绝）。第一座总是 false。<b>名字写成 <c>Note</c> 而不是
+    /// <c>CheckCluster</c> 是为了让调用点读起来是"记一笔，记不下就拒"</b>，而不是"这里有一处校验"。</summary>
+    static bool Note(ref string? cluster, ref TableInfo? first, TableInfo table)
+    {
+        var named = DataSourceRouting.ClusterOf(table);
+
+        if (cluster is null)
+        {
+            cluster = named;
+            first = table;
+            return false;
+        }
+
+        return !string.Equals(cluster, named, StringComparison.Ordinal);
+    }
+
+    static IReadOnlyList<IncludeNode> FlattenIncludes(IReadOnlyList<IncludeNode> includes)
+    {
+        var flattened = new List<IncludeNode>();
+
+        void Walk(IReadOnlyList<IncludeNode> level)
+        {
+            foreach (var include in level)
+            {
+                flattened.Add(include);
+
+                if (include.Children.Count > 0)
+                    Walk(include.Children);
+            }
+        }
+
+        Walk(includes);
+        return flattened;
+    }
+
+    /// <summary>那句拒绝给两条走得通的路：<b>把两张表放进同一座集群</b>（声明在同一处，改一行），
+    /// 或<b>让它们各查各的、在内存里缝</b>（集合导航的 <c>IncludeMany</c> 那一族本来就是两条 SELECT，
+    /// 跨集群天然成立）。不给"库自己发两条再拼"的第三条路：那等于悄悄改了这条链的语义。</summary>
+    static FastSqlException CrossCluster(TableInfo first, TableInfo other)
+        => new($"这一句要同时读集群 {DataSourceRouting.ClusterOf(first)} 的 {first.Name} 与集群 {DataSourceRouting.ClusterOf(other)} 的 {other.Name}：跨集群的连接（JOIN / 落成 LEFT JOIN 的 Include）不是一句 SQL 能说的，规格 §16.4① 没有裁它该怎么拼。" +
+               "两条出路：把两个实体声明到同一座集群，或改用内存缝合的那一族（集合导航 Include 走第二条 SELECT，跨集群天然成立）。");
 
     /// <summary>分表实体的读侧形状（规格 §16.4）：一片一条 SELECT，串成 <c>UNION ALL</c> 挂在外层唯一的表位，
     /// 序与分页只长在外层。

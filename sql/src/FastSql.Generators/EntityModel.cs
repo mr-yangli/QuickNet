@@ -29,6 +29,11 @@ sealed class EntityModel
     /// 名字是模板还是实名，两侧都由运行期的同一份校验判（<c>EntityContractFactory</c>），
     /// 生成期不重复那一遍。</summary>
     public SplitModel? Split;
+
+    /// <summary>集群归属，存的是注解里那个<em>原样字符串</em>；null 只表示"没打 <c>[DataSource]</c>"。
+    /// 空串与空白不在这里判、也不 <c>Trim()</c>：那一格由运行期的 <c>EntityContractFactory</c> 收口
+    /// （两侧同一句 <c>DataSourceRouting.ValidateName</c>），与 <see cref="Split"/> 同一分工。</summary>
+    public string? Source;
 }
 
 /// <summary><c>[SplitTable]</c> 的编译期抄本：档名（<see cref="Kind"/> 是

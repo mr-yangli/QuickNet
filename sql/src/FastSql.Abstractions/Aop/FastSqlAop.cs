@@ -70,13 +70,20 @@ public sealed class FastSqlAop
     }
 }
 
+/// <summary>一句已执行语句的观察事件。<paramref name="Route"/> 是<b>必填</b>的一格：发射点只有
+/// <c>AdoExecutor.Succeeded</c> 一处，而它手上一定有那次借用的路由结论，所以"订阅方看不见这句走了哪条连接"
+/// 在这一版是结构上不可能的事，不是还没做。</summary>
+/// <param name="Route">这句落在哪座集群、哪个角色、为什么（§16.4）。读写分离与分库最难验收的部分正是
+/// "这一句到底走了哪条连接、按哪一档走的"，而翻库比读这一格贵得多。注意它是<em>结论</em>不是<em>意图</em>：
+/// <c>FromReplica()</c> 在没配从库的集群上是当场拒而不是静默落主库，所以订阅方看见的理由就是那句语句实际走的路。</param>
 public sealed record CommandLogEvent(
     Sql.DialectSql Sql,
     string OperationKind,
     IReadOnlyList<string> TableNames,
     long ElapsedMilliseconds,
     int AffectedRows,
-    int? FirstRowSummary)
+    int? FirstRowSummary,
+    DataSourceRoute Route)
 {
     public Guid CommandId { get; init; } = Guid.NewGuid();
 }

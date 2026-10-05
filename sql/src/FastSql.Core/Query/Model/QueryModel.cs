@@ -65,6 +65,15 @@ public sealed record QueryModel
     /// 而是主查询之后单独发查询再内存缝合。不进规范文本：与跟不跟踪一样是执行策略而非查询形状。</summary>
     public bool SplitQuery { get; init; }
 
+    /// <summary>链上对<em>角色</em>的显式表态（§16.4 的读写分离）：<c>FromPrimary()</c> / <c>FromReplica()</c>
+    /// 落在这里，缺省 <see cref="ChainChoice.Auto"/> 才是"交给 <see cref="DataSourceRouting.Resolve"/> 判"。
+    /// <b>它不进规范文本，与 <see cref="SplitQuery"/> 同一条理由</b>：这一格改的是"这句发在哪条连接上"，
+    /// 一个字都不改 SQL —— 让它在模型文本里占一行，等于把"点过 <c>FromPrimary()</c> 的那条链的文本
+    /// 与没点的不同"变成 §13.2 那两句"两侧逐字节相等"的例外，而那两句要的正是文本只由查询形状决定。
+    /// 集群名<em>不</em>在这一格里：它不是链上的决定，而是每张表的声明（<see cref="TableInfo.Source"/>），
+    /// 由 <see cref="DataSourceRouting.ClusterOf"/> 从表位算出来。</summary>
+    public ChainChoice Role { get; init; } = ChainChoice.Auto;
+
     /// <summary>§5.12 的归约规则：聚合语义不含序，所以 Count/Sum/Any 要把 ORDER BY 剥掉；
     /// 但带 <c>Skip/Take</c> 的形态必须保留（<c>OFFSET</c> 在没有 <c>ORDER BY</c> 时不保证行序，T-SQL 那一族还直接报错）。
     /// 剥不剥由模型决定，不由方言决定。</summary>

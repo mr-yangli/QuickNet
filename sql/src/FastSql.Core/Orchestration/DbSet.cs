@@ -160,7 +160,7 @@ public sealed class DbSet<T> : FastSqlQuery<T>, ITrackedSet<T> where T : class
         var children = await Engine.Orm.Ado.QueryAsync(
             sql,
             Materializer.EntityRows<object>(targetRead, targetContract),
-            new ExecutionTag("load-ref", [targetContract.Table.Name]),
+            new ExecutionTag("load-ref", [targetContract.Table.Name], DataSourceRouting.ClusterOf(targetContract.Table)),
             null,
             ct).ConfigureAwait(false);
 
@@ -255,7 +255,7 @@ public sealed class DbSet<T> : FastSqlQuery<T>, ITrackedSet<T> where T : class
         var children = await Engine.Orm.Ado.QueryAsync(
             sql,
             Materializer.EntityRows<object>(childRead, childContract),
-            new ExecutionTag("load-coll", [childContract.Table.Name]),
+            new ExecutionTag("load-coll", [childContract.Table.Name], DataSourceRouting.ClusterOf(childContract.Table)),
             null,
             ct).ConfigureAwait(false);
 

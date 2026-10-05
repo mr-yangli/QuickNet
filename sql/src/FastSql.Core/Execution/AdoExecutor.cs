@@ -5,50 +5,90 @@ using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using System.Text;
 using FastSql.Aop;
+using FastSql.Metadata;
 using FastSql.Providers;
 using FastSql.Sql;
 using FastSql.Transactions;
 
 namespace FastSql.Execution;
 
-/// <summary>一次执行的标签：操作名 + 涉及的表，只喂观察类钩子与日志（§10.1）。
+/// <summary>一次执行的标签：操作名 + 涉及的表 + 这条语句要落在哪座集群、链上有没有点名主/从，
+/// 只喂观察类钩子、日志与路由（§10.1、§16.4）。
 /// 由查询对象算一次并随对象复用，不在每行上重算。</summary>
-public sealed record ExecutionTag(string Operation, IReadOnlyList<string> Tables);
+/// <param name="Cluster">这条语句所属的集群名。缺省 <see cref="DataSourceRouting.DefaultCluster"/>，
+/// 于是今天所有不声明集群的调用方在这里逐字不变。</param>
+/// <param name="Choice">链上点的 <c>FromPrimary()</c> / <c>FromReplica()</c>；
+/// <see cref="ChainChoice.Auto"/> 才是"交给路由判"。</param>
+public sealed record ExecutionTag(string Operation, IReadOnlyList<string> Tables,
+    string Cluster = DataSourceRouting.DefaultCluster, ChainChoice Choice = ChainChoice.Auto);
 
 /// <summary>§3 的第 5 层：连接取还、参数落地、超时、观察类钩子。
 /// 这一层只接 <see cref="DialectSql"/>，既不认识查询模型也不生成文本 ——
 /// 所以「<c>ToSql()</c> 不连库」（§3）在这里是结构性的，不靠约定。</summary>
 public sealed partial class AdoExecutor
 {
-    readonly string _connectionString;
+    readonly ConnectionSources _sources;
 
     // ── 会话级连接复用（§8.4） ────────────────────────────────────────
     // DbContext 在 Set<T>() 时注册一只工厂（只是 delegate 引用，不建连接），
-    // AdoExecutor.OpenAsync 在真正需要连接时调工厂取一条，之后同一会话的所有语句复用这条连接。
+    // AdoExecutor.OpenAsync 在真正需要连接时调工厂取一条，之后同一会话的语句按 (集群, 角色) 各复用一条。
     // AsyncLocal 的传播语义与事务环境槽位一致：同一 async 执行流内的子调用都能看到，兄弟/父帧看不到。
+    //
+    // 槽位里放的是**可变对象**而不是连接本身：读写分离之后"会话的那一条连接"这句话变成了
+    // "会话的那一张表"，而逐条换 AsyncLocal 值在异步被调方里写不回父帧（FastSqlTransaction 的 remarks
+    // 记过同一条规则），所以这里靠"引用不变、内容在长"的那个对象把两侧粘住。
 
-    static readonly AsyncLocal<DbConnection?> _sessionConnection = new();
-    static readonly AsyncLocal<Func<DbConnection>?> _sessionConnectionFactory = new();
+    static readonly AsyncLocal<SessionConnections?> _sessionConnections = new();
+    static readonly AsyncLocal<Func<string, ConnectionRole, DbConnection>?> _sessionConnectionFactory = new();
 
-    internal static void SetSessionFactory(Func<DbConnection> factory) => _sessionConnectionFactory.Value = factory;
+    /// <summary>"同一条流上这座集群写过"的戳子。写它的必须是同步帧（<see cref="InstallFlowWrites"/>），
+    /// 异步的写语句只<em>改</em>那个对象、不<em>换</em>槽位。</summary>
+    static readonly AsyncLocal<FlowWrites?> _flowWrites = new();
+
+    internal static void SetSessionFactory(Func<string, ConnectionRole, DbConnection> factory) => _sessionConnectionFactory.Value = factory;
 
     internal static void ClearSessionFactory() => _sessionConnectionFactory.Value = null;
 
-    internal static void BindSessionConnection(DbConnection connection) => _sessionConnection.Value = connection;
+    internal static void BindSessionConnection(string cluster, ConnectionRole role, DbConnection connection)
+        => (_sessionConnections.Value ??= new SessionConnections()).Set(cluster, role, connection);
 
-    internal static void UnbindSessionConnection(DbConnection connection)
+    internal static void UnbindSessionConnection(DbConnection connection) => _sessionConnections.Value?.Remove(connection);
+
+    /// <summary>在<b>调用方的同步帧</b>里挂上这流的写后读戳子，返回一个"关掉它"的把手（会话释放用）。
+    /// 已经挂着就复用那一枚 —— 两只 DbContext 嵌套时共用同一份"写过哪些集群"的账，
+    /// 因为要防的那件事（读完自己刚写的旧值）跨会话也一样成立。</summary>
+    internal static IDisposable InstallFlowWrites()
     {
-        if (ReferenceEquals(_sessionConnection.Value, connection))
-            _sessionConnection.Value = null;
+        var ownsSlot = _flowWrites.Value is null;
+
+        if (ownsSlot)
+            _flowWrites.Value = new FlowWrites();
+
+        return new FlowWritesHandle(ownsSlot);
     }
 
-    public AdoExecutor(IDbProvider provider, string connectionString, FastSqlAop aop, int commandTimeoutSeconds)
+    /// <summary>本条流上这座集群是否写过。戳子不在位即 false（链式侧不显式开帧时就是这个默认，
+    /// 于是那条路上"写后读"不生效，而它生效的地方是会话与显式开了帧的流）。</summary>
+    internal static bool FlowWroteCluster(string cluster) => _flowWrites.Value?.Contains(cluster) == true;
+
+    internal static void MarkFlowWrite(string cluster) => _flowWrites.Value?.Mark(cluster);
+
+    sealed class FlowWritesHandle(bool ownsSlot) : IDisposable
+    {
+        public void Dispose()
+        {
+            if (ownsSlot)
+                _flowWrites.Value = null;
+        }
+    }
+
+    public AdoExecutor(IDbProvider provider, ConnectionSources sources, FastSqlAop aop, int commandTimeoutSeconds)
     {
         ArgumentNullException.ThrowIfNull(provider);
         ArgumentNullException.ThrowIfNull(aop);
 
         Provider = provider;
-        _connectionString = connectionString;
+        _sources = sources;
         Aop = aop;
         CommandTimeoutSeconds = commandTimeoutSeconds;
     }
@@ -67,7 +107,7 @@ public sealed partial class AdoExecutor
 
         var started = Stopwatch.GetTimestamp();
 
-        await using var session = await OpenAsync(sql, ct).ConfigureAwait(false);
+        await using var session = await OpenAsync(sql, tag, ct).ConfigureAwait(false);
         await using var reader = await session.Command.ExecuteReaderAsync(ct).ConfigureAwait(false);
 
         try
@@ -91,7 +131,7 @@ public sealed partial class AdoExecutor
                     list.Add(map(reader));
             }
 
-            Succeeded(sql, tag, started, list.Count);
+            Succeeded(sql, tag, started, list.Count, session.Route);
             return list;
         }
         catch (Exception ex)
@@ -107,19 +147,19 @@ public sealed partial class AdoExecutor
 
         var started = Stopwatch.GetTimestamp();
 
-        await using var session = await OpenAsync(sql, ct).ConfigureAwait(false);
+        await using var session = await OpenAsync(sql, tag, ct).ConfigureAwait(false);
         await using var reader = await session.Command.ExecuteReaderAsync(ct).ConfigureAwait(false);
 
         try
         {
             if (!await reader.ReadAsync(ct).ConfigureAwait(false))
             {
-                Succeeded(sql, tag, started, 0);
+                Succeeded(sql, tag, started, 0, session.Route);
                 return default;
             }
 
             var value = map(reader);
-            Succeeded(sql, tag, started, 1);
+            Succeeded(sql, tag, started, 1, session.Route);
 
             return value;
         }
@@ -138,7 +178,7 @@ public sealed partial class AdoExecutor
         var started = Stopwatch.GetTimestamp();
         var rows = 0;
 
-        await using var session = await OpenAsync(sql, ct).ConfigureAwait(false);
+        await using var session = await OpenAsync(sql, tag, ct).ConfigureAwait(false);
         await using var reader = await session.Command.ExecuteReaderAsync(ct).ConfigureAwait(false);
 
         try
@@ -152,7 +192,7 @@ public sealed partial class AdoExecutor
         finally
         {
             // 提前 break 不算错误，但行数必须是"实际读到的行数"，不能报成完整结果集。
-            Succeeded(sql, tag, started, rows);
+            Succeeded(sql, tag, started, rows, session.Route);
         }
     }
 
@@ -165,13 +205,16 @@ public sealed partial class AdoExecutor
 
         var started = Stopwatch.GetTimestamp();
 
-        await using var session = await OpenAsync(sql, ct).ConfigureAwait(false);
+        await using var session = await OpenAsync(sql, tag, RouteIntent.Write, ct).ConfigureAwait(false);
 
         try
         {
             var rows = await session.Command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
 
-            Succeeded(sql, tag, started, rows);
+            // 写过就记账：这条流上这座集群之后的读一律落主库（复制延迟测不到，所以这一档只肯保守）。
+            MarkFlowWrite(session.Route.Cluster);
+
+            Succeeded(sql, tag, started, rows, session.Route);
             return rows;
         }
         catch (Exception ex)
@@ -195,7 +238,7 @@ public sealed partial class AdoExecutor
 
         var started = Stopwatch.GetTimestamp();
 
-        await using var session = await OpenAsync(sql, ct).ConfigureAwait(false);
+        await using var session = await OpenAsync(sql, tag, RouteIntent.Write, ct).ConfigureAwait(false);
         await using var reader = await session.Command.ExecuteReaderAsync(ct).ConfigureAwait(false);
 
         try
@@ -213,7 +256,9 @@ public sealed partial class AdoExecutor
                 rows++;
             }
 
-            Succeeded(sql, tag, started, rows);
+            MarkFlowWrite(session.Route.Cluster);
+
+            Succeeded(sql, tag, started, rows, session.Route);
             return rows;
         }
         catch (Exception ex)
@@ -256,7 +301,7 @@ public sealed partial class AdoExecutor
 
         var started = Stopwatch.GetTimestamp();
 
-        await using var rented = await RentAsync(ct).ConfigureAwait(false);
+        await using var rented = await RentAsync(tag, RouteIntent.Write, ct).ConfigureAwait(false);
 
         try
         {
@@ -264,7 +309,10 @@ public sealed partial class AdoExecutor
                 new BulkConnection(rented.Connection, rented.Transaction, CommandTimeoutSeconds), request, ct)
                 .ConfigureAwait(false);
 
-            Succeeded(descriptor, tag, started, rows);
+            // 装载通道是一片/一批一次递交，但它同样是写：账要记，否则这座集群之后的读会落到还没装完的从库上。
+            MarkFlowWrite(rented.Route.Cluster);
+
+            Succeeded(descriptor, tag, started, rows, rented.Route);
             return rows;
         }
         catch (Exception ex)
@@ -294,7 +342,17 @@ public sealed partial class AdoExecutor
     /// <para><b>传播</b>（v0.38）：<paramref name="propagation"/> 为 <see cref="TransactionPropagation.RequiresNew"/>
     /// 时挂起当前环境事务并新开一条独立事务，结束后恢复被挂起的那条。</para></summary>
     public FastSqlTransaction BeginTransaction(IsolationLevel level, TransactionPropagation propagation = TransactionPropagation.Requires)
+        => BeginTransaction(DataSourceRouting.DefaultCluster, level, propagation);
+
+    /// <summary>钉住一座集群开事务（§16.4）。<b>事务从此有了归属</b>：这只事务里的每一条语句都要落在
+    /// 同一座集群的<em>主库</em>那条连接上，别座集群的语句<em>当场拒</em>（判据在
+    /// <see cref="RentAsync(ExecutionTag, RouteIntent, CancellationToken)"/> 那一支，两处共用一条）。
+    /// 跨集群的提交协议（两阶段、XA、或按 SAVEPOINT 拼一场"看着像一场"的事务）规格没裁，
+    /// 所以这里不给它一个能表达出来的形状。</summary>
+    public FastSqlTransaction BeginTransaction(string cluster, IsolationLevel level, TransactionPropagation propagation = TransactionPropagation.Requires)
     {
+        ArgumentNullException.ThrowIfNull(cluster);
+
         var ambient = FastSqlTransaction.Ambient;
 
         // Requires：外层事务在位时，创建保存点而不是新开事务。
@@ -305,6 +363,9 @@ public sealed partial class AdoExecutor
                 throw new FastSqlException(
                     $"当前执行流上已经有一条属于另一个 orm 实例的环境事务：不能把{Provider.Kind}的语句塞进另一家库的事务里。" +
                     "如果要同时操作两个库，请在不同的执行流（不同的 async 方法或 Task.Run）里分别开事务。");
+
+            if (!string.Equals(ambient.Cluster, cluster, StringComparison.Ordinal))
+                throw new FastSqlException($"当前环境事务钉在集群 {ambient.Cluster} 上，又要为集群 {cluster} 开事务：同一座集群里嵌套才是保存点，跨集群的嵌套不是一场事务。请按集群分别开事务、各自提交。");
 
             var savepointName = $"fastsql_sp_{ambient._nextSavepointId++}";
 
@@ -339,26 +400,30 @@ public sealed partial class AdoExecutor
         if (!connectors.TryEnsureLoaded(out var failure))
             throw new DriverNotAvailableException(Provider.Kind.ToString().ToLowerInvariant(), failure);
 
-        // 会话级连接复用（§8.4）：DbContext 绑的连接在位时直接用它开事务，不再另取一条。
-        // 工厂在位但连接还没建时，先调工厂取连接再开事务。
-        // 事务结束后连接不归池——它还在 AsyncLocal 里，后续语句继续复用。
-        var sessionConn = _sessionConnection.Value;
+        // 会话级连接复用（§8.4）：DbContext 在 (这座集群, 主库) 那一格已有连接时直接用它开事务，不再另取一条。
+        // 事务钉的是主库那一格 —— 从库那一格即使在位也不参与（写不进从库，而"事务里的读"必须看见自己的写）。
+        // 工厂在位但那一格还没建时，先调工厂取连接再开事务。
+        // 事务结束后连接不归池——它还在会话的格子里，后续语句继续复用。
+        DbConnection? sessionConn = null;
+        var sessions = _sessionConnections.Value;
 
-        if (sessionConn is null && _sessionConnectionFactory.Value is { } factory)
+        if (sessions is not null && sessions.TryGet(cluster, ConnectionRole.Primary, out var bound))
+            sessionConn = bound;
+        else if (_sessionConnectionFactory.Value is { } factory)
         {
-            sessionConn = factory();
-            _sessionConnection.Value = sessionConn;
+            sessionConn = factory(cluster, ConnectionRole.Primary);
+            BindSessionConnection(cluster, ConnectionRole.Primary, sessionConn);
         }
 
         var ownsConnection = sessionConn is null;
-        var connection = sessionConn ?? connectors.CreateConnection(_connectionString);
+        var connection = sessionConn ?? connectors.CreateConnection(_sources.PrimaryConnectionString(cluster));
 
         try
         {
             if (ownsConnection)
                 connection.Open();
 
-            var transaction = new FastSqlTransaction(this, connection, connection.BeginTransaction(level), ownsConnection, suspended);
+            var transaction = new FastSqlTransaction(this, cluster, connection, connection.BeginTransaction(level), ownsConnection, suspended);
 
             transaction.Install();
 
@@ -410,9 +475,11 @@ public sealed partial class AdoExecutor
         command.ExecuteNonQuery();
     }
 
-    async ValueTask<Session> OpenAsync(DialectSql sql, CancellationToken ct)
+    ValueTask<Session> OpenAsync(DialectSql sql, ExecutionTag tag, CancellationToken ct) => OpenAsync(sql, tag, RouteIntent.Read, ct);
+
+    async ValueTask<Session> OpenAsync(DialectSql sql, ExecutionTag tag, RouteIntent intent, CancellationToken ct)
     {
-        var rented = await RentAsync(ct).ConfigureAwait(false);
+        var rented = await RentAsync(tag, intent, ct).ConfigureAwait(false);
 
         // 借来的那一条不在这里 dispose：所有权随 Session 走，命令与连接同一个借用周期。
         return new Session(rented, Prepare(rented.Connection, rented.Transaction, sql));
@@ -422,26 +489,47 @@ public sealed partial class AdoExecutor
     /// 抽出来只多了一颗 <see cref="RentedConnection"/>，四支的判据与副作用一个字节都没动 —— 抽它的理由是装载通道
     /// 那一条路要的是<em>连接本身</em>而不是命令（§12.1 第三行：那一家的高速入口不接 <c>DbCommand</c>），
     /// 而"环境事务在位时必须落在被事务独占的那条连接上"这句话（§6 (3)）在两条路上必须是同一份实现，
-    /// 不许各写一遍再各自漂移。</summary>
+    /// 不许各写一遍再各自漂移。
+    ///
+    /// <para><b>读写分离与分库都长在这一颗上，因为它是全仓库唯一决定"用哪条连接"的地方</b>：四支来路逐支问
+    /// 同一句"这一座集群、这一个角色占着的是哪条连接"。集群与角色由 <see cref="DataSourceRouting"/> 判一次
+    /// （顺序即裁决，见 <see cref="DataSourceRouting.Resolve"/>），结论随借用一起交给
+    /// <see cref="RentedConnection.Route"/>，好让观察钩子那一路读得出"这句走了哪条"。环境事务那一支多一条
+    /// 硬闸：事务钉着一座集群，要另一座集群的语句<em>当场拒</em> —— 两条连接各开一个事务不是一场事务，
+    /// 而"补一条 SAVEPOINT 拼起来"那一格规格没裁（§16.4①）。</para></summary>
     /// <remarks><b>返回值的连接归调用方 dispose</b>（<see cref="RentedConnection.DisposeAsync"/>，只在
     /// "这一支是我们自己新建的"时才真的还）。两条路各自怎么交接连接写在那两条路上：<see cref="OpenAsync"/>
     /// 把所有权转给 <see cref="Session"/>，<see cref="CopyAsync"/> 自己 <c>await using</c>。</remarks>
-    async ValueTask<RentedConnection> RentAsync(CancellationToken ct)
+    async ValueTask<RentedConnection> RentAsync(ExecutionTag tag, RouteIntent intent, CancellationToken ct)
     {
+        var cluster = tag.Cluster;
+        var ambient = FastSqlTransaction.For(this);
+        var route = DataSourceRouting.Resolve(cluster, intent, tag.Choice, ambient is not null,
+            FlowWroteCluster(cluster), _sources.ReplicaCount(cluster));
+
         // 环境事务在位时不取新连接：语句必须走那条被事务独占的连接，否则"自动 enlist"是假的（§6 (3)）。
-        if (FastSqlTransaction.For(this) is { } ambient)
-            return new RentedConnection(ambient.Connection, ambient.DbTransaction, ownsConnection: false);
+        if (ambient is not null)
+        {
+            if (!string.Equals(ambient.Cluster, cluster, StringComparison.Ordinal))
+                throw new FastSqlException($"当前环境事务钉在集群 {ambient.Cluster} 上，而这条 {tag.Operation} 语句要落在集群 {cluster}：一场事务只有一条连接。要分两座库写就分别开事务、各自提交。");
+
+            return new RentedConnection(ambient.Connection, ambient.DbTransaction, ownsConnection: false, route);
+        }
 
         // 会话级连接复用（§8.4）：DbContext 绑的连接在位时直接走它，不再每句取还。
-        if (_sessionConnection.Value is { } sessionConn)
-            return new RentedConnection(sessionConn, transaction: null, ownsConnection: false);
+        // 键是 (集群, 角色)：会话因此可以持有两条连接，而"同一会话里读到刚写的那一份"由那把写后读
+        // 戳子保证（它把会话内的读送回主库那一条），不是靠"只留一条连接"留出来的。
+        if (_sessionConnections.Value?.TryGet(cluster, route.Role, out var sessionConn) == true)
+            return new RentedConnection(sessionConn, transaction: null, ownsConnection: false, route);
 
-        // 工厂在位但连接还没建——首次执行时调工厂取连接，之后复用。
+        // 工厂在位但这一格还没建——首次用到时调工厂取连接，之后同一会话复用那一条。
+        // 从库因此是"会话钉住一颗"而不是"每句换一颗"：一轮询落在会话上，会话内的两次读才互相看得见对方的顺序。
         if (_sessionConnectionFactory.Value is { } factory)
         {
-            var conn = factory();
-            _sessionConnection.Value = conn;
-            return new RentedConnection(conn, transaction: null, ownsConnection: false);
+            var conn = factory(cluster, route.Role);
+            BindSessionConnection(cluster, route.Role, conn);
+
+            return new RentedConnection(conn, transaction: null, ownsConnection: false, route);
         }
 
         var connectors = Provider.Connectors;
@@ -449,7 +537,7 @@ public sealed partial class AdoExecutor
         if (!connectors.TryEnsureLoaded(out var failure))
             throw new DriverNotAvailableException(Provider.Kind.ToString().ToLowerInvariant(), failure);
 
-        var connection = connectors.CreateConnection(_connectionString);
+        var connection = connectors.CreateConnection(_sources.ConnectionStringFor(cluster, route.Role));
 
         try
         {
@@ -461,7 +549,7 @@ public sealed partial class AdoExecutor
             throw;
         }
 
-        return new RentedConnection(connection, transaction: null, ownsConnection: true);
+        return new RentedConnection(connection, transaction: null, ownsConnection: true, route);
     }
 
     DbCommand Prepare(DbConnection connection, DbTransaction? transaction, DialectSql sql)
@@ -530,12 +618,12 @@ public sealed partial class AdoExecutor
         command.Parameters.Add(ado);
     }
 
-    void Succeeded(DialectSql sql, ExecutionTag tag, long started, int rows)
+    void Succeeded(DialectSql sql, ExecutionTag tag, long started, int rows, DataSourceRoute route)
     {
         var elapsed = Elapsed(started);
 
         if (Aop.Executed is { } executed)
-            Aop.Observe(() => executed(new CommandLogEvent(sql, tag.Operation, tag.Tables, elapsed, rows, FirstRowSummary: null)));
+            Aop.Observe(() => executed(new CommandLogEvent(sql, tag.Operation, tag.Tables, elapsed, rows, FirstRowSummary: null, route)));
 
         if (elapsed >= Aop.SlowQueryThresholdMilliseconds && Aop.SlowQuery is { } slow)
             Aop.Observe(() => slow(new SlowCommandEvent(sql, elapsed, Aop.SlowQueryThresholdMilliseconds)));
@@ -568,11 +656,14 @@ public sealed partial class AdoExecutor
 
     /// <remarks>参数只能进属性初始化器、不能在方法体里再引用一次：主构造函数参数一旦"既被捕获进状态、
     /// 又被用来初始化成员"就是 CS9124，所以 <see cref="DisposeAsync"/> 读的是属性而不是参数。</remarks>
-    sealed class RentedConnection(DbConnection connection, DbTransaction? transaction, bool ownsConnection) : IAsyncDisposable
+    sealed class RentedConnection(DbConnection connection, DbTransaction? transaction, bool ownsConnection, DataSourceRoute route) : IAsyncDisposable
     {
         public DbConnection Connection { get; } = connection;
 
         public DbTransaction? Transaction { get; } = transaction;
+
+        /// <summary>这次借用是怎么决定用这条连接的（集群、角色、理由）。</summary>
+        public DataSourceRoute Route { get; } = route;
 
         public async ValueTask DisposeAsync()
         {
@@ -590,10 +681,68 @@ public sealed partial class AdoExecutor
     {
         public DbCommand Command { get; } = command;
 
+        /// <summary>这句落在哪座集群、哪个角色、为什么 —— 归借用它的那次取连接判出来，观察钩子读它。</summary>
+        public DataSourceRoute Route => rental.Route;
+
         public async ValueTask DisposeAsync()
         {
             await Command.DisposeAsync().ConfigureAwait(false);
             await rental.DisposeAsync().ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>一次会话持有的连接：<b>按 (集群, 角色) 一格一条</b>。
+    /// 它是会话级连接复用在读写分离之后唯一还成立的说法 —— 说"会话有一条连接"从这一版起不成立了，
+    /// 而"会话对同一格只有一条"仍然成立，事务、装载通道与写后读那一档都靠这一条。</summary>
+    internal sealed class SessionConnections
+    {
+        readonly Dictionary<(string, ConnectionRole), DbConnection> _bySlot = [];
+
+        public bool TryGet(string cluster, ConnectionRole role, out DbConnection connection)
+        {
+            if (_bySlot.TryGetValue((cluster, role), out var found))
+            {
+                connection = found;
+                return true;
+            }
+
+            connection = null!;
+            return false;
+        }
+
+        public void Set(string cluster, ConnectionRole role, DbConnection connection) => _bySlot[(cluster, role)] = connection;
+
+        /// <summary>按引用摘掉一格。会话释放时逐条还池，槽位里不留悬空的引用。</summary>
+        public void Remove(DbConnection connection)
+        {
+            foreach (var slot in _bySlot.Where(kv => ReferenceEquals(kv.Value, connection)).Select(kv => kv.Key).ToArray())
+                _bySlot.Remove(slot);
+        }
+
+        public IReadOnlyList<DbConnection> Connections => [.. _bySlot.Values];
+    }
+
+    /// <summary>"这条流上哪几座集群写过"的一本账。<b>槽位里放的是这本账而不是一个布尔</b>：
+    /// 异步被调方改不动父帧的槽位（<see cref="FastSqlTransaction"/> 的 remarks 记过同一条规则），
+    /// 但父帧与子帧<em>共用同一枚引用</em>，所以写侧在深处 <see cref="Mark"/> 一笔、外层的下一次读看得见。
+    ///
+    /// <para>账只增不减：一座集群被写过，这条流上它之后的读一律落主库。复制延迟测不到（没有 SPI 槽位），
+    /// 所以这里唯一的保守方向是"写过就当从库还旧着"。</para></summary>
+    internal sealed class FlowWrites
+    {
+        readonly List<string> _clusters = [];
+
+        public bool Contains(string cluster)
+        {
+            lock (_clusters)
+                return _clusters.Contains(cluster, StringComparer.Ordinal);
+        }
+
+        public void Mark(string cluster)
+        {
+            lock (_clusters)
+                if (!_clusters.Contains(cluster, StringComparer.Ordinal))
+                    _clusters.Add(cluster);
         }
     }
 }

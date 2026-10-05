@@ -81,6 +81,21 @@ public sealed class SplitTableAttribute(SplitKind kind, string field) : Attribut
     public int Buckets { get; set; }
 }
 
+/// <summary>把这一张逻辑表声明成"住在某座具名集群里"（读写分离与分库共用这一颗名字，
+/// 规格 §16.4①）。<b>注解里只有集群名、没有连接串</b>：连接串归 <c>FastSqlOrmOptions</c> 那三颗
+/// （<c>ConnectionString</c> 是缺省集群的主库、<c>Replicas</c> 是它的从库、<c>Clusters</c> 是其余具名集群），
+/// 所以这一颗注解可以进版本库而那条串不能。</summary>
+/// <remarks>与 <see cref="SplitTableAttribute"/> 同一分工：不落 Fluent，因为"两条路径算出两种归属"
+/// 在分库上是把语句发到另一座库里去，比表名算错更贵。<b>没写这颗注解的实体全都在 <c>main</c></b>，
+/// 而 <c>main</c> 就是那条唯一的连接串 —— 今天的全部调用方行为一字不变。</remarks>
+/// <param name="cluster">集群名。空或全空白当场抛（启动期）。显式写 <c>main</c> 与不写这一颗同义，
+/// 而 <c>Clusters</c> 那一列里不许再出现 <c>main</c> —— 那一座的名字由 <c>ConnectionString</c> 占着。</param>
+[AttributeUsage(AttributeTargets.Class)]
+public sealed class DataSourceAttribute(string cluster) : Attribute
+{
+    public string Cluster { get; } = cluster;
+}
+
 /// <summary>乐观并发的比较列（§8.2、§10.1 的乐观锁那一档）。DataAnnotations 里没有等价的注解
 /// （<c>KeyAttribute</c> 是身份、<c>TimestampAttribute</c> 在 EF Core 的程序集里），所以这一格落在自研属性层。</summary>
 /// <remarks><b>它的语义是「只比较、不书写」，四件事同时成立</b>：这一列不进 <c>UPDATE</c> 的 <c>SET</c>、
