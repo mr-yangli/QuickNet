@@ -121,8 +121,33 @@ public static class EntityContractFactory
         if (!Array.Exists(resolved, static c => c.IsPrimary))
             ApplyKeyConvention(resolved, clrType.Name);
 
+        // 分表这一格要等列算完才判得动（"分片键指向了一颗没映射的属性"要拿列清单比），
+        // 而它一改就得改 table 本身，所以放在这里、在契约成形之前。
+        if (table.Split is { } split)
+            table = table with { Split = CompleteSplit(split, resolved, table, clrType.Name) };
+
         return new EntityContract(clrType, table, resolved, MapIndexes(indexes, resolved, clrType.Name),
             MapRelationships(relationships, resolved));
+    }
+
+    /// <summary>分片声明 → 已换算的声明，顺手把四条启动期判据比一遍：分片键得是一列、
+    /// 表名模板得配得上那一档、哈希档得有桶、主键不许自增。
+    /// <b>自增那一条是硬的</b>（规格 §15.4 同一族）：跨片唯一由库自己给的话，两张表能各自发出
+    /// 同一个号，而"谁冲突"这件事要到合并统计时才看得见。</summary>
+    static SplitFacts CompleteSplit(SplitFacts split, ColumnContract[] columns, TableInfo table, string entityName)
+    {
+        var column = Array.Find(columns, c => string.Equals(c.MemberName, split.MemberName, StringComparison.Ordinal))
+            ?? throw new FastSqlException($"分表声明的分片键 {split.MemberName} 不是实体 {entityName} 的一列（可能被 [Column(IsIgnore)] 或 [NotMapped] 排除）");
+
+        SplitRouting.ValidateTemplate(split.Kind, table.Name);
+
+        if (split.Kind == SplitKind.Hash && split.Buckets < 2)
+            throw new FastSqlException($"分表声明了 {SplitKind.Hash} 档却只给 {split.Buckets} 个桶（实体 {entityName}），少于 2 个桶等于没分");
+
+        if (Array.Find(columns, c => c.IsPrimary && c.IsIdentity) is { } identity)
+            throw new FastSqlException($"分表实体 {entityName} 的主键 {identity.MemberName} 是自增列：跨片唯一性库给不了。要么由客户端生成主键（[Column(IsIdentity=TriState.No)]），要么这一张表不分表");
+
+        return split with { ColumnName = column.ColumnName };
     }
 
     static ColumnContract Complete(ColumnFacts facts, TableInfo table, ITypeMap types)

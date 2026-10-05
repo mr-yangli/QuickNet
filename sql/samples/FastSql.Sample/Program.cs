@@ -644,7 +644,106 @@ Console.WriteLine($"压到每块 20 行：{capped.RoundTrips} 次往返、每块
 Console.WriteLine($"库里读回 {await orm.Select<Order>().Where(o => o.Note == "bulk-layer").CountAsync()} 行 Note=bulk-layer");
 
 Console.WriteLine();
+
+// ── 12. 分表（SplitTables / CreateSplitTables / 一片一句写） ─────────────
+Console.WriteLine("═══ 12. 分表 ═══");
+Console.WriteLine();
+
+// ① 类型名不是表名：类上 [Table] 写的是一张<em>模板</em>，而模板不是一张能建的表。
+//    整库同步遇到它是"跳过并记名"，不是"照着名字建一张真的带花括号的表"。
+_ = orm.Select<AccessLog>();
+_ = orm.Select<TicketRow>();
+
+var splitSync = await orm.SyncStructureAsync();
+
+var template = orm.Schemas.Contract<AccessLog>().Table;
+
+Console.WriteLine($"模板名：{template.Name} ∶ 分片键 {template.Split!.MemberName}（{template.Split!.Kind}）");
+Console.WriteLine($"整库同步把这两张跳过了：{string.Join("、", splitSync.SkippedSplitTemplates)}（新建 {splitSync.CreatedTables.Count} 张）");
+
+// ② 建片要一个范围，而"该有哪几段"只有业务知道：日档实体上默认建全部就是凭空造几千张表。
+var shards = await orm.CreateSplitTablesAsync<AccessLog>(new DateTime(2026, 1, 1), new DateTime(2026, 3, 31));
+
+Console.WriteLine($"三个月的片：{string.Join("、", shards.Requested)}（本次新建 {shards.Created.Count} 张、已在 {shards.AlreadyThere.Count} 张）");
+Console.WriteLine($"  片上没有索引：{string.Join("、", shards.IndexesNotCreated)} 一条都没随片建（索引名在同一模式的 N 张片上会撞，规格 §16.4 已裁）");
+
+// 幂等：同一个范围再跑一次，一张都不建 —— 逐张先问存在再发 DDL，而不是撞一条"表已存在"。
+var again = await orm.CreateSplitTablesAsync<AccessLog>(new DateTime(2026, 1, 1), new DateTime(2026, 3, 31));
+
+Console.WriteLine($"  同一范围第二趟：新建 {again.Created.Count} 张、已在 {again.AlreadyThere.Count} 张");
+
+// ③ 写侧：一片一句。跨三月的六行不是"一条 INSERT 六个 VALUES"，是三句各两个 VALUES。
+var logs = new[]
+{
+    new AccessLog { Id = Guid.NewGuid(), Path = "/a", Status = 200, OccurredAt = new DateTime(2026, 1, 12, 9, 0, 0) },
+    new AccessLog { Id = Guid.NewGuid(), Path = "/b", Status = 500, OccurredAt = new DateTime(2026, 1, 28, 9, 0, 0) },
+    new AccessLog { Id = Guid.NewGuid(), Path = "/c", Status = 200, OccurredAt = new DateTime(2026, 2, 3, 9, 0, 0) },
+    new AccessLog { Id = Guid.NewGuid(), Path = "/d", Status = 404, OccurredAt = new DateTime(2026, 2, 20, 9, 0, 0) },
+    new AccessLog { Id = Guid.NewGuid(), Path = "/e", Status = 200, OccurredAt = new DateTime(2026, 3, 5, 9, 0, 0) },
+    new AccessLog { Id = Guid.NewGuid(), Path = "/f", Status = 503, OccurredAt = new DateTime(2026, 3, 31, 9, 0, 0) },
+};
+
+var insertPlan = orm.InsertRange(logs).Explain();
+var written = await orm.InsertRange(logs).ExecuteAffrowsAsync();
+
+Console.WriteLine($"六行 × 三个目标表：{written} 行受影响，{insertPlan.Chunks.Count} 句语句");
+
+foreach (var chunk in insertPlan.Chunks)
+    Console.WriteLine($"  → {chunk.Ast.Table.Table.Name}（{chunk.RowCount} 行，入参下标 {string.Join("、", chunk.RowOrdinals!)}）：{chunk.Sql.Text}");
+
+// ④ 读侧：选片范围就是"打哪几张表"。合并读是一句 UNION ALL，分页长在外层而不是每片里。
+Console.WriteLine($"全范围读的语句：{orm.Select<AccessLog>().SplitTables(new DateTime(2026, 1, 1), new DateTime(2026, 3, 31)).ToSql()}");
+
+var whole = await orm.Select<AccessLog>().SplitTables(new DateTime(2026, 1, 1), new DateTime(2026, 3, 31)).ToListAsync();
+
+Console.WriteLine($"  三张片合并读回 {whole.Count} 行");
+
+var february = await orm.Select<AccessLog>().SplitTables(new DateTime(2026, 2, 1), new DateTime(2026, 2, 28)).ToListAsync();
+
+Console.WriteLine($"剪枝到二月：{february.Count} 行 —— {string.Join("、", february.Select(o => o.Path))}（一月与三月的行不在这张表里，所以根本不会被问）");
+
+var page = await orm.Select<AccessLog>().SplitTables(new DateTime(2026, 1, 1), new DateTime(2026, 3, 31))
+    .OrderBy(o => o.OccurredAt).ToPagedAsync(1, 2, new PagedOptions(CountMethod.SkipTotal));
+
+Console.WriteLine($"跨片翻页第一页：{page.Items.Count} 行、Total={page.Total?.ToString() ?? "(不算总数)"}、HasNext={page.HasNext}");
+
+// ⑤ 跨片聚合是<em>明确拒绝</em>，不是静默按片分组再合并（那是另一件事，规格还没裁）。
+try
+{
+    await orm.Select<AccessLog>().SplitTables(new DateTime(2026, 1, 1), new DateTime(2026, 3, 31)).CountAsync();
+}
+catch (FastSqlException ex)
+{
+    Console.WriteLine($"  跨 3 片数总数被拒：{ex.Message[..Math.Min(48, ex.Message.Length)]}…");
+}
+
+// ⑥ 改与删必须钉住一片，而且钉法放在链首（SET 与 WHERE 的列引用是翻译时绑到目标表上的）。
+var pinned = orm.Update<AccessLog>().SplitTable(new DateTime(2026, 2, 9)).Set(o => o.Status, 299).Where(o => o.Status == 404);
+
+Console.WriteLine($"钉住二月那一片的改：{pinned.ToSql()}");
+Console.WriteLine($"  改到 {await pinned.ExecuteAffrowsAsync()} 行，二月那片现在读回 {string.Join("、", (await orm.Select<AccessLog>().SplitTables(new DateTime(2026, 2, 1), new DateTime(2026, 2, 28)).ToListAsync()).Select(o => o.Status))}");
+
+// ⑦ 哈希档：桶号是<em>算出来的</em>，所以写与读都必须走同一颗路由；整数键不经 GetHashCode()。
+var buckets = await orm.CreateSplitTablesAsync<TicketRow>([0, 1, 2, 3, 3]); // 重复桶号去掉：这一句要的是四张
+
+Console.WriteLine($"四个桶（第五个实参是重复的）：{string.Join("、", buckets.Requested)}");
+
+var tickets = Enumerable.Range(1, 8).Select(i => new TicketRow { Id = Guid.NewGuid(), TenantId = i, Title = $"T{i}" }).ToArray();
+var spread = orm.InsertRange(tickets).Explain();
+var spreadRows = await orm.InsertRange(tickets).ExecuteAffrowsAsync();
+
+Console.WriteLine($"八个租户 × 四个桶：{spread.Chunks.Count} 句语句、{spreadRows} 行受影响，各片行数 = {string.Join("、", spread.Chunks.Select(c => $"{c.Ast.Table.Table.Name}={c.RowCount}"))}");
+
+var inBucket1 = await orm.Select<TicketRow>().SplitTables(1).ToListAsync();
+
+Console.WriteLine($"  桶 1 里是租户 {string.Join("、", inBucket1.Select(t => t.TenantId))}（1 与 5 同桶，因为 5 mod 4 = 1）");
+
+foreach (var bucket in new[] { 0, 1, 2, 3 })
+    Console.WriteLine($"  逐桶读：SplitTables({bucket}) → {string.Join("、", (await orm.Select<TicketRow>().SplitTables(bucket).ToListAsync()).Select(t => t.TenantId))}");
+
+Console.WriteLine();
 Console.WriteLine("═══ 示例完成 ═══");
+
 
 // ── 附注：多租户每库一串的注册姿势 ──────────────────────────────────────
 //

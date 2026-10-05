@@ -267,6 +267,36 @@ sealed class QueryEngine
         return true;
     }
 
+    /// <summary>分表实体的<b>按时间范围选片</b>（§16.4）：起与止各下整到本档的周期，中间逐周期展开成一份片清单，
+    /// 落进 <see cref="QueryModel.Shards"/>。时间档就是"这段区间里可能有哪几张表"，所以剪枝不是优化而是定义 ——
+    /// 三月查二月那张表里没有的行，与"没查"不是一回事。
+    /// <b>说一次算一次，后一次覆盖前一次</b>：片清单是这一份模型的事实，叠加两份会得到第三种没人要的区间。
+    /// 单片不包 <c>UNION ALL</c> 外层（见 <c>QueryCompiler.CompileSplit</c>），所以"这个月"的句子与不分表时逐字同形。</summary>
+    public QueryEngine SplitTables(DateTime from, DateTime to)
+    {
+        var split = SplitOrThrow();
+
+        return Derive(Model with { Shards = SplitRouting.EnumerateTime(Model.Root.Table, split, from, to) });
+    }
+
+    /// <summary>分表实体的<b>按桶号选片</b>（§16.4 的哈希档）：给哪几个桶就读哪几张，顺序就是 <c>UNION ALL</c>
+    /// 的分支顺序，重复桶号去掉。<b>没有"全部桶"这一颗口</b>，理由与时间档同一句：桶数写在实体上，
+    /// 而"把全部桶 UNION 起来"在几百个桶上不是一句可执行的查询，给它一个顺手的写法就是给它一条通往线上的路。
+    /// 真要全量统计，就按桶分批或在库侧做（§16.4 已记名：跨片聚合本家不接）。</summary>
+    public QueryEngine SplitTables(params int[] buckets)
+    {
+        var split = SplitOrThrow();
+
+        return Derive(Model with { Shards = SplitRouting.EnumerateBuckets(Model.Root.Table, split, buckets) });
+    }
+
+    /// <summary>选片口只给分表实体用：在不分表的实体上调它，得到的不是"整张表"而是一个错——
+    /// 那句话会让人以为自己的实体分了片。判据取契约上那一格，不做二次缓存。</summary>
+    SplitFacts SplitOrThrow()
+        => Model.Root.Table.Split
+           ?? throw new FastSqlException(
+                $"实体 {Model.Root.Contract?.ClrType.Name} 没有声明分表（类上没有 [SplitTable]），没有片可选。");
+
     /// <summary>联表的落点。ON 的<b>最后一个</b>形参就是新表（§5.2 的 arity 递增），所以新表的 CLR 类型从它取，
     /// 不需要调用方再报一遍。形参名不参与解析，所以 <c>(o, i) =></c> 与 <c>(x, y) =></c> 产出同一个模型。</summary>
     public QueryEngine Join(JoinKind kind, LambdaExpression on)

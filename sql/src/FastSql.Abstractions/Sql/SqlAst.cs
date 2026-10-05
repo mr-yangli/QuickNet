@@ -23,6 +23,14 @@ public sealed record SourceSubquery(TableRef Ref, SelectStatement Query) : Table
 /// 一句 SELECT 的 FROM 位今天只承接一个源。</summary>
 public sealed record SourceDerived(TableRef Ref, SelectStatement Query) : TableSource(Ref);
 
+/// <summary>分表读侧的形状（§16.4）：<b>一片一条完整的 SELECT，用 <c>UNION ALL</c> 串起来，整串占一个表位</b>。
+/// 与 <see cref="SourceDerived"/> 的分别是内层的<em>份数</em>——那一份永远是一个，这一份按选片范围有 N 个。
+/// <see cref="Branches"/> 里每条都不许带 ORDER BY 与分页：那些只长在外层，否则
+/// 「取前 10 行」会变成「每片各取 10 行」，而两家的语法都执行得动（SqlSugar 的 <c>Clone()</c>
+/// 把 <c>Take/Skip/OrderBy</c> 原样复制进每一片，正是这一格的反面教材）。
+/// 别名沿用根表位那一个（<c>t0</c>），所以外层的谓词与选列不必重写。</summary>
+public sealed record SourceUnion(TableRef Ref, IReadOnlyList<SelectStatement> Branches) : TableSource(Ref);
+
 /// <summary>FROM 位换成一整段<b>用户自己写的</b> SELECT 文本（<c>WithSql</c>，规格 §11 的表源那一格）。
 /// 与 <see cref="RawExpression"/> 同一前提：文本一颗不动，只在外面包一层括号再挂别名，
 /// 因为那一列叫什么、按什么顺序，只有 SQL 作者知道。<see cref="Parameters"/> 是已经按本家前缀造好名的那一串，

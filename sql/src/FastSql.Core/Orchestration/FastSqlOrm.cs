@@ -371,6 +371,85 @@ public sealed class FastSqlOrm
     public SchemaSyncResult SyncStructure()
         => SyncStructureAsync().GetAwaiter().GetResult();
 
+    // ── 分表建片（§16.4） ─────────────────────────────────────────────
+
+    /// <summary>按时间范围给分表实体建缺失的那几张片（§16.4）。<b>范围是必填的</b>：<see cref="SyncStructureAsync"/>
+    /// 那一格遇到分表实体是<em>跳过并记名</em>的，因为"现存的分片该有哪几段"只有业务知道，而默认建全部
+    /// 在一颗日档实体上是凭空造几千张表。起与止各自下整到本档的周期，中间逐周期展开。
+    /// 逐张先问存在再发 DDL，所以同一个范围跑两次第二次一张也不建。</summary>
+    /// <remarks>走的是 <see cref="SchemaSyncPolicy.Execute"/> 那一道闸门（非 Development 环境要
+    /// <see cref="FastSqlOrmOptions.ForceSchemaSync"/>），理由与整库同步同一句：建表是 DDL。
+    /// <b>要的是模板上声明的那一档，档与范围不匹配（哈希实体传日期）当场抛</b>，不会退成"建一张实名表"。</remarks>
+    public async Task<SplitTablesResult> CreateSplitTablesAsync<T>(DateTime from, DateTime to, CancellationToken ct = default)
+        where T : class
+    {
+        GuardSchemaSyncAllowed();
+
+        var (template, shards) = SplitShards<T>(from, to);
+        var syncer = new Core.Schema.SchemaSyncer(Provider, Schemas, Options.ConnectionString);
+
+        return await syncer.CreateShardsAsync(template, shards, ct).ConfigureAwait(false);
+    }
+
+    /// <summary><see cref="CreateSplitTablesAsync{T}(DateTime,DateTime,CancellationToken)"/> 的同步壳（启动期建片用）。</summary>
+    public SplitTablesResult CreateSplitTables<T>(DateTime from, DateTime to) where T : class
+        => CreateSplitTablesAsync<T>(from, to).GetAwaiter().GetResult();
+
+    /// <summary>按桶号给哈希档的分表实体建缺失的那几张片。桶号越界抛，重复去掉。</summary>
+    public async Task<SplitTablesResult> CreateSplitTablesAsync<T>(int[] buckets, CancellationToken ct = default)
+        where T : class
+    {
+        GuardSchemaSyncAllowed();
+
+        var (template, shards) = SplitShards<T>(buckets);
+        var syncer = new Core.Schema.SchemaSyncer(Provider, Schemas, Options.ConnectionString);
+
+        return await syncer.CreateShardsAsync(template, shards, ct).ConfigureAwait(false);
+    }
+
+    /// <summary><see cref="CreateSplitTablesAsync{T}(int[],CancellationToken)"/> 的同步壳。</summary>
+    public SplitTablesResult CreateSplitTables<T>(params int[] buckets) where T : class
+        => CreateSplitTablesAsync<T>(buckets).GetAwaiter().GetResult();
+
+    /// <summary>那一份建片脚本，<b>不连库</b>（§9.5 的 Script 模式同一条路）：给 DBA 审批，也让"一个范围算出哪几张表、
+    /// 每张表的 DDL 长什么样"在离线处就钉得住。<see cref="SyncStructureAsync"/> 的 Script 档跳过分表实体，
+    /// 这一格是它们唯一的出脚本口。</summary>
+    public string SplitTablesScript<T>(DateTime from, DateTime to) where T : class
+    {
+        var (template, shards) = SplitShards<T>(from, to);
+
+        return new Core.Schema.SchemaSyncer(Provider, Schemas, Options.ConnectionString).ShardsScript(template, shards);
+    }
+
+    /// <summary><see cref="SplitTablesScript{T}(DateTime,DateTime)"/> 的哈希档。</summary>
+    public string SplitTablesScript<T>(params int[] buckets) where T : class
+    {
+        var (template, shards) = SplitShards<T>(buckets);
+
+        return new Core.Schema.SchemaSyncer(Provider, Schemas, Options.ConnectionString).ShardsScript(template, shards);
+    }
+
+    /// <summary>契约 + 换算好的片清单。<b>档不匹配的那一句由 <see cref="SplitRouting"/> 说</b>
+    /// （时间范围打在哈希档上、桶号打在时间档上都是它那句），这里不加第二套判据。</summary>
+    (EntityContract Template, IReadOnlyList<TableInfo> Shards) SplitShards<T>(DateTime from, DateTime to) where T : class
+    {
+        var contract = Schemas.Contract<T>();
+
+        return (contract, SplitRouting.EnumerateTime(contract.Table, NeedSplit(contract), from, to));
+    }
+
+    (EntityContract Template, IReadOnlyList<TableInfo> Shards) SplitShards<T>(int[] buckets) where T : class
+    {
+        var contract = Schemas.Contract<T>();
+
+        return (contract, SplitRouting.EnumerateBuckets(contract.Table, NeedSplit(contract), buckets));
+    }
+
+    static SplitFacts NeedSplit(EntityContract contract)
+        => contract.Table.Split
+           ?? throw new FastSqlException(
+                $"{contract.Table.Name} 没有声明分表（类上没有 [SplitTable]），没有片可建。整库建表请用 orm.SyncStructure。");
+
     void GuardSchemaSyncAllowed()
     {
         if (Options.ForceSchemaSync)

@@ -88,3 +88,42 @@ public class CustomerReport
 /// <summary>构造器 DTO（示例 §9.6）：record 没有无参构造，原生口的名字装配不接它，
 /// 所以那一条走低层口自己给行委托。</summary>
 public record CustomerTop(int CustomerId, decimal Total);
+
+// ── 分表（示例 §12）：两张靶子，一档时间、一档哈希 ──────────────────────
+//
+// 两件事先记在这里，因为它们决定了下面那一段能写什么、不能写什么：
+//   ① 类上没有 [Table] 时表名走约定，而这里<em>必须</em>写 [Table]，且写的是<em>带占位符的模板</em>
+//      （`{year}{month}` / `{shard}`）—— 类型名从此不是表名，一句 DML 拿到模板名是要抛的。
+//   ② 主键故意是 Guid 而不是自增 int：两张片各自发号能撞出同一个数，而"什么时候撞"要到合并统计
+//      才看得见，所以分表实体上自增主键是契约层就禁掉的（示例因此不演示那一种写法）。
+
+/// <summary>访问日志：按<em>月</em>分片的靶子，分片键是 <see cref="OccurredAt"/>。</summary>
+[Table("AccessLog_{year}{month}")]
+[SplitTable(SplitKind.Month, nameof(OccurredAt))]
+[Index("IX_AccessLog_Status", nameof(Status))]
+public class AccessLog
+{
+    public Guid Id { get; set; }
+
+    [Column(Length = 128)]
+    public string? Path { get; set; }
+
+    public int Status { get; set; }
+
+    /// <summary>分片键。它同时是一列 —— 契约层要求它映射得到，指向一颗没映射的属性当场抛。</summary>
+    public DateTime OccurredAt { get; set; }
+}
+
+/// <summary>工单：按 <see cref="TenantId"/> <em>哈希取模</em>分四个桶的靶子。</summary>
+[Table("TicketRow_{shard}")]
+[SplitTable(SplitKind.Hash, nameof(TenantId), Buckets = 4)]
+public class TicketRow
+{
+    public Guid Id { get; set; }
+
+    /// <summary>分片键。整数直接取模，不经 <c>GetHashCode()</c>（那个随进程变，会把同一行在两次运行里送到两张表）。</summary>
+    public int TenantId { get; set; }
+
+    [Column(Length = 64)]
+    public string? Title { get; set; }
+}

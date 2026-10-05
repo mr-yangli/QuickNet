@@ -29,6 +29,17 @@ public interface IUpdate<T> where T : class
     /// 因为"整表每一行改成同一个值"没有一种是有意的默认行为。要清全表就显式写 <c>.Where(o =&gt; true)</c>。<b>全局过滤器不算这里说的"条件"</b>（§10.7 那一格从 v0.26 起会往这一句的 <c>WHERE</c> 里叠条件，但它叠进去的是"你没资格改那些行"，不是"你要改这些行" —— 这道闸门判的是后者）。</summary>
     IUpdate<T> Where(Expression<Func<T, bool>> predicate);
 
+    /// <summary>分表实体的 UPDATE 要打的那一片（§16.4）。<b>一次一片，不是范围</b>：一条 UPDATE 只有一个目标表，
+    /// 给范围就要悄悄执行 N 条，而这条链的契约写的是「<see cref="ToSql"/> 与紧随其后的
+    /// <see cref="ExecuteAffrowsAsync"/> 是同一条语句」。参数是<em>那一片里的一个日期</em>，它下整到本档的周期就是片名。
+    /// <b>必须放在链首</b>：SET 与 WHERE 的列引用是翻译时绑到当时的目标上的，事后换片会让前缀停在模板名上。
+    /// 不分表的实体上调它直接抛。</summary>
+    IUpdate<T> SplitTable(DateTime at);
+
+    /// <summary>分表实体的 UPDATE 要打的那一片（<see cref="FastSql.Metadata.SplitKind.Hash"/> 档）：给桶号，
+    /// 越界的桶号抛。同一句"一次一片、必须放在链首"的纪律。</summary>
+    IUpdate<T> SplitTable(int bucket);
+
     UpdatePlan Explain();
 
     string ToSql();
@@ -73,6 +84,13 @@ public interface IDelete<T> where T : class
     /// <summary>条件。<b>不能没有</b>：一次 <c>Where</c> 都不叠的 DELETE 在构建时抛，理由同 UPDATE
     /// （整表清空不该是一个漏写条件的默认结果）。</summary>
     IDelete<T> Where(Expression<Func<T, bool>> predicate);
+
+    /// <summary>分表实体的 DELETE 要打的那一片，口径与 <see cref="IUpdate{T}.SplitTable(DateTime)"/> 逐字相同：
+    /// 一次一片（一条 DELETE 只有一个目标表），且必须放在链首。</summary>
+    IDelete<T> SplitTable(DateTime at);
+
+    /// <summary>分表实体的 DELETE 要打的那一片（哈希档）。</summary>
+    IDelete<T> SplitTable(int bucket);
 
     DeletePlan Explain();
 

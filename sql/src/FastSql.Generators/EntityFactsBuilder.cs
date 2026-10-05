@@ -21,6 +21,7 @@ static class EntityFactsBuilder
     const string FastSqlTable = "FastSql.Metadata.TableAttribute";
     const string FastSqlColumn = "FastSql.Metadata.ColumnAttribute";
     const string FastSqlIndex = "FastSql.Metadata.IndexAttribute";
+    const string FastSqlSplit = "FastSql.Metadata.SplitTableAttribute";
     const string FastSqlConcurrency = "FastSql.Metadata.ConcurrencyTokenAttribute";
     const string DataSchemaTable = "System.ComponentModel.DataAnnotations.Schema.TableAttribute";
     const string DataSchemaColumn = "System.ComponentModel.DataAnnotations.Schema.ColumnAttribute";
@@ -84,6 +85,7 @@ static class EntityFactsBuilder
             Name = GeneratedName(entity),
             TableName = Text(table, 0, "Name") ?? Text(dataTable, 0, "Name") ?? entity.Name,
             TableSchema = Text(table, -1, "Schema") ?? Text(dataTable, -1, "Schema"),
+            Split = SplitOf(attributes),
         };
 
         var conflicts = false;
@@ -480,6 +482,50 @@ static class EntityFactsBuilder
     }
 
     static string? Name(AttributeData attribute) => attribute.AttributeClass is { } cls ? FullName(cls) : null;
+
+    /// <summary><c>[SplitTable]</c> 的抄本。档名存的是<em>可直接落进代码的表达式</em>而不是成员名，
+    /// 因为写注解的人也可以写 <c>(SplitKind)99</c> —— 那种值不该在生成期被咽掉：让它在运行期撞到
+    /// <c>SplitRouting</c> 那句「未知的分片档」，与反射路径同一句话（两侧一致性由此而来，而不是靠这里再校一遍）。</summary>
+    static SplitModel? SplitOf(IEnumerable<AttributeData> attributes)
+    {
+        var split = Find(attributes, FastSqlSplit);
+
+        if (split is null)
+            return null;
+
+        return new SplitModel
+        {
+            Kind = EnumExpression(split, 0),
+            Member = Text(split, 1, "Field") ?? "",
+            Buckets = (int)(Number(split, -1, "Buckets") ?? 0),
+        };
+    }
+
+    /// <summary>把枚举实参写成 <c>global::…SplitKind.Month</c>；按数值找不到成员名时退回强制转换。
+    /// <b>前缀在这里加、不在写手那里加</b>：三种退路（成员名、<c>(枚举)数值</c>、<c>default</c>）里只有前两种
+    /// 该带 <c>global::</c>，把它们各自写成完整形态，写手那一格就只管抄。</summary>
+    static string EnumExpression(AttributeData attribute, int position)
+    {
+        var argument = Argument(attribute, position);
+
+        if (argument?.Value is null)
+            return "default";
+
+        // 两次 .Value：第一颗摘掉 <c>TypedConstant?</c> 的可空壳，第二颗才是实参那颗装箱的整数
+        // （枚举实参在 Roslyn 里存的就是底层整数值，与 <see cref="Tri"/> 同一件事）。
+        var raw = Convert.ToInt64(argument.Value.Value);
+
+        if (argument?.Type is INamedTypeSymbol { TypeKind: TypeKind.Enum } enumType)
+        {
+            foreach (var member in enumType.GetMembers().OfType<IFieldSymbol>())
+                if (member.HasConstantValue && member.ConstantValue is not null && Convert.ToInt64(member.ConstantValue) == raw)
+                    return "global::" + FullName(enumType) + "." + member.Name;
+
+            return "(global::" + FullName(enumType) + ")" + raw;
+        }
+
+        return raw.ToString();
+    }
 
     static AttributeData? Find(IEnumerable<AttributeData> attributes, string metadataName)
         => attributes.FirstOrDefault(a => Name(a) == metadataName);

@@ -61,7 +61,13 @@ public sealed class ContractResolver(IDbProvider provider, ModelConfiguration? c
             : data?.Name is { } dn ? dn
             : clrType.Name;
 
-        return new TableInfo(fluent?.Schema ?? fastsql?.Schema ?? data?.Schema, name);
+        // 分表只认自研属性那一层（DataAnnotations 里没有等价注解，Fluent 侧今天不落这一格，
+        // 理由写在 SplitTableAttribute 的注释上）。名字是哪一层给的不影响这一格：模板名与分片声明
+        // 是两件事，把它们绑在同一层会让 [Table(DataAnnotations)] + [SplitTable] 这种组合没法写。
+        var split = clrType.GetCustomAttribute<SplitTableAttribute>();
+
+        return new TableInfo(fluent?.Schema ?? fastsql?.Schema ?? data?.Schema, name,
+            split is null ? null : new SplitFacts(split.Kind, split.Field, split.Buckets));
     }
 
     [RequiresUnreferencedCode("按 Type 扫描公共属性。")]

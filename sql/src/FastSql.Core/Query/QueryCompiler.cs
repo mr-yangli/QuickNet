@@ -15,6 +15,17 @@ public sealed class QueryCompiler(IDbProvider provider)
 
     public SelectStatement Compile(QueryModel model)
     {
+        // 分表实体在"没选片"与"选了多片"这两种情况下要发的是完全不同的句子，所以先过这一道门。
+        // 派生表与覆盖源那两种来路不在这里插手：内层自己会回到这个门口，外层只剩一个表位。
+        if (model.Root.Table.Split is not null && model.DerivedFrom is null && model.Source is null)
+            return CompileSplit(model);
+
+        // 但"派生表"那一格留一条同判据的门：count 是库自己包的内层（外层只剩一颗 COUNT(*)，UNION ALL 活在内层），
+        // 所以 CompileSplit 里那句聚合检查打不到这一份模型。放行它的后果是"CountAsync 抛，而 Take(10).CountAsync() 给数"——
+        // 那是实现顺序决定的形状，不是裁决。见 <see cref="CrossShardAggregate"/>。
+        if (model.DerivedFrom is not null && model.Root.Table.Split is not null && model.Shards is { Count: > 1 } derivedShards)
+            throw CrossShardAggregate(derivedShards.Count);
+
         // FROM 位有第三种来路：派生表（先编译内层，再挂成外层的唯一表位）、覆盖源（WithSql 的那一段文本），
         // 以及照旧的根表位。内层走的是同一个 Compile，所以内层的分页、Include、方言无关的剥序全部原样成立。
         var from = model.DerivedFrom is { } inner
@@ -55,6 +66,59 @@ public sealed class QueryCompiler(IDbProvider provider)
             Distinct = model.Distinct,
         };
     }
+
+    /// <summary>分表实体的读侧形状（规格 §16.4）：一片一条 SELECT，串成 <c>UNION ALL</c> 挂在外层唯一的表位，
+    /// 序与分页只长在外层。
+    /// <b>单片时不包这一层</b>：根表位直接换成那张物理表，走原来那条路，于是"这个月只查一张表"的句子
+    /// 与一张不分表的表<em>逐字同形</em>——金标基线因此不必为单片另写一份，而"包了一层没用的派生表"
+    /// 这种性能税也收不到。</summary>
+    SelectStatement CompileSplit(QueryModel model)
+    {
+        var shards = model.Shards
+                     ?? throw new FastSqlException($"分表实体 {model.Root.Contract?.ClrType.Name} 没选片就要读：请先 SplitTables(起, 止)（时间档）或 SplitTables(桶号…)（哈希档）。本家不给“默认扫全片”的退路，因为现存的分片有几张只有库知道。");
+
+        if (shards.Count == 1)
+            return Compile(Shard(model, shards[0]) with { Shards = null });
+
+        // 多片上明确不接的三件事，共同点是"跨片之后要变的是语义，而变法是裁决不是实现"。
+        // 聚合那一档尤其要写清：库能把 COUNT(*) 打在 UNION ALL 外面（那是对的），但 AVG 与"分组之后再数有几组"
+        // 就不是包一层能救的，而 SqlSugar 那一族的形态是把 GroupBy 原样复制进每一片（每片各分各的组，
+        // 键不合并）。本家宁可在这里停住，也不要一份看着像结果的错数。
+        if (model.Plan is AggregateProjection || model.GroupBy.Count > 0 || model.Having is not null)
+            throw CrossShardAggregate(shards.Count);
+
+        if (model.Joins.Count > 0 || model.Includes.Count > 0 || model.IncludeManys.Count > 0)
+            throw new FastSqlException($"分表实体跨 {shards.Count} 片不做连接与急切加载（JOIN / Include）：每片各连一遍会把“一条主行配几份子行”变成片内的事，而那不是同一次查询。");
+
+        var branches = new SelectStatement[shards.Count];
+
+        for (var i = 0; i < shards.Count; i++)
+            branches[i] = Compile(Shard(model, shards[i]) with { Shards = null, Ordering = [], Offset = null, Limit = null });
+
+        return new SelectStatement
+        {
+            // 外层只端一样东西：* 。片内的选列形状与单片时完全一致（那一份是从同一个模型算出来的），
+            // 所以物化那边按位置读的列序不用为跨片重定。
+            Columns = [new Projection(new StarExpression(null), null)],
+            From = new SourceUnion(model.Root, branches),
+            OrderBy = model.StripsOrdering ? [] : [.. model.Ordering],
+            Offset = model.Offset is { } offset ? new ParameterValue(offset, null) : null,
+            Limit = model.Limit is { } limit ? new ParameterValue(limit, null) : null,
+            Distinct = model.Distinct,
+        };
+    }
+
+    /// <summary>把根表位换成一张具体的分片表。别名<em>不动</em>（还是 <c>t0</c>），所以谓词、选列、序
+    /// 那些引用着根表位的节点一个都不用重写——发出来的列前缀照旧成立。</summary>
+    static QueryModel Shard(QueryModel model, TableInfo shard)
+        => model with { Tables = [model.Root with { Table = shard }, .. model.Tables.Skip(1)] };
+
+    /// <summary>跨片聚合的那一句拒绝，两个入口共用（<see cref="CompileSplit"/> 直投、<see cref="Compile"/>
+    /// 那条 count 自己包内层的侧门）。<b>消息要给一条走得通的路</b>：分页要的是"有没有下一页"而不是总数，
+    /// 那一档（§5.12 的 <c>SkipTotal</c>）多取一行就够，跨片成立，所以把它的名字写在报错里。</summary>
+    static FastSqlException CrossShardAggregate(int shardCount)
+        => new($"分表实体跨 {shardCount} 片不做聚合/分组（COUNT、SUM、GROUP BY、HAVING）：那要先定“每片各算再怎么合”，规格 §5.12 与 §16.4 都还没裁。" +
+               "单片不受这一格限制——把范围收到一片就是一句普通的聚合；分页只要“有没有下一页”而不必总数时，传 PagedOptions { CountMethod = CountMethod.SkipTotal }。");
 
     IReadOnlyList<Projection> Columns(QueryModel model) => model.Plan switch
     {
@@ -168,11 +232,14 @@ public sealed class QueryCompiler(IDbProvider provider)
         {
             length += from.Ref.Table.Name.Length + from.Ref.Alias.Length + 40;
 
-            // 两种"内层还有一整句"的表源：那份文本也在同一条 StringBuilder 里落地，所以容量要一起算。
+            // "内层还有一整句"的表源：那份文本也在同一条 StringBuilder 里落地，所以容量要一起算。
+            // SourceUnion 是跨片读的那一层（每片一条 SELECT 串起来），一颗分支就是一整句 ——
+            // 少了这一段，五片的句子会按一片的容量开，剩下的靠倍增重拷。
             length += from switch
             {
                 SourceDerived derived => EstimateSqlLength(derived.Query),
                 SourceRawText raw => raw.Sql.Length,
+                SourceUnion union => SumBranches(union),
                 _ => 0,
             };
         }
@@ -181,5 +248,16 @@ public sealed class QueryCompiler(IDbProvider provider)
             length += join.Source.Ref.Table.Name.Length + join.Source.Ref.Alias.Length + 48;
 
         return length + ast.GroupBy.Count * 24 + ast.OrderBy.Count * 24 + (ast.Where is null ? 0 : 64);
+    }
+
+    /// <summary>逐支累加，再为每道接缝留 <c> UNION ALL </c> 的 11 个字符与外层那对括号。</summary>
+    static int SumBranches(SourceUnion union)
+    {
+        var total = 2;
+
+        foreach (var branch in union.Branches)
+            total += (total == 2 ? 0 : 11) + EstimateSqlLength(branch);
+
+        return total;
     }
 }

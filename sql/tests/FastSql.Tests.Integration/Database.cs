@@ -1137,6 +1137,23 @@ static class Database
         Execute(connection, writer.ToSqlString());
     }
 
+    /// <summary>按<em>已经换算好的那张片</em>问一次"库里有没有"。<b>公开口只为分表用例开</b>（§16.4）：
+    /// 片名是从模板算出来的，用例侧拿不到 <see cref="EnsureTable(Type)"/> 那种"给个 CLR 类型就行"的形状 ——
+    /// 给类型只能问回那颗模板，而模板今天在任何库里都不该存在（它存在的本身就是缺陷）。
+    /// <b>这里不写第二份目录 SQL</b>：复用私有那颗 <see cref="TableExists(DbConnection,TableInfo)"/>，
+    /// 五家的问法（<c>OBJECT_ID</c> ∶ <c>pg_class</c> ∶ <c>ALL_TABLES</c> ∶ <c>information_schema.tables</c>）
+    /// 只在一处维护；用例里各写一句就等于把方言分岔抄进测试层，而那一抄就量不到实现里的那份。</summary>
+    public static bool HasTable(TableInfo table)
+    {
+        Ready();
+
+        using var connection = Orm.Provider.Connectors.CreateConnection(ConnectionString);
+
+        connection.Open();
+
+        return TableExists(connection, table);
+    }
+
     /// <summary>这一句问句交回 1 就是"是"。<b>不写成 <c>is 1</c></b>：这一家的 <c>COUNT(*)</c> 与
     /// <c>CASE … THEN 1 END</c> 回包是 <c>Int64</c>（<c>obj/logs/v32-recon-txn-3.log</c> 的 T-03 量到
     /// <c>ExecuteScalar</c> 交 <c>Int64</c>），装箱模式匹配 <c>is 1</c> 只认 <c>Int32</c>，

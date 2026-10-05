@@ -45,6 +45,11 @@ public sealed class MetadataEquivalenceTests
     [InlineData(typeof(Milestone))]
     [InlineData(typeof(SelfRef))]
     [InlineData(typeof(TwoKeys))]
+    // 分表这两张（§16.4）在这里的对拍有它自己的一处不可替代：G1 那颗分表实参是从 TypedConstant 里
+    // 抄成表达式文本的，而 G2 读的是注解实例。两侧算出的 SplitFacts 只要差一格（档、成员、桶数、
+    // 换算后的列名），落进库里的就是两张不同的表 —— 那种分叉不会让任何一条 SQL 变红。
+    [InlineData(typeof(ShardLog))]
+    [InlineData(typeof(TenantRow))]
     public void Both_paths_produce_the_same_contract(Type clrType)
         => Assert.Equal(Shape(Reflected().Contract(clrType)), Shape(Generated().Contract(clrType)));
 
@@ -80,6 +85,11 @@ public sealed class MetadataEquivalenceTests
         var lines = new List<string>
         {
             $"table = {contract.Table.Schema ?? "-"}.{contract.Table.Name}",
+
+            // 分表那一格（§16.4）：表名之外还要比"这一张是模板、按哪一档、从哪一列换算"。
+            // 只比表名的话，G1 把桶数抄成 0 而 G2 抄成 4 也照样绿，而两侧算出的物理片名从第一天起就不同。
+            $"split = {(contract.Table.Split is { } split ? $"{split.Kind} member={split.MemberName} column={split.ColumnName} buckets={split.Buckets} time={split.IsTime}" : "-")}",
+
             $"primary = {string.Join(",", contract.PrimaryKey.Select(c => c.MemberName))}",
             $"nav = ({contract.Relationships.Count})",
         };
@@ -117,6 +127,12 @@ public sealed class MetadataEquivalenceTests
         // 与一条边的 Milestone 都该在 G1 那一侧 —— 没有这两句，上面那 8 条新对拍可能只是两条反射路径在互相印证。
         Assert.Equal("FastSqlGeneratedProjectSchema", Generated().Schema<Project>().GetType().Name);
         Assert.Equal("FastSqlGeneratedMilestoneSchema", Generated().Schema<Milestone>().GetType().Name);
+
+        // 分表那两张也必须在 G1 这一侧命中，否则上面两条对拍只是两条反射路径在互相印证：
+        // `[SplitTable]` 的枚举实参在 G1 是从 TypedConstant 抄成<em>表达式文本</em>的（含 (SplitKind)99 那种退路），
+        // 在 G2 读的是注解实例 —— 只有两边都真的走自己的那条路，相等才有内容。
+        Assert.Equal("FastSqlGeneratedShardLogSchema", Generated().Schema<ShardLog>().GetType().Name);
+        Assert.Equal("FastSqlGeneratedTenantRowSchema", Generated().Schema<TenantRow>().GetType().Name);
     }
 
     [Fact]

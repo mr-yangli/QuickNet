@@ -166,13 +166,19 @@ static class EntityFactsWriter
 
     static void RenderFacts(StringBuilder b, EntityModel m)
     {
+        // 分表这一格的第三颗参数在有声明时必须写出来，没有声明时写 null —— 两侧（G1 生成的契约、
+        // G2 反射的契约）拿到的形状才完全一样，§13.11 的逐字段相等才有得比。
+        var split = m.Split is { } declared
+            ? ", new " + Metadata + "SplitFacts(" + declared.Kind + ", " + Lit(declared.Member) + ", " + declared.Buckets + ")"
+            : ", null";
+
         b.AppendLine("/// <summary>编译期算好的实体事实。provider 那一半（storage defaults、自增约定、索引与外键的列名换算）")
          .AppendLine("/// 由运行期的 EntityContractFactory 补上——只有 provider 知道自己是 nvarchar 还是 VARCHAR2(n BYTE)（§10.4）。</summary>")
          .AppendLine("static class " + m.Name + "Metadata")
          .AppendLine("{")
          .AppendLine("    public static " + Schema + "GeneratedEntityMetadata Facts { get; } = new(")
          .AppendLine("        typeof(" + m.Entity + "),")
-         .AppendLine("        new " + Metadata + "TableInfo(" + Lit(m.TableSchema) + ", " + Lit(m.TableName) + "),")
+         .AppendLine("        new " + Metadata + "TableInfo(" + Lit(m.TableSchema) + ", " + Lit(m.TableName) + split + "),")
          .AppendLine("        [");
 
         foreach (var column in m.Columns)

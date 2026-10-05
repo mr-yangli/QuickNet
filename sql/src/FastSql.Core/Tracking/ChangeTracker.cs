@@ -219,6 +219,30 @@ sealed class ChangeTracker(FastSqlOrm orm) : DbChangeTracker
     /// 于是"连不上库"那句盖住了成因（离线场景更是永远测不到这一格）。</summary>
     internal void EnsureWriteOrderResolvable() => OrderedByDependency(_order.ToArray());
 
+    /// <summary>分表实体与跟踪器互斥（§16.4 那一格的裁决）。<b>判据取"这一行此刻会不会被写出去"</b>，
+    /// 与 <see cref="AnyDue"/> 同一颗 <see cref="ITypeTracker.WillWrite"/>：只把分表实体<em>读</em>进会话
+    /// （Unattached/Unchanged）是无害的，那条路不发语句，没必要为此关掉整个会话的读侧身份映射。
+    ///
+    /// <para><b>为什么不是"实现一半"</b>：会话的账按主键记，而分表里"同键的两行"是能存在的两行
+    /// （<c>Id</c> 自增而表按月切时，两张片各自的 1 号互不相干），身份映射因此不成立 ——
+    /// 那不是补一条 WHERE 就能修的，要先定"跨片的一行由什么指认"。规格 §15.4 把这一格记为已裁，
+    /// 出路写在消息里（写侧那三条链按行的分片键值定表，本来就不需要会话）。</para></summary>
+    internal void EnsureNoSplitWrites()
+    {
+        foreach (var tracker in _order)
+        {
+            if (!tracker.MayHaveWrites || tracker.Contract.Table.Split is not { } split)
+                continue;
+
+            foreach (var node in tracker.Nodes)
+                if (tracker.WillWrite(node))
+                    throw new FastSqlException(
+                        $"{tracker.EntityType.Name} 声明了分表（{split.Kind} 档，分片键列 {split.ColumnName}），跟踪器写不出去：" +
+                        "会话的账按主键记，而同一个主键在分表里可以占着两张片上的各一行，身份映射认不出“要写的是哪一行”。" +
+                        "分表的写请用 orm.Insert/InsertRange/Update/Delete 那几条链（它们按行的分片键值算目标表）。");
+        }
+    }
+
     /// <summary>档内的类型序按外键依赖排：被依赖的（主端）在前。判据只有一个来源——契约上那条
     /// <see cref="RelationshipContract"/> 边，也就是 §10.3 那句「三处只读契约，不许各自去读注解」。
     ///

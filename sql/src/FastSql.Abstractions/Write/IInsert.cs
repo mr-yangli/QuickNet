@@ -86,7 +86,13 @@ public interface IInsert<T> where T : class
 /// <summary>一个块：一次 round-trip 的语句 + 它覆盖的行区间。
 /// <see cref="FirstRow"/> 是回填时的实体下标，<b>顺序映射就是这里唯一的真相</b>
 /// （<c>OUTPUT</c>/<c>RETURNING</c> 的回包按源行序，§12.4 第 1 项的代价面），集成测试按 payload 证明这条映射。</summary>
-public sealed record InsertChunk(int FirstRow, int RowCount, Sql.Ast.InsertStatement Ast, DialectSql Sql);
+public sealed record InsertChunk(int FirstRow, int RowCount, Sql.Ast.InsertStatement Ast, DialectSql Sql)
+{
+    /// <summary>分表那一条路上，一个块装的是<em>同一张片</em>的行，而那些行在入参数组里不连续
+    /// （按月切的表里，相邻两行可以隔三个月）。这一格给的就是那几行在入参数组里的下标，回填按它映射；
+    /// <b>不分表时恒为 null</b>，那时 <c>FirstRow + 回包行号</c> 就是下标，热路径上一条语句都不多分配。</summary>
+    public int[]? RowOrdinals { get; init; }
+}
 
 /// <summary>一次插入的完整决策记录。<see cref="Reason"/> 必须是给人看的一句话（§12.3 对 <c>BulkPlan</c> 的同一要求）：
 /// 现场排障时先看到"为什么是 63 行一块"，而不是先去读源码。</summary>

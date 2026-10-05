@@ -22,6 +22,14 @@ public sealed record QueryModel
     /// 两者不会同时出现在一份模型上：派生表的外层是库造的，它没有理由再带一个覆盖源。</summary>
     public QueryModel? DerivedFrom { get; init; }
 
+    /// <summary>分表实体的<b>已选片清单</b>（§16.4）：每一项都是把占位符换算完的物理表，顺序就是
+    /// <c>UNION ALL</c> 的分支顺序（时间档按周期升序，哈希档按给出的桶序）。
+    /// null 说的是"这一份模型还没选片"——非分表实体本来就该是 null，而分表实体带着 null 走到编译口
+    /// 会当场抛：本家不给"默认全片扫"那种静默的大范围，SqlSugar 那一族给的正是它
+    /// （<c>QueryableProvider.cs:1709</c> 的无参 <c>SplitTable()</c> 取的是全部现存表）。
+    /// 与 <see cref="Source"/> 同一条纪律：这一格里有东西，模型文本就必须有对应的一行。</summary>
+    public IReadOnlyList<TableInfo>? Shards { get; init; }
+
     public IReadOnlyList<JoinClause> Joins { get; init; } = [];
 
     /// <summary>AND 折叠前的原样集合——保留它才能做到「链式与 LINQ 产出同一个模型」的可判定比较。</summary>

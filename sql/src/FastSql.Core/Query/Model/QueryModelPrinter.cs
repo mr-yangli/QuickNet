@@ -30,6 +30,11 @@ static class QueryModelPrinter
         if (model.DerivedFrom is { } inner)
             b.Append("  DERIVED\n").Append(Indent(Print(inner)));
 
+        // 选片清单要按<em>换算后的物理名</em>打，而不是打"选了什么范围"：范围是链式入口的参数，
+        // 名字才是这句要发出去的东西，而 §13.2 比的是模型（也就是发出去的东西）而不是入口写法。
+        if (model.Shards is { } shards)
+            b.Append("  SHARDS ").Append(string.Join(" | ", shards.Select(s => (s.Schema ?? "dbo") + "." + s.Name))).Append('\n');
+
         foreach (var join in model.Joins)
         {
             var ref_ = join.Source.Ref;

@@ -170,6 +170,11 @@ public class DbContext(FastSqlOrm orm) : IAsyncDisposable, IDisposable
         // 不该在库里留下一个开过又回滚的事务（§8.2）。
         _tracker.EnsureWriteOrderResolvable();
 
+        // 同一格位置上的第二道元数据闸门：分表实体的写要走"按行的分片键值定表"，跟踪器给不出那句
+        // （§16.4，理由见 EnsureNoSplitWrites 那一段）。放在开事务之前是同一条理由：注定失败的保存
+        // 不该在库里留一个开过又回滚的事务。
+        _tracker.EnsureNoSplitWrites();
+
         // 确保会话连接工厂在位：SaveChanges 的事务会复用它（§8.4），而不是另取一条。
         EnsureSessionFactory();
 

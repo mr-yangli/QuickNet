@@ -115,6 +115,23 @@ public interface IQuery<T> : IAsyncEnumerable<T>
     /// <b>只落在 arity 1 这一档</b>，与 <see cref="IgnoreQueryFilters"/> 同一处已记名的缺口：联表链上没有这一颗口。</summary>
     IQuery<T> WithSql(string sql, object? args = null);
 
+    /// <summary>分表实体的<b>按时间范围选片</b>（§16.4）：起与止各自下整到本档的周期（月档就是月初），
+    /// 中间逐周期展开成这一次要读的片清单。链上后面的 <c>Where/OrderBy/Skip/Take</c> 都在<b>合并之后</b>才落，
+    /// 所以序与分页是整段区间的事，不是每片各页。
+    /// <b>只有一片时不包 <c>UNION ALL</c> 那一层</b>：FROM 直接换成那张物理表，句子与不分表的实体逐字同形。
+    /// <b>没有"不给范围就读全部片"的退路</b>：现存的分片有几张只有库知道，而一句静默的 <c>UNION</c> 三百张日表
+    /// 是要压在页面上的事故，不是优化。跨片上的聚合/分组/连接一律当场拒（<c>CountAsync</c> 也是聚合），
+    /// 分页只要"有没有下一页"时传 <c>CountMethod.SkipTotal</c>。
+    /// <b>在不分表的实体上调它直接抛</b>：那不该是一条能写出来的话。与 <see cref="WithSql"/> 同一档，
+    /// 只落在 arity 1 这一链上。</summary>
+    IQuery<T> SplitTables(DateTime from, DateTime to);
+
+    /// <summary>分表实体的<b>按桶号选片</b>（§16.4 的 <c>SplitKind.Hash</c> 档）：给哪几个桶就读哪几张表，
+    /// 重复桶号去掉，越界的桶号抛。与时间档同一句纪律——不给"全部桶"的顺口感，桶数在实体上写着，
+    /// 真要全量就自己按桶批过去。哈希取模用的不是 <c>GetHashCode()</c>（那个随进程变，会把同一行在两次运行里
+    /// 送到两张表），口径见 <see cref="FastSql.Metadata.SplitKind.Hash"/>。</summary>
+    IQuery<T> SplitTables(params int[] buckets);
+
     IQuery<T> WithCache(string cacheKey, TimeSpan ttl);
 
     IQuery<T> Distinct();

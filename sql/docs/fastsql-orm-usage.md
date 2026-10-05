@@ -156,6 +156,7 @@ var orm = FastSqlOrm.Create(DbKind.PostgreSql, "Host=...;Database=app;");
 - `[Table(string name)]`，属性 `Name`、`Schema?`、`Comment?`
 - `[Column(string? name = null)]`，属性 `Name`、`DbTypes`、`Length`、`Precision`、`Scale`、`IsNullable`/`IsPrimary`/`IsIdentity`（`TriState`：`Unset`/`Yes`/`No`）、`IsIgnore`、`Comment`
 - `[Index(string name, params string[] memberNames)]`，属性 `Unique`、`Clustered`、`Descending`
+- `[SplitTable(SplitKind kind, string field)]`，可选属性 `Buckets`（只有 `Hash` 档读它）；它要求同一颗 `[Table]` 的名字是一张带占位符的模板（用法与判据见 §3.6）
 - `[ConcurrencyToken]`（只能挂属性上；语义是"只比较不书写"）
 
 DataAnnotations 同样认（`[Key]`、`[Required]`、`[StringLength]`、`Schema.Table`、`Schema.Column(name/TypeName)`、`NotMapped`），现场见 `tests/FastSql.Tests.Common/Model.cs` 里的 `LegacyShipment`。
@@ -176,7 +177,7 @@ model.Entity<Order>().Property(o => o.Amount).HasPrecision(18, 4);
 model.Entity<InventoryItem>().Property(i => i.RowVersion).IsConcurrencyToken(false);
 ```
 
-`PropertyBuilder` 全量：`HasMaxLength`、`HasPrecision(int, int)`、`HasDbType(string)`、`HasComment`、`IsRequired(bool = true)`、`IsKey(bool = true)`、`IsIdentity(bool = true)`、`IsIgnore()`、`IsConcurrencyToken(bool = true)`。**没有** `HasColumnName`（列名走 `ToTable`/`[Column]` 那条），也没有关系配置、鉴别器、影子属性。
+`PropertyBuilder` 全量：`HasMaxLength`、`HasPrecision(int, int)`、`HasDbType(string)`、`HasComment`、`IsRequired(bool = true)`、`IsKey(bool = true)`、`IsIdentity(bool = true)`、`IsIgnore()`、`IsConcurrencyToken(bool = true)`。**没有** `HasColumnName`（列名走 `ToTable`/`[Column]` 那条），也没有关系配置、鉴别器、影子属性。**分表也故意不落 Fluent**（`[SplitTable]` 只有注解那一条路，理由写在那颗注解的注释里：Fluent 侧看不到它就得换一套校验时机，而分表最不能有的是"两条路径算出两种表名"）。
 
 **层序**（`MetadataLayer`，低层不覆高层）：`ProviderFallback=0` → `Convention=1` → `DataAccessAnnotation=2` → `FastSqlAttribute=3` → `Fluent=4`。每一列的来历记在 `ColumnContract.Origin`（`record OriginTrace(MetadataLayer Layer, string Note)`），能读出"并发 ← Fluent IsConcurrencyToken"这种结论。同一层重复声明同一事实会抛 `MetadataConflictException`。
 
@@ -454,6 +455,7 @@ var report = await db.SaveChangesAsync();
 - `ChangeTracker`：`Count`、`HasChanges`、`Entries()`、`Entries<T>()`、`DetectChanges()`、`Clear()`；状态是 `EntityState { Detached, Added, Unmodified, Modified, Deleted }`；点名某列用 `Entry(entity).Property(nameof(X)).IsModified = true`，`AutoDetectChangesEnabled` 可关
 - 只写脏列：UPDATE 的 SET 里只有 `ModifiedMembers`；没有主键的实体**拒绝跟踪并指路**（`Attach(new AuditRow{...})` 会抛）
 - `SaveChanges()` 是同步壳（sync-over-async）；干净无事时**不发语句、不开事务**（`tests/FastSql.Tests.Dialects/TrackingTests.cs:527` 那格用探针工厂证的就是这条）；发语句前先过 `EnsureWriteOrderResolvable()`（外键依赖成环就在这里红）
+- 分表实体**可以读进会话、不可以由会话写出去**：`SaveChanges` 在开事务之前逐行问一遍跟踪器，碰到挂在分表模板上的待写实体就整批拒绝并指路（`src/FastSql.Core/Tracking/ChangeTracker.cs:230`，被 `Orchestration/DbContext.cs:176` 调用），所以拒绝发生在"发语句之前"而不是"发到一半"；链式侧不受影响，`InsertRange`/`Update.SplitTable` 照写。为什么是拒绝而不是定位到片：见 §3.6 与 §4.3 第 9 条
 - 报告：`SaveChangesReport { Operations, HookReplay, AffectedRows, StatementCount }`，每档是 `SaveChangesOp(WriteOperation Operation, string Table, int Rows, int StatementCount, IReadOnlyList<string> Columns, string Sql)`。`WriteOperation { Insert, Update, Delete }`。**"没有欠语句"与"发了但没命中行"是两件事**：`AffectedRows` 在 UPDATE/DELETE 档上是谓词命中数
 - 乐观锁冲突抛 `DbUpdateConcurrencyException`；`[ConcurrencyToken]` 列不进 SET、不进 INSERT 列清单，进 WHERE 与回填集，NULL 那一档折成 `IS NULL`
 
@@ -487,6 +489,71 @@ orm.Provider.CodeFirst.EmitCreateTable(writer, orm.Schemas.Contract<Order>());
 
 **没有 `doctor`。** 全仓库 `doctor` 只出现在注释与规格里（§9.5 那格），`src/` 下没有任何诊断命令实现。同理没有 `FastSql.Testing` 内存 provider（规格里已被移出承诺）。
 
+### 3.6 分表：一张实体铺在几张同构表上
+
+v0.38 第十笔落地的能力，三条裁决由用户给全（逐字）：范围＝「读写全套，跨片聚合明确拒绝」，分片键＝「时间 + 哈希取模都内建」，交付口径＝「一轮做完：规格／台账／src／用例全开」。**做的是一个库里的多张表，不是多个库**（分库那一半仍堵在 `AdoExecutor` 把连接串存成字段那一格，见 §4.3 第 9 项）。
+
+声明是类上两颗注解，一条模板加一条算法：
+
+```csharp
+[Table("AccessLog_{year}{month}")]                          // 表名写的是模板，不是一张能建的表
+[SplitTable(SplitKind.Month, nameof(OccurredAt))]           // 分片键 = 属性名，档 = 月
+public class AccessLog { … }
+
+[Table("TicketRow_{shard}")]
+[SplitTable(SplitKind.Hash, nameof(TenantId), Buckets = 4)] // 哈希档要有桶数
+public class TicketRow { … }
+```
+
+- 占位符只认四颗：`{year}` `{month}` `{day}` `{shard}`。每颗至多一次，本档要的必须在、本档不要的不许有（月档写 `{day}` 当场抛），认不出的花括号（`{hour}`）也当场抛 —— 症状本来是"部署之后库里多一张名字叫 `…_{hour}` 的表"，所以这一格走启动期抛而不是发 SQL 时才发现。六档：`Day`／`Week`／`Month`／`Season`／`Year`／`Hash`。
+- **启动期四条判据**：分片键必须是一列（`IsIgnore` 排除掉的属性不行）；模板得配得上那一档；哈希档少于 2 个桶等于没分；**主键不许自增**（跨片唯一库给不了，两张片各自能发出同一个号，要嘛客户端生成 `Guid`，要嘛这一张不分）。
+- 片名只有一份换算实现（`SplitRouting`），写侧按行的分片键值算、读侧按范围算、DDL 按范围建，三处同一颗 —— 所以不存在"同一个月在两处算出两个表名"。哈希档不用 `GetHashCode()`（它随进程随机化，同一行两次运行会进两张表）：整数折成无符号取模、字符串走 FNV-1a。时间档先下整到周期起点再填模板：`Week` 档的片名记的是那周的周一，行可以落在那周任何一天。
+- 模板**不许原样发出去**：`SplitTables` 没给范围就读、或 UPDATE/DELETE 没钉片就写，发射口当场抛（消息给两条出路，不是一句"不支持"）。整库同步遇到模板是"跳过并记名"（`SyncStructureAsync` 的 `SkippedSplitTemplates`），不是建一张带花括号的表。
+
+读侧：选片范围就是"打哪几张表"。
+
+```csharp
+var q = orm.Select<AccessLog>().SplitTables(new DateTime(2026, 1, 1), new DateTime(2026, 3, 31));
+var byBucket = orm.Select<TicketRow>().SplitTables(0, 1);      // 哈希档给桶号，重复的自动去掉
+var rows = await q.ToListAsync();                              // 三片 → 一句 UNION ALL，外层只端一颗通配选列
+var page = await q.OrderBy(o => o.OccurredAt)
+    .ToPagedAsync(1, 2, new PagedOptions(CountMethod.SkipTotal));  // 跨片要"有没有下一页"就按这一档
+```
+
+- **单片时不包派生表**：范围只落一张片时，发出去的句子与一张不分表的实体逐字同形（`FROM [AccessLog_202601] AS [t0]`），既不为跨片重定列序，也不收"包了一层没用的派生表"的性能税。
+- 序与分页只长在外层，不在每片里。剪枝是真的少问：范围只覆盖二月时，一月与三月的片根本不出现在文本里。
+- **跨片明确拒绝三件事**（都是抛，不是静默给一份错数）：没选片就读；跨片 `JOIN`／`Include`（每片各连一遍会把"一条主行配几份子行"变成片内的事）；跨片聚合／分组／`HAVING`（`COUNT(*)` 打在 `UNION ALL` 外面是对的，`AVG` 与"分组之后再数有几组"不是包一层能救的，而"每片各分各的组、键不合并"正是隔壁那一族的形态）。拒绝消息里写着走得通的那条：把范围收到一片就是普通聚合；分页只要"有没有下一页"就传 `CountMethod.SkipTotal`。单片不受这一格限制。
+
+写侧：一片一句。
+
+```csharp
+await orm.InsertRange(logs).ExecuteAffrowsAsync();   // 跨三月的六行 = 三句各两个 VALUES，不是一句六个
+var upd = orm.Update<AccessLog>().SplitTable(new DateTime(2026, 2, 9))   // 改与删钉住一片，且必须在链首
+            .Set(o => o.Status, 299).Where(o => o.Status == 404);
+await orm.Delete<AccessLog>().SplitTable(new DateTime(2026, 2, 9)).Where(o => o.Status == 500).ExecuteAffrowsAsync();
+```
+
+- 分块计划里每块多了一颗 `RowOrdinals`：那块覆盖的入参下标（分表后不再是连续区间）。单行批也带着它，不留"只有一片时省掉"的特例。
+- 装载通道（批量高速层那一档，§3.2）在分表上是一片一次递交，往返次数逐片取整再相加。
+- **分片键为空的那一行当场抛、一条都不写**（不把空值"当作今天"送进今天那张表）。
+
+建片：范围只有业务知道，所以库不猜。
+
+```csharp
+var shards = await orm.CreateSplitTablesAsync<AccessLog>(new DateTime(2026, 1, 1), new DateTime(2026, 3, 31));
+var script = orm.SplitTablesScript<TicketRow>(0, 1, 2, 3);   // 不连库，交回文本，走 §9.5 那套脚本模式
+```
+
+- `Created`／`AlreadyThere` 逐张先问存在再发 DDL，所以同一范围跑第二趟是"新建 0 张、已在 3 张"，不是撞一条"表已存在"。
+- **`IndexesNotCreated` 永远有内容**：片上不随片建索引。"只给第一张片建索引"是一次看起来建好了的假绿，而索引名在同一模式的 N 张片上本来就会撞。
+- 一次选片的片数上限 512（日档跨十年是 3 653 张表，`UNION ALL` 挂那么多分支在任何一家都是编译到死），越界报一句可行动的错。
+- 这一口是 DDL，走 `SyncStructure` 那道同一扇门（要么 `FastSqlOrmOptions.ForceSchemaSync`，要么 `DOTNET_ENVIRONMENT=Development`），生产启动期不会自己建片。
+
+**与变更跟踪器互斥**：分表实体可以被读进会话（`Attach`，不发语句，因此放行），但 `SaveChanges` 会在开事务之前逐行问"这一行此刻会不会被写出去"，会写就把整次保存拒掉（报的是 `FastSqlException`）。理由是会话的身份映射按主键记账，而同一个主键在分表里可以占着两张片上的各一行 —— 要先定"跨片的一行由什么指认"才谈得上写回，那一格规格还没裁。
+
+**这一档现在证到了哪里**：活库见证只有 SQL Server 上的 `Month` 与 `Hash` 两档（集成册 `SplitTablePathTests` 9 颗）；`Day`／`Week`／`Season`／`Year` 四档今天只有离线文本与换算用例；示例 §12 在真 SQLite 上跑过三片合并读与哈希逐桶读，那是文件库不是厂商库。离线 97 颗（`SplitTableTests` 63 + `TableNamingEmissionTests` 34），黄金样本 2 份（`golden/sqlserver/split-union-three-shards.sql`、`split-update-one-shard.sql`）。可重跑：`samples/FastSql.Sample` 的 §12（建三月三片 → 六行三句 → 合并读 6 行 → 剪枝 2 行 → 跨片翻页 → 跨片数总数被拒 → 钉片改 → 四桶逐桶读回）。
+
+
 ## 4. 当前边界与坑
 
 ### 4.1 十三家的状态口径统一是"离线文本层，未实测"
@@ -512,6 +579,8 @@ orm.Provider.CodeFirst.EmitCreateTable(writer, orm.Schemas.Contract<Order>());
 7. **反向工程读不全**：`SchemaColumn` 六格没有主键位（全仓库 `PRIMARY KEY` 的非注释命中一共七处、全在七份 CodeFirst 的建表清单里，目录侧 0 处）、注释七家一家都读不回（`SchemaColumn` 没有那一格，七份 `*SchemaReader` 一家都不例外；发射侧倒是只有三家发原生 `COMMENT ON COLUMN`：`PostgreSqlCodeFirst.cs:109`、`OracleCodeFirst.cs:139`、`XuguCodeFirst.cs:140`；另两家用别的形状 —— MySQL 系的列内子句 `COMMENT '…'`（`MySqlCodeFirst.cs:192`）、SQL Server 的扩展属性 `sys.sp_addextendedproperty`（`SqlServerCodeFirst.cs:62`），而 GBase 8s（`Gbase8sCodeFirst`）与 SQLite（`SqliteCodeFirst.cs:217`）的 `TryEmitColumnComment` 都直接返回 false —— SQLite 更硬，`COMMENT` 这个词在本族是语法错、根本没有列注释的落处）、虚谷那份目录查询里的 `IS_SERIAL` 与 `COMMENTS` 两列没有槽承接（`XuguSchemaReader.cs:68` 自陈"不是漏，是没有槽"）。所以别指望 CodeFirst + SchemaReader 做双向。
 
 8. **派生行没有列契约**：派生表的规划入口今天在了（`QueryModel.DerivedFrom` → AST 的 `SourceDerived`，用法见 §3.1 那一段），COUNT 一族发得出 `SELECT COUNT(*) FROM (SELECT … GROUP BY …) AS [t0]`，规格 §5.12 的"总数与页一致性"随之走完。缺的是另一半：外层要引用内层的某一列（分组之后再 `SUM(t0.Total)`），就得先给派生行造一份列契约 —— 派生行的列名与类型今天只活在内层那份投影计划里，没有可引用的形状，所以非 COUNT 的一族仍当场抛。那一格的替代口有两个：`WithSql`（内层自己写、外层仍按契约选列）与 §3.1 的原生 SQL 逃生舱（整句自己写）。
+
+9. **分表只有正查、没有反查，而分库一寸没动**（§3.6 那一节"库不猜"的另一面）：`SplitTables(范围)` 算的是"这次要问哪几张片"，而全仓库没有一颗 API 问库"这个模式里现有哪些片"。所以没选片时只能抛，不能"干脆扫全片"——现存几片只有库知道。跨库那一半仍堵在原处：`AdoExecutor` 在构造时把连接串存成字段（`src/FastSql.Core/Execution/AdoExecutor.cs:23`），一个 ORM 实例一条串；跨库要先换成可替换的解析器，而那颗键按表还是按实体规格没裁。跨片两阶段合并（各片取回再在内存里合）同样既不实现也未裁，所以 §3.6 那三格拒绝今天没有替代口，只有 `CountMethod.SkipTotal` 那一档绕得开。
 
 ### 4.4 跨库迁移时最容易踩的五格
 

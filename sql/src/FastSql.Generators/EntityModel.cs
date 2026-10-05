@@ -24,6 +24,22 @@ sealed class EntityModel
     public List<IndexModel> Indexes = [];
 
     public List<RelationshipModel> Relationships = [];
+
+    /// <summary>分表声明，null = 这张表不分表。与 <see cref="TableName"/> 分开存：
+    /// 名字是模板还是实名，两侧都由运行期的同一份校验判（<c>EntityContractFactory</c>），
+    /// 生成期不重复那一遍。</summary>
+    public SplitModel? Split;
+}
+
+/// <summary><c>[SplitTable]</c> 的编译期抄本：档名（<see cref="Kind"/> 是
+/// <c>FastSql.Metadata.SplitKind</c> 的成员名）、分片键成员名、桶数。</summary>
+sealed class SplitModel
+{
+    public string Kind = "";
+
+    public string Member = "";
+
+    public int Buckets;
 }
 
 sealed class ColumnModel

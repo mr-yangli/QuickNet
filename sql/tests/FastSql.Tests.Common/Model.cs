@@ -299,3 +299,52 @@ public class LooseNote : ISoftDelete
     [DaSchema.NotMapped]
     public bool Deleted { get; set; }
 }
+
+/// <summary>§16.4 时间档分表的靶子：类名给的是<em>模板</em>，真正的表名按月从 <see cref="OccurredAt"/> 算。
+///
+/// <para>主键故意是 <see cref="Guid"/> 而不是 <c>int</c>：分表实体禁止自增主键（两张片能各自发出同一个号，
+/// 而"谁冲突"要到合并统计时才看得见），<see cref="EntityContractFactory.CompleteSplit"/> 那一条硬判据
+/// 需要一个非自增主键才走得通，这一张就是它的现场。</para>
+///
+/// <para>它不复用 <see cref="Order"/> 的理由与 <see cref="Ticket"/> 同一句：<c>Order</c> 的列序与表名
+/// 被几十份黄金样本钉死，而这里要的是一张<em>名字算不出来</em>的表 —— 任何打在 <c>FastSqlOrder</c> 上的
+/// 样本都会跟着变红。</para></summary>
+[Table("FastSqlShardLog_{year}{month}")]
+[SplitTable(SplitKind.Month, nameof(OccurredAt))]
+[Index("IX_ShardLog_Level", nameof(Level))]
+public class ShardLog
+{
+    public Guid Id { get; set; }
+
+    [Column(Length = 64)]
+    public string? Message { get; set; }
+
+    public int Level { get; set; }
+
+    /// <summary>分片键。时间档要日期类型，而它<em>同时是一列</em> —— 那条判据（分片键指向一颗没映射的属性就当场抛）
+    /// 的负样本在 <c>SplitTableTests</c> 里另造实体，不在这里挖坑。</summary>
+    public DateTime OccurredAt { get; set; }
+
+    /// <summary>一根普通的引用导航：分表那一档要判的是"跨片不做连接与急切加载"，
+    /// 而 <c>Include</c> 要一个真能解析成关系边的属性才走到那一步（外键列按约定 <c>CustomerId</c> 命中）。</summary>
+    public int CustomerId { get; set; }
+
+    public Customer? Customer { get; set; }
+}
+
+/// <summary>§16.4 哈希档分表的靶子：四个桶，桶号从 <see cref="TenantId"/> 取模。</summary>
+/// <remarks>桶数故意是 4 而不是 2：去重与越界两格在 4 上才分得出"给的桶号确实进了清单的第几位"。
+/// 桶键是 <see cref="int"/> 而不是字符串，为的是让"整数直接取模、不经 <c>GetHashCode()</c>"那条口径
+/// 在离线用例里能写成一个死的期望数。</remarks>
+[Table("FastSqlTenantRow_{shard}")]
+[SplitTable(SplitKind.Hash, nameof(TenantId), Buckets = 4)]
+public class TenantRow
+{
+    public Guid Id { get; set; }
+
+    /// <summary>分片键（哈希档）。同一个值在任何进程里都算出同一个桶，那是这条声明唯一要担保的事。</summary>
+    public int TenantId { get; set; }
+
+    [Column(Length = 64)]
+    public string? Name { get; set; }
+}

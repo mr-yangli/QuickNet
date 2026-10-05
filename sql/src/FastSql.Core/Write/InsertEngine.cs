@@ -137,24 +137,28 @@ sealed class InsertEngine<T> : IInsert<T> where T : class
 
         if (decision.Channel is { } channel)
         {
-            var batch = CopyRequest(preparation);
-            var width = batch.Rows.Count;
-            var trips = 1;
-
-            // rowsPerRoundTrip 在装载通道这一档说的是"一次递交几行"（IInsert.WithBulk 的抬头），与文本层同一个旋钮、
-            // 同一条只压不抬：这里没有参数预算那道界，所以上限只有这批的行数本身。
-            if (_rowsPerRoundTrip is { } cap && cap < width)
-            {
-                width = cap;
-                trips = (batch.Rows.Count + width - 1) / width;
-            }
+            // 分表时一片一次递交（装载通道的目标表是一次一个，混不了两片的行），
+            // 所以"几次往返"是逐片取整再相加，而递交次数上限按各片自己的行数算。
+            var batches = CopyRequests(preparation);
+            var width = 0;
+            var trips = 0;
 
             written = 0;
 
-            for (var first = 0; first < batch.Rows.Count; first += width)
-                written += await _orm.Ado
-                    .CopyAsync(channel, Slice(batch, first, width), tag, ct)
-                    .ConfigureAwait(false);
+            foreach (var batch in batches)
+            {
+                // rowsPerRoundTrip 在装载通道这一档说的是"一次递交几行"（IInsert.WithBulk 的抬头），与文本层同一个旋钮、
+                // 同一条只压不抬：这里没有参数预算那道界，所以上限只有这一片的行数本身。
+                var slice = _rowsPerRoundTrip is { } cap && cap < batch.Rows.Count ? cap : batch.Rows.Count;
+
+                width = Math.Max(width, slice);
+                trips += (batch.Rows.Count + slice - 1) / slice;
+
+                for (var first = 0; first < batch.Rows.Count; first += slice)
+                    written += await _orm.Ado
+                        .CopyAsync(channel, Slice(batch, first, slice), tag, ct)
+                        .ConfigureAwait(false);
+            }
 
             // 通道报回的数与递交的数不等 = 部分写入。少报的数比少一列危险（v0.32 那一判同一条：
             // 绿着交出一个看着合法的结果，调用方拿不到异常），所以这里抛而不是把 report 改小。
@@ -210,11 +214,13 @@ sealed class InsertEngine<T> : IInsert<T> where T : class
                 // 装载通道这一档没有参数预算那道界，所以 _rowsPerRoundTrip 的上限就是这批的行数；
                 // 不压时一次递交（执行段用同一组数，两处不许各算一遍）。
                 var width = _rowsPerRoundTrip is { } cap && cap < rows ? cap : rows;
-                var trips = (rows + width - 1) / width;
+                var trips = CopyTrips(preparation, width);
 
                 return new BulkDecision(new BulkReport(requested, BulkMethod.CopyChannel, rows, trips, width, false,
                     $"{rows} 行走 {provider.Kind} 的装载通道（§12.1 的 L1）：不发 SQL 文本、不走参数，" +
-                    (trips == 1 ? "一次递交。" : $"分 {trips} 次递交、每次 {width} 行（块宽是请求压下来的）。") +
+                    (preparation.Groups is { Count: > 1 } shardGroups
+                        ? $"分 {shardGroups.Count} 张片、共 {trips} 次递交（一片一次递交，跨片不合并）。"
+                        : trips == 1 ? "一次递交。" : $"分 {trips} 次递交、每次 {width} 行（块宽是请求压下来的）。") +
                     "通道内部怎么分批是驱动的事，对上层是一次递交一块；改写类钩子（CudBuilding / ParameterBinding）在这一档不适用。"), channel);
             }
 
@@ -289,21 +295,70 @@ sealed class InsertEngine<T> : IInsert<T> where T : class
         return Math.Min(StatementEmitter.RowsPerStatement(budget, preparation.Columns.Length), _rowsPerRoundTrip ?? int.MaxValue);
     }
 
+    /// <summary>往返次数。<b>分表时逐片取整再相加</b>：三片各 7 行、块宽 10 是 3 次而不是一次 ——
+    /// 一块的 <c>VALUES</c> 只进得了一张表，跨片合并那"半块"没有能落的目标。不分表时那个分支
+    /// 就是原来那一句，一个字节都不多分配。</summary>
     int Trips(Preparation preparation, BulkMethod method)
-        => (_rows.Length + ChunkRows(preparation, method) - 1) / ChunkRows(preparation, method);
+    {
+        var width = ChunkRows(preparation, method);
 
-    /// <summary>递给装载通道的那一批：<b>列清单照文本层</b>（自增列与并发列都不进，理由与
+        if (preparation.Groups is not { } groups)
+            return (_rows.Length + width - 1) / width;
+
+        var trips = 0;
+
+        foreach (var (_, rows) in groups)
+            trips += (rows.Length + width - 1) / width;
+
+        return trips;
+    }
+
+    /// <summary>装载通道的递交次数：不分表就是 <c>ceil(总行数 / 块宽)</c>；分表时逐片取整再相加 ——
+    /// 三片各 7 行、块宽 10 是 3 次而不是一次，因为一次递交只有一个目标表。
+    /// <b><see cref="Decide"/> 的估算与 <see cref="ExecuteBulkAsync"/> 的实数共用这一颗</b>（§12.2 那句
+    /// "离线看到的层与执行走的那一层之间没有第二套判据可漂移"）。</summary>
+    int CopyTrips(Preparation preparation, int width)
+    {
+        if (preparation.Groups is not { } groups)
+            return (_rows.Length + width - 1) / width;
+
+        var trips = 0;
+
+        foreach (var (_, rows) in groups)
+            trips += (rows.Length + width - 1) / width;
+
+        return trips;
+    }
+
+    /// <summary>递给装载通道的那一批，<b>分表时一片一份</b>（装载通道的目标表是一次递交一个，
+    /// 混不了两片的行）。非分表实体只产出一颗，与不分表的今天逐字同形。</summary>
+    List<BulkCopyRequest> CopyRequests(Preparation preparation)
+    {
+        if (preparation.Groups is not { } groups)
+            return [CopyRequestFor(preparation, preparation.Contract.Table, null)];
+
+        var requests = new List<BulkCopyRequest>(groups.Count);
+
+        foreach (var group in groups)
+            requests.Add(CopyRequestFor(preparation, group.Table, group.Rows));
+
+        return requests;
+    }
+
+    /// <summary><see cref="CopyRequests"/> 的那一份产物：<b>列清单照文本层</b>（自增列与并发列都不进，理由与
     /// <see cref="Prepare"/> 那两条 continue 同一条），每格过 <see cref="Values.IValueBinder"/> 那一扇门。
-    /// 目标表名由 <see cref="ISqlDialect.EmitTableName"/> 产，所以 COPY 落的那一张与 <c>INSERT</c> 写的必然是同一张。</summary>
-    BulkCopyRequest CopyRequest(Preparation preparation)
+    /// 目标表名由 <see cref="ISqlDialect.EmitTableName"/> 产，所以 COPY 落的那一张与 <c>INSERT</c> 写的必然是同一张
+    /// —— 分表时也是同一张：两者拿的都是 <see cref="Preparation"/> 里那一份已换算好的片名。</summary>
+    BulkCopyRequest CopyRequestFor(Preparation preparation, TableInfo table, int[]? ordinals)
     {
         var binder = _orm.Provider.Values;
         var columns = preparation.Columns;
-        var payload = new object?[preparation.Cells.Length][];
+        var count = ordinals?.Length ?? preparation.Cells.Length;
+        var payload = new object?[count][];
 
         for (var row = 0; row < payload.Length; row++)
         {
-            var source = preparation.Cells[row];
+            var source = preparation.Cells[ordinals is null ? row : ordinals[row]];
             var cells = new object?[columns.Length];
 
             // 名字在这一趟里是白花的（装载通道不接 DbParameter），但类型归一只长在这颗门上：
@@ -314,11 +369,11 @@ sealed class InsertEngine<T> : IInsert<T> where T : class
             payload[row] = cells;
         }
 
-        return new BulkCopyRequest(DestinationTable(preparation), columns, payload);
+        return new BulkCopyRequest(DestinationTable(preparation, table), columns, payload);
     }
 
     /// <summary>把已算好的那一批切出第 <paramref name="first"/> 行起的 <paramref name="width"/> 行。
-    /// <b>切的是行数组，不重走取值与归一</b>：<see cref="CopyRequest"/> 只算一次，格子值与列清单在几次递交之间
+    /// <b>切的是行数组，不重走取值与归一</b>：<see cref="CopyRequests"/> 每片只算一次，格子值与列清单在几次递交之间
     /// 是同一份 —— 而 §12.4 第 1 项那句"行序就是入参顺序"要靠这一点才成立。</summary>
     static BulkCopyRequest Slice(BulkCopyRequest batch, int first, int width)
     {
@@ -331,12 +386,12 @@ sealed class InsertEngine<T> : IInsert<T> where T : class
         return batch with { Rows = rows };
     }
 
-    string DestinationTable(Preparation preparation)
+    string DestinationTable(Preparation preparation, TableInfo table)
     {
         var dialect = _orm.Provider.Dialect;
-        var writer = new SqlWriter(new StringBuilder(preparation.Table.Length + 8), [], dialect.ParameterPrefix);
+        var writer = new SqlWriter(new StringBuilder(table.Name.Length + 8), [], dialect.ParameterPrefix);
 
-        dialect.EmitTableName(writer, preparation.Contract.Table);
+        dialect.EmitTableName(writer, table);
 
         return writer.ToSqlString();
     }
@@ -411,6 +466,7 @@ sealed class InsertEngine<T> : IInsert<T> where T : class
 
         foreach (var chunk in plan.Chunks)
         {
+            var rowOrdinals = chunk.RowOrdinals;
             var first = chunk.FirstRow;
             var backfilled = 0;
 
@@ -419,9 +475,11 @@ sealed class InsertEngine<T> : IInsert<T> where T : class
                 if (index == 0 && reader.FieldCount != expected)
                     throw new FastSqlException($"{_orm.Provider.Kind} 的回填结果集有 {reader.FieldCount} 列，期望 {expected} 列：发射层与键策略对不上，不能假设回填可用。");
 
-                // 回包第 index 行 ↔ 入参第 first + index 行。这条映射就是 §12.4 第 1 项的全部内容，
+                // 回包第 index 行 ↔ 这一块的第 index 行。这条映射就是 §12.4 第 1 项的全部内容，
                 // 集成测试按 payload 逐行证明它，而不是只证明"拿到了某个键"。
-                var entity = _rows[first + index];
+                // 分表时那一块行在入参数组里不连续，所以块自己带着那份下标表；不分表时它是 null，
+                // 走的还是 FirstRow + 行号那一句（不多一次数组分配）。
+                var entity = _rows[rowOrdinals is null ? first + index : rowOrdinals[index]];
 
                 for (var column = 0; column < expected; column++)
                     preparation.Schema.SetValue(entity, ordinals[column], reader.GetValue(column));
@@ -584,7 +642,44 @@ sealed class InsertEngine<T> : IInsert<T> where T : class
             tokens is null ? keyColumns : [.. keyColumns, .. tokens],
             tokenOrdinals is null ? identityOrdinals : [.. identityOrdinals, .. tokenOrdinals],
             cells,
-            traces);
+            traces)
+        {
+            Groups = SplitGroups(contract, schema),
+        };
+    }
+
+    /// <summary>分表实体把整批按目标片分组（片内保留<em>入参顺序</em>的行下标，片的先后按各片首行第一次
+    /// 出现的先后），非分表实体交回 <c>null</c> = "整批同一张表，照旧按连续区间切块"。
+    ///
+    /// <para><b>算在取值段而不是发射段</b>：<see cref="SplitRouting.Resolve"/> 读的是实体上的分片键值，而
+    /// <c>AuditValue</c> 刚在那一段跑过 —— 发射段再读一次，三个出口（各自的文本、各自的构建时机）就可能读到
+    /// 钩子改过的与没改过的两份值，于是同一批行在不同出口里进了不同的片。</para>
+    ///
+    /// <para>分片键为空的那一行在这里当场抛：一条都不写，而不是按 SqlSugar 那一族的"空值当作今天"
+    /// 把行静默送进本月那张表（<c>SplitTableService.cs:65,75-76</c> 的读码结论）。</para></summary>
+    List<(TableInfo Table, int[] Rows)>? SplitGroups(EntityContract contract, IEntityTypeSchema<T> schema)
+    {
+        if (contract.Table.Split is not { } split)
+            return null;
+
+        var ordinal = Array.IndexOf(contract.Columns, contract.ByMember[split.MemberName]);
+        var groups = new List<(TableInfo Table, List<int> Rows)>();
+        var index = new Dictionary<TableInfo, int>();
+
+        for (var row = 0; row < _rows.Length; row++)
+        {
+            var table = SplitRouting.Resolve(contract.Table, split, schema.GetValue(_rows[row], ordinal));
+
+            if (index.TryGetValue(table, out var at))
+                groups[at].Rows.Add(row);
+            else
+            {
+                index[table] = groups.Count;
+                groups.Add((table, [row]));
+            }
+        }
+
+        return [.. groups.ConvertAll(g => (g.Table, g.Rows.ToArray()))];
     }
 
     /// <summary>发射段：按 §12.3 的公式分块，每块一份独立 AST + <see cref="DialectSql"/> + 参数表。</summary>
@@ -632,14 +727,18 @@ sealed class InsertEngine<T> : IInsert<T> where T : class
 
         var chunks = new List<InsertChunk>((_rows.Length + rowsPerStatement - 1) / rowsPerStatement);
 
-        for (var first = 0; first < _rows.Length; first += rowsPerStatement)
+        // 建一段文本：不分表时是"连续的这几行"（ordinals 为 null，回填按 FirstRow + 行号对回去），
+        // 分表时是"这一张片的那几行"，它们的下标不连续，所以块要自带那份下标表。
+        // 两条路共用同一段发射与钩子代码 —— 差别只在表位给哪张表、哪几行进这一块。
+        void EmitChunk(TableInfo table, int[]? ordinals, int first, int count)
         {
-            var count = Math.Min(rowsPerStatement, _rows.Length - first);
             var ast = new InsertStatement
             {
-                Table = new TableRef(0, FastSqlOrm.AliasAt(0), preparation.Contract.Table, preparation.Contract),
+                Table = new TableRef(0, FastSqlOrm.AliasAt(0), table, preparation.Contract),
                 Columns = columns,
-                Rows = RowsOf(preparation.Cells, first, count, columns),
+                Rows = ordinals is null
+                    ? RowsOf(preparation.Cells, first, count, columns)
+                    : RowsOf(preparation.Cells, ordinals, columns),
 
                 // 回读形不发 RETURNING：键不是这条 INSERT 的结果集，是同一句命令尾巴上那条 SELECT 的。
                 Returning = postRead ? [] : returning,
@@ -657,7 +756,22 @@ sealed class InsertEngine<T> : IInsert<T> where T : class
             var emitted = new DialectSql(writer.ToSqlString(), writer.Parameters);
             var sql = StatementEmitter.ApplyBinding(_orm, StatementEmitter.ApplyCud(_orm, emitted, "insert", traces, ref step), traces, ref step);
 
-            chunks.Add(new InsertChunk(first, count, ast, sql));
+            chunks.Add(new InsertChunk(ordinals is null ? first : ordinals[0], count, ast, sql) { RowOrdinals = ordinals });
+        }
+
+        if (preparation.Groups is null)
+        {
+            for (var first = 0; first < _rows.Length; first += rowsPerStatement)
+                EmitChunk(preparation.Contract.Table, null, first, Math.Min(rowsPerStatement, _rows.Length - first));
+        }
+        else
+        {
+            foreach (var (table, rows) in preparation.Groups)
+                for (var first = 0; first < rows.Length; first += rowsPerStatement)
+                {
+                    var count = Math.Min(rowsPerStatement, rows.Length - first);
+                    EmitChunk(table, rows[first..(first + count)], 0, count);
+                }
         }
 
         var reason = degraded
@@ -671,6 +785,9 @@ sealed class InsertEngine<T> : IInsert<T> where T : class
         else if (_rowsPerRoundTrip is { } cap && cap < budgetRows && !degraded)
             reason += $" 块宽 {rowsPerStatement} 是请求压下来的（预算允许 {budgetRows} 行）。";
 
+        if (preparation.Groups is { Count: > 1 } shards)
+            reason += $" 这批行分布在 {shards.Count} 张片上：块按片切，跨片不共用一条语句（一条 INSERT 只有一个目标表）。";
+
         if (chunks.Count > 1)
             reason += " 跨块不是原子的（§12.4 第 8 项）：要整批原子就包 §6 的事务。";
 
@@ -680,7 +797,9 @@ sealed class InsertEngine<T> : IInsert<T> where T : class
     ColumnContract[] Require(ColumnContract[] columns, string whyEmpty)
         => columns.Length > 0 ? columns : throw new FastSqlException($"{Prepare().Table} {whyEmpty}");
 
-    /// <summary>每格都参数化；<c>ParameterBinding</c> 的回放在 <c>StatementEmitter.ApplyBinding</c>，三条写链共用一份。</summary>
+    /// <summary>每格都参数化；<c>ParameterBinding</c> 的回放在 <c>StatementEmitter.ApplyBinding</c>，三条写链共用一份。
+    /// <b>不分表走这一颗，一块不给它多分配一个下标数组</b>（§12.7 钉的是每次插入的字节数与分配数，
+    /// 为分表那一条路把连续区间物化成 <c>int[]</c> 是让整批调用方替它付钱）。</summary>
     static IReadOnlyList<IReadOnlyList<SqlExpression?>> RowsOf(object?[][] cells, int first, int count, ColumnContract[] columns)
     {
         var rows = new IReadOnlyList<SqlExpression?>[count];
@@ -692,6 +811,27 @@ sealed class InsertEngine<T> : IInsert<T> where T : class
 
             // 每一格都是参数：这一版不产生 DEFAULT 格（那要走"部分列插入"，见 §16 的 IgnoreColumns）。
             // 值为 null 也照样参数化成 NULL，而不是让那一格落 DEFAULT —— 有默认值约束的列上这两者不同。
+            for (var column = 0; column < columns.Length; column++)
+                values[column] = new ParameterValue(source[column], columns[column]);
+
+            rows[row] = values;
+        }
+
+        return rows;
+    }
+
+    /// <summary>分表那一块：行在入参数组里不连续（按月切表时相邻两行可以隔三个月），所以这里按
+    /// 那一份下标表取行，其余与上面那颗逐字相同。两棵的<em>内层</em>只有一份参数化形状可言，
+    /// 是因为它总共就三行 —— 抽成一颗共享方法要为每次分块多走一层调用与一个数组。</summary>
+    static IReadOnlyList<IReadOnlyList<SqlExpression?>> RowsOf(object?[][] cells, int[] ordinals, ColumnContract[] columns)
+    {
+        var rows = new IReadOnlyList<SqlExpression?>[ordinals.Length];
+
+        for (var row = 0; row < rows.Length; row++)
+        {
+            var source = cells[ordinals[row]];
+            var values = new SqlExpression?[columns.Length];
+
             for (var column = 0; column < columns.Length; column++)
                 values[column] = new ParameterValue(source[column], columns[column]);
 
@@ -728,6 +868,13 @@ sealed class InsertEngine<T> : IInsert<T> where T : class
         object?[][] Cells,
         IReadOnlyList<HookTrace> Traces)
     {
+        /// <summary>分表实体的目标片分组，null = 不分表（整批同一张表，切块照旧走连续区间）。
+        /// 片的<em>内容</em>是那几行在入参数组里的下标，所以一个块装的行可以不连续，而回填仍按
+        /// <see cref="InsertChunk.RowOrdinals"/> 对得回去。<b>在取值段一次算完</b>：发射段、装载通道、
+        /// 往返次数估算三处都要分组，而 <see cref="SplitRouting.Resolve"/> 读的是实体上已被
+        /// <c>AuditValue</c> 填过的分片键值 —— 三处各读各的就会给出三份可能不同的分片答案。</summary>
+        public IReadOnlyList<(TableInfo Table, int[] Rows)>? Groups { get; init; }
+
         public string Table => Contract.Table.Name;
     }
 

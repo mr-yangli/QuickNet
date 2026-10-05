@@ -22,6 +22,7 @@ sealed class UpdateEngine<T> : IUpdate<T> where T : class
 {
     readonly FastSqlOrm _orm;
     readonly EntityContract _contract;
+    readonly TableInfo? _target;
     readonly TableRef _table;
     readonly IReadOnlyList<SetClause> _sets;
     readonly SqlExpression? _where;
@@ -29,22 +30,78 @@ sealed class UpdateEngine<T> : IUpdate<T> where T : class
     UpdatePlan? _plan;
 
     public UpdateEngine(FastSqlOrm orm)
-        : this(orm, [], null)
+        : this(orm, [], null, null)
     {
     }
 
-    UpdateEngine(FastSqlOrm orm, IReadOnlyList<SetClause> sets, SqlExpression? where)
+    UpdateEngine(FastSqlOrm orm, IReadOnlyList<SetClause> sets, SqlExpression? where, TableInfo? target)
     {
         _orm = orm;
         _contract = orm.Schemas.Contract<T>();
+        _target = target;
+
         // 目标的自引用名由方言定（§4 的 WriteTargetAlias）：Oracle 血统不能给写目标起别名，
         // 那一家只能用表名，而 WHERE 里的列前缀必须与它一致 —— 见 ISqlDialect.WriteTargetAlias 的注释。
-        _table = new TableRef(0, _orm.Provider.Dialect.WriteTargetAlias(_contract.Table), _contract.Table, _contract);
+        // 分表时这里是<em>那一张片</em>（SplitTable 已经把它钉成一片），所以别名与列前缀都跟着片名走 ——
+        // 这也是 <see cref="SplitTable(DateTime)"/> 必须放在链首的原因（下面那颗守卫）。
+        var table = target ?? _contract.Table;
+
+        _table = new TableRef(0, _orm.Provider.Dialect.WriteTargetAlias(table), table, _contract);
         _sets = sets;
         _where = where;
     }
 
     // ── 算子 ──────────────────────────────────────────────────────────
+
+    /// <summary>分表实体的 UPDATE 要打的那一片。<b>一次一片，不是范围</b>：这条链上的语句是一条
+    /// <c>UPDATE</c>，而一条 UPDATE 只有一个目标表；给范围就要产 N 条并<em>悄悄</em>执行 N 条，
+    /// 而这条链的契约写的是「<c>ToSql()</c> 与紧随其后的 <c>ExecuteAffrowsAsync()</c> 是同一条语句」。
+    /// 要多片各改一遍就自己按片调 N 次（或者要跨片的整体改写时走 <c>orm.Ado</c> 的原生 SQL 口）。
+    /// <b>必须放在链首</b>：SET 与 WHERE 的列引用是翻译时绑到当时的目标上的，而 Oracle 血统那一家
+    /// 的自引用名就是表名本身（<c>WriteTargetAlias</c>），先写了条件再换片会让前缀停在模板名上。</summary>
+    public IUpdate<T> SplitTable(DateTime at)
+        => Single(SplitAt(at));
+
+    /// <summary>分表实体的 UPDATE 要打的那一片（哈希档）。</summary>
+    public IUpdate<T> SplitTable(int bucket)
+        => Single(SplitRouting.EnumerateBuckets(_contract.Table, Split(), [bucket])[0]);
+
+    UpdateEngine<T> Single(TableInfo target)
+    {
+        if (_sets.Count > 0 || _where is not null)
+            throw new FastSqlException(
+                $"{_contract.Table.Name} 的 SplitTable 要放在链式最前面：这条链上已叠加 {_sets.Count} 个 SET/{(_where is null ? 0 : 1)} 个条件，" +
+                "它们的列引用仍指向没选片时的那个目标。");
+
+        return new UpdateEngine<T>(_orm, _sets, _where, target);
+    }
+
+    /// <summary>这一条链的目标片：已选就用它，没选而实体分了片就在<em>构建之前</em>拒。</summary>
+    TableInfo Target()
+    {
+        if (_target is { } chosen)
+            return chosen;
+
+        if (_contract.Table.Split is null)
+            return _contract.Table;
+
+        throw new FastSqlException(
+            $"{_contract.Table.Name} 是分表实体（{_contract.Table.Split.Kind} 档），UPDATE 要先说打哪一片：SplitTable(那一片里的一个日期) 或 SplitTable(桶号)。" +
+            "一次只给一片，因为一条 UPDATE 只有一个目标表，而这条链的契约是「ToSql() 与紧随其后的执行是同一条语句」。");
+    }
+
+    /// <summary>分片事实，只在实体确实分了片时才交出去。<b>取模板而不是取 <see cref="_table"/></b>：
+    /// 已经选过片时 <c>_table.Table.Split</c> 是 null（那是一张换算完的物理表），而范围换算要的仍然是那份模板。</summary>
+    SplitFacts Split()
+        => _contract.Table.Split
+           ?? throw new FastSqlException($"{_contract.Table.Name} 没有声明分表（类上没有 [SplitTable]），SplitTable 那一步无事可做。");
+
+    TableInfo SplitAt(DateTime at)
+    {
+        var split = Split();
+
+        return SplitRouting.EnumerateTime(_contract.Table, split, at, at)[0];
+    }
 
     public IUpdate<T> Set<TProp>(Expression<Func<T, TProp>> column, TProp value)
     {
@@ -67,7 +124,7 @@ sealed class UpdateEngine<T> : IUpdate<T> where T : class
     public IUpdate<T> Where(Expression<Func<T, bool>> predicate)
         => new UpdateEngine<T>(_orm, _sets, _where is null
             ? _orm.Expressions.Predicate(predicate, ScopeOf(predicate))
-            : And(_where, _orm.Expressions.Predicate(predicate, ScopeOf(predicate))));
+            : And(_where, _orm.Expressions.Predicate(predicate, ScopeOf(predicate))), _target);
 
     /// <summary>SET 左侧的列。四件事在这里判：<b>是不是列</b>（导航属性与计算成员不进 SET）、
     /// <b>是不是自增列</b>（库里那一列不接受写，除非开 IDENTITY_INSERT，P0 未接）、
@@ -81,7 +138,7 @@ sealed class UpdateEngine<T> : IUpdate<T> where T : class
                 throw new FastSqlException($"{_contract.Table.Name} 的 {target.ColumnName} 被设置了两次：后一次不会覆盖前一次，" +
                     "库里直接报错。要基于原值算就写成表达式那一档：Set(o => o.Amount, o => o.Amount + 1)。");
 
-        return new UpdateEngine<T>(_orm, [.. _sets, new SetClause(target, value)], _where);
+        return new UpdateEngine<T>(_orm, [.. _sets, new SetClause(target, value)], _where, _target);
     }
 
     ColumnContract ColumnOf(Expression body)
@@ -186,6 +243,12 @@ sealed class UpdateEngine<T> : IUpdate<T> where T : class
         if (_where is null)
             throw new FastSqlException(Guard.Whereless("UPDATE", _contract.Table.Name));
 
+        // 先问一次目标：分表而没选片时要的是 <see cref="Target"/> 那一句可行动的拒绝，而不是撞上
+        // EmitTableName 那道结构性兜底 —— 那一兜说的是"模板没换算成具体分片"，是给内核看的不变量，
+        // 不是给调用方看的用法说明。（值不用在这里取：<c>_table</c> 在建引擎时就按同一份目标建好了，
+        // 谓词的列引用绑的是那一个实例，换一份反而会让两边指不同的 TableRef。）
+        var table = Target();
+
         var traces = new List<HookTrace>();
         var step = 0;
 
@@ -208,7 +271,7 @@ sealed class UpdateEngine<T> : IUpdate<T> where T : class
         var emitted = new DialectSql(writer.ToSqlString(), writer.Parameters);
         var sql = StatementEmitter.ApplyBinding(_orm, StatementEmitter.ApplyCud(_orm, emitted, "update", traces, ref step), traces, ref step);
 
-        var reason = $"UPDATE {_contract.Table.Name}：SET {_sets.Count} 列（{string.Join("、", _sets.Select(s => s.Column.ColumnName))}），" +
+        var reason = $"UPDATE {table.Name}：SET {_sets.Count} 列（{string.Join("、", _sets.Select(s => s.Column.ColumnName))}），" +
             $"参数 {sql.Parameters.Count} 颗。条件按主键以外的列写时注意命中行数 —— 受影响行数等于谓词命中数，不等于改动了值的那几行。" +
             (injected > 0
                 ? $" WHERE 里除了 .Where(...) 那几句，还叠着 {injected} 条全局过滤器（§10.7 的 orm.Filters，它由内核加、不出现在这条链的调用里）。"
@@ -222,7 +285,9 @@ sealed class UpdateEngine<T> : IUpdate<T> where T : class
         return new UpdatePlan(ast, sql, reason, traces) { Provider = _orm.Provider };
     }
 
-    ExecutionTag Tag() => new("update", [_contract.Table.Name]);
+    /// <summary>日志与 AOP 上的表名给<em>物理片</em>而不是模板：一次 <c>UpdateTable</c> 只打一张片，
+    /// 而看日志的人要的是"改了哪张表"。</summary>
+    ExecutionTag Tag() => new("update", [Target().Name]);
 
     static int IdentifierChars(UpdateStatement ast)
         => ast.Table.Table.Name.Length + ast.Table.Alias.Length * 3 + ast.Sets.Sum(s => s.Column.ColumnName.Length) + 128;
@@ -235,30 +300,68 @@ sealed class DeleteEngine<T> : IDelete<T> where T : class
 {
     readonly FastSqlOrm _orm;
     readonly EntityContract _contract;
+    readonly TableInfo? _target;
     readonly TableRef _table;
     readonly SqlExpression? _where;
 
     DeletePlan? _plan;
 
     public DeleteEngine(FastSqlOrm orm)
-        : this(orm, null)
+        : this(orm, null, null)
     {
     }
 
-    DeleteEngine(FastSqlOrm orm, SqlExpression? where)
+    DeleteEngine(FastSqlOrm orm, SqlExpression? where, TableInfo? target)
     {
         _orm = orm;
         _contract = orm.Schemas.Contract<T>();
-        // 目标的自引用名由方言定（§4 的 WriteTargetAlias）：Oracle 血统不能给写目标起别名，
-        // 那一家只能用表名，而 WHERE 里的列前缀必须与它一致 —— 见 ISqlDialect.WriteTargetAlias 的注释。
-        _table = new TableRef(0, _orm.Provider.Dialect.WriteTargetAlias(_contract.Table), _contract.Table, _contract);
+        _target = target;
+
+        // 与 UPDATE 同一条方言口径（§4 的 WriteTargetAlias）：Oracle 血统那一家目标的自引用名就是表名，
+        // 所以选片必须发生在写条件之前，列前缀才跟得上换掉的那一张 —— 见 <see cref="SplitTable(DateTime)"/>。
+        var table = target ?? _contract.Table;
+
+        _table = new TableRef(0, _orm.Provider.Dialect.WriteTargetAlias(table), table, _contract);
         _where = where;
     }
+
+    /// <summary>分表实体的 DELETE 要打的那一片，口径与 <see cref="UpdateEngine{T}.SplitTable(DateTime)"/>
+    /// 逐字相同：一次一片（一条 DELETE 只有一个目标表），且必须放在链首。</summary>
+    public IDelete<T> SplitTable(DateTime at) => Single(SplitRouting.EnumerateTime(_contract.Table, Split(), at, at)[0]);
+
+    /// <summary>分表实体的 DELETE 要打的那一片（哈希档）。</summary>
+    public IDelete<T> SplitTable(int bucket) => Single(SplitRouting.EnumerateBuckets(_contract.Table, Split(), [bucket])[0]);
+
+    DeleteEngine<T> Single(TableInfo target)
+    {
+        if (_where is not null)
+            throw new FastSqlException(
+                $"{_contract.Table.Name} 的 SplitTable 要放在链式最前面：这条链上已叠加条件，它们的列引用仍指向没选片时的那个目标。");
+
+        return new DeleteEngine<T>(_orm, _where, target);
+    }
+
+    TableInfo Target()
+    {
+        if (_target is { } chosen)
+            return chosen;
+
+        if (_contract.Table.Split is null)
+            return _contract.Table;
+
+        throw new FastSqlException(
+            $"{_contract.Table.Name} 是分表实体（{_contract.Table.Split.Kind} 档），DELETE 要先说删哪一片：SplitTable(那一片里的一个日期) 或 SplitTable(桶号)。" +
+            "一次只给一片，因为一条 DELETE 只有一个目标表，而这条链的契约是「ToSql() 与紧随其后的执行是同一条语句」。");
+    }
+
+    SplitFacts Split()
+        => _contract.Table.Split
+           ?? throw new FastSqlException($"{_contract.Table.Name} 没有声明分表（类上没有 [SplitTable]），SplitTable 那一步无事可做。");
 
     public IDelete<T> Where(Expression<Func<T, bool>> predicate)
         => new DeleteEngine<T>(_orm, _where is null
             ? _orm.Expressions.Predicate(predicate, ScopeOf(predicate))
-            : new SqlBinaryExpression(BinaryOperator.And, _where, _orm.Expressions.Predicate(predicate, ScopeOf(predicate))));
+            : new SqlBinaryExpression(BinaryOperator.And, _where, _orm.Expressions.Predicate(predicate, ScopeOf(predicate))), _target);
 
     public DeletePlan Explain() => _plan ??= Build();
 
@@ -282,6 +385,10 @@ sealed class DeleteEngine<T> : IDelete<T> where T : class
     {
         if (_where is null)
             throw new FastSqlException(Guard.Whereless("DELETE", _contract.Table.Name));
+
+        // 与 UPDATE 同一句：分表而没选片要的是可行动的那一句，不是撞上发射口那道结构性兜底。
+        // 目标已经长在 <c>_table</c> 上（谓词的列引用绑的就是那一个实例），这里只取它的名义。
+        var table = Target();
 
         var traces = new List<HookTrace>();
         var step = 0;
@@ -311,7 +418,7 @@ sealed class DeleteEngine<T> : IDelete<T> where T : class
         // 写在 Reason 的第一句里，是因为开了软删的项目读到这里必须知道这一段描述还准不准。
         // v0.26 起这一句少了一半出处：全局过滤器已经会叠进上面的 WHERE，所以"这一句什么都没帮你加"不再成立，
         // 而软删那一半仍然没人做（orm.Behaviors.SoftDelete 还没有），于是那一句改口成点名那一口子。
-        var reason = $"DELETE FROM {_contract.Table.Name}：" + (sql.Text == emitted.Text
+        var reason = $"DELETE FROM {table.Name}：" + (sql.Text == emitted.Text
                 ? "物理删除，行不在了（§10.7 的软删要靠 CudBuilding 订阅者把这一句改写成 UPDATE，而 orm.Behaviors.SoftDelete 那一格还没有落地，所以本库自己不会做这个改写；库里那一行归你了）。"
                 : "这一句已被 CudBuilding 改写，最终执行的是 Sql 而不是这一格描述的东西（改了几步、每步前后文本见 HookReplay）。")
             + (injected > 0
@@ -325,7 +432,8 @@ sealed class DeleteEngine<T> : IDelete<T> where T : class
     Scope ScopeOf(LambdaExpression lambda)
         => Scope.Create(new QueryModel { Tables = [_table], Plan = new EntityProjection(0) }, lambda);
 
-    ExecutionTag Tag() => new("delete", [_contract.Table.Name]);
+    /// <summary>与 UPDATE 同一条口径：日志与 AOP 上给<em>物理片</em>的名字，一次只打一张片。</summary>
+    ExecutionTag Tag() => new("delete", [Target().Name]);
 }
 
 /// <summary>两条链共用的那句拒绝。<b>构建期硬拦</b>：没有 WHERE 的 UPDATE/DELETE 在语句还没生成时就抛，

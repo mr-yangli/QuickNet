@@ -61,6 +61,26 @@ public sealed class IndexAttribute(string name, params string[] memberNames) : A
     public bool Descending { get; set; }
 }
 
+/// <summary>把这一张<em>逻辑</em>表声明成分表：<see cref="TableAttribute.Name"/>（或 DataAnnotations 的
+/// <c>[Table]</c>、或类型名）此时给的是<b>带占位符的模板</b>，真正的表名按 <paramref name="kind"/>
+/// 从 <paramref name="field"/> 那一列的值算出来（占位符清单与各自的适用档在 <see cref="SplitRouting"/>）。</summary>
+/// <remarks><b>这一格不落 Fluent 等价写法</b>：Fluent 侧看不到它就得换一套校验时机，而分表最不能有的
+/// 是"两条路径算出两种表名"。要按运行期上下文改表名（影子表、租户表那一类）走的是另一格 ——
+/// 规格 §10.1 的 <c>TableRemap</c> 钩子，那颗今天仍未落地。</remarks>
+/// <param name="kind">分片算法档。</param>
+/// <param name="field">分片键的属性名。它必须是一列（被 <c>[Column(IsIgnore)]</c> 排除掉就当场抛），
+/// 时间档要日期类型，<see cref="SplitKind.Hash"/> 接受整数与字符串。</param>
+[AttributeUsage(AttributeTargets.Class)]
+public sealed class SplitTableAttribute(SplitKind kind, string field) : Attribute
+{
+    public SplitKind Kind { get; } = kind;
+
+    public string Field { get; } = field;
+
+    /// <summary>仅 <see cref="SplitKind.Hash"/> 需要，其余档忽略它。少于 2 个桶等于没分。</summary>
+    public int Buckets { get; set; }
+}
+
 /// <summary>乐观并发的比较列（§8.2、§10.1 的乐观锁那一档）。DataAnnotations 里没有等价的注解
 /// （<c>KeyAttribute</c> 是身份、<c>TimestampAttribute</c> 在 EF Core 的程序集里），所以这一格落在自研属性层。</summary>
 /// <remarks><b>它的语义是「只比较、不书写」，四件事同时成立</b>：这一列不进 <c>UPDATE</c> 的 <c>SET</c>、

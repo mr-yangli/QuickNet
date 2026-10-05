@@ -382,6 +382,24 @@ public abstract class DialectBase(IdentifierPolicy identifiers, IValueBinder val
                 EmitWrapped(derived.Query, writer);
                 break;
 
+            case SourceUnion union:
+                // 一片一条 SELECT，用 UNION ALL 串起来，整串占一个表位。这里发的是<em>本体</em>而不是
+                // <see cref="Emit"/>：分支带分页尾巴会写成"每片各取 N 行"，而括号里挂 ORDER BY 在
+                // T-SQL 与 Oracle 那一族还是语法错。序与分页只长在外层，那是编译口的事
+                // （<c>QueryCompiler.CompileSplit</c>），本方法只保证发不出别的形状。
+                writer.Append('(');
+
+                for (var i = 0; i < union.Branches.Count; i++)
+                {
+                    if (i > 0)
+                        writer.Append(" UNION ALL ");
+
+                    EmitSelectBody(union.Branches[i], writer);
+                }
+
+                writer.Append(')');
+                break;
+
             case SourceRawText raw:
                 // 文本一颗不动，只在外面包一层括号 —— 别名那一段在下面与各家同一条路（GBase 8s / Oracle 血统不写 AS）。
                 // 参数逐颗<em>登记而不落地名字</em>：名字已经在用户的文本里了，这里要的是让它进参数集合，
@@ -915,8 +933,16 @@ public abstract class DialectBase(IdentifierPolicy identifiers, IValueBinder val
     /// 所以这一口与 <see cref="EmitUpdateTarget"/> 是成对覆写的，见 <see cref="ISqlDialect.WriteTargetAlias"/>。</summary>
     public virtual string WriteTargetAlias(TableInfo table) => FastSqlOrm.AliasAt(0);
 
+    /// <summary>表名在<em>整个发射层唯一的出口</em>：读、三种写、装载通道都从这里过（规格 §16.4②
+    /// 说的"方言发射器是唯一出口"钉的就是这一颗，而它要的架构测试今天补在
+    /// <c>TableNamingEmissionTests</c>）。<b>分表模板不许原样发出去</b>：带着占位符发出去要么得到
+    /// 一句打到不存在的表上的 SQL，要么——走过一次 DDL——建出一张名字里真带 <c>{year}</c> 的表。
+    /// 两种都要到运行期才看得见，所以在这里当场抛。</summary>
     public virtual void EmitTableName(SqlWriter writer, TableInfo table)
     {
+        if (table.Split is { } split)
+            throw new FastSqlException($"分表实体 {table.Name}（{split.Kind} 档，分片键列 {split.ColumnName}）的表名模板没换算成具体分片就被送去发射——读侧要先给选片范围，写侧按行的分片键值算目标表");
+
         if (table.Schema is { Length: > 0 } schema)
         {
             EmitIdentifier(writer, schema);

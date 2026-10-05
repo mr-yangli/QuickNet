@@ -865,6 +865,8 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
             // 派生表内层引用的是它自己那份 Root，而它与外层的 Ref 是同一个对象 —— 不下钻就得不到改名，
             // 于是内层的 [t0] 与外层改出来的 [t6] 指向两套别名，嵌进外层 WHERE 的那一句会指错列。
             case SourceDerived derived: CollectTableRefs(derived.Query, map); break;
+            // 分表那一份是 N 个内层，每一个的 Root 都是它自己那张分片表位（别名同一个），下钻要逐个下。
+            case SourceUnion union: foreach (var branch in union.Branches) CollectTableRefs(branch, map); break;
         }
     }
 
@@ -921,6 +923,7 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
             SourceTable => new SourceTable(newRef),
             SourceSubquery sub => new SourceSubquery(newRef, RemapStatement(sub.Query, map)),
             SourceDerived derived => new SourceDerived(newRef, RemapStatement(derived.Query, map)),
+            SourceUnion union => new SourceUnion(newRef, [.. union.Branches.Select(b => RemapStatement(b, map))]),
             // 原生文本这一形没有可改名的列引用（那一段一颗不动），但<em>别名要跟着改</em>：外层那句的
             // WHERE 里的 [t1000].[Amount] 已经被改名，而 FROM (…) 挂的名字若还停在 [t0]，
             // 得到的是一句"无法绑定多部分标识符"。
