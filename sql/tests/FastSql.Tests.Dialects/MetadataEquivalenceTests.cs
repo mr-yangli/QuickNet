@@ -115,7 +115,9 @@ public sealed class MetadataEquivalenceTests
     {
         var lines = new List<string>
         {
-            $"table = {contract.Table.Schema ?? "-"}.{contract.Table.Name}",
+            // 表备注搭在同一行：G1 抄的是注解实参的字面量、G2 读的是注解实例（Fluent 那一层只有 G2 看得见），
+            // 两侧分叉时这一格是"改了备注而库里永远不改"的唯一读数（§9.5 的备注同步以这一格为来路）。
+            $"table = {contract.Table.Schema ?? "-"}.{contract.Table.Name} comment={contract.Table.Comment ?? "-"}",
 
             // 分表那一格（§16.4）：表名之外还要比"这一张是模板、按哪一档、从哪一列换算"。
             // 只比表名的话，G1 把桶数抄成 0 而 G2 抄成 4 也照样绿，而两侧算出的物理片名从第一天起就不同。

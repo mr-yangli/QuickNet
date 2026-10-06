@@ -57,10 +57,54 @@ public sealed class SqlServerCodeFirst(SqlServerTypes types) : ICodeFirstDialect
         writer.Append(" ALTER COLUMN ").Append(Definition(column));
     }
 
+    /// <summary>列备注。<b>T-SQL 没有 <c>COMMENT ON</c>，只有 <c>sp_addextendedproperty</c>，而它在属性
+    /// 已经存在的那一列上直接报错</b>。所以这一句自带"有没有"的判断：§9.5 的备注同步在改过备注的表上发的
+    /// 就是这一句，无条件 ADD 会让那一趟以"属性已存在"收尾——那是同步失败，不是"备注没变"。
+    /// 新建表那一趟走的也是这一句，只是它每一次都落进 <c>ELSE</c> 那一支。</summary>
     public bool TryEmitColumnComment(SqlWriter writer, TableInfo table, ColumnContract column)
     {
-        writer.Append("EXEC sys.sp_addextendedproperty @name=N'MS_Description', @value=");
-        writer.AppendStringLiteral(column.Comment ?? string.Empty, unicode: true);
+        EmitComment(writer, table, column.ColumnName, column.Comment);
+
+        return true;
+    }
+
+    /// <summary>表备注 = 同一颗存储过程、<c>minor_id=0</c> 的那一格。<b>这一家今天同时是"发得出"与"读得回"
+    /// 的那一家</b>（<see cref="SqlServerSchemaReader"/> 查 <c>sys.extended_properties</c>），所以 §9.5 的
+    /// 表备注同步在它身上是双向的：写了读得回，下一趟才判得出变没变。</summary>
+    public bool TryEmitTableComment(SqlWriter writer, TableInfo table, string? comment)
+    {
+        EmitComment(writer, table, null, comment);
+
+        return true;
+    }
+
+    void EmitComment(SqlWriter writer, TableInfo table, string? columnName, string? comment)
+    {
+        writer.Append("IF EXISTS (SELECT 1 FROM sys.extended_properties WHERE class=1 AND major_id=");
+        ObjectId(writer, table);
+
+        if (columnName is null)
+            writer.Append(" AND minor_id=0");
+        else
+        {
+            writer.Append(" AND minor_id=COLUMNPROPERTY(");
+            ObjectId(writer, table);
+            writer.Append(", ");
+            writer.AppendStringLiteral(columnName, unicode: true);
+            writer.Append(", 'ColumnId')");
+        }
+
+        writer.Append(" AND name=N'MS_Description') ");
+        EmitExtendedProperty(writer, "sp_updateextendedproperty", table, columnName, comment);
+
+        writer.Append(" ELSE ");
+        EmitExtendedProperty(writer, "sp_addextendedproperty", table, columnName, comment);
+    }
+
+    static void EmitExtendedProperty(SqlWriter writer, string procedure, TableInfo table, string? columnName, string? comment)
+    {
+        writer.Append("EXEC sys.").Append(procedure).Append(" @name=N'MS_Description', @value=");
+        writer.AppendStringLiteral(comment ?? string.Empty, unicode: true);
 
         writer.Append(", @level0type=N'SCHEMA', @level0name=");
         writer.AppendStringLiteral(table.Schema ?? "dbo", unicode: true);
@@ -68,10 +112,25 @@ public sealed class SqlServerCodeFirst(SqlServerTypes types) : ICodeFirstDialect
         writer.Append(", @level1type=N'TABLE', @level1name=");
         writer.AppendStringLiteral(table.Name, unicode: true);
 
-        writer.Append(", @level2type=N'COLUMN', @level2name=");
-        writer.AppendStringLiteral(column.ColumnName, unicode: true);
+        if (columnName is null)
+            return;
 
-        return true;
+        writer.Append(", @level2type=N'COLUMN', @level2name=");
+        writer.AppendStringLiteral(columnName, unicode: true);
+    }
+
+    /// <summary><c>OBJECT_ID</c> 吃的是<em>字符串里的那个标识符</em>，所以这里复用 <see cref="EmitTable"/>
+    /// 那一条发射路径（同一个 <c>IdentifierPolicy</c>、同一副方括号），再把结果当字面量交出去 ——
+    /// 名字里带单引号时由 <c>AppendStringLiteral</c> 负责翻倍，而不是由拼接负责。</summary>
+    void ObjectId(SqlWriter writer, TableInfo table)
+    {
+        var qualified = new SqlWriter(new(), [], '@');
+
+        EmitTable(qualified, table);
+
+        writer.Append("OBJECT_ID(");
+        writer.AppendStringLiteral(qualified.ToString(), unicode: true);
+        writer.Append(')');
     }
 
     public void EmitCreateIndex(SqlWriter writer, TableInfo table, IndexContract index)
@@ -91,6 +150,20 @@ public sealed class SqlServerCodeFirst(SqlServerTypes types) : ICodeFirstDialect
         }
 
         writer.Append(" )");
+    }
+
+    /// <summary>T-SQL 的 <c>DROP INDEX</c> 是"索引名 ON 表名"那一形，没有 <c>DROP INDEX 表名.索引名</c>
+    /// 也没有 <c>IF EXISTS</c> 的语法糖。这里不加 <c>IF EXISTS</c> 包裹：<b>会发这一句的现场，索引名是从
+    /// 目录读回来的</b>（<see cref="SqlServerSchemaReader"/> 的 <c>sys.indexes</c> 那一趟），它不在的那件事
+    /// 已经在计划层判掉了，多加一层存在判断只是把"名字读错了"这种缺陷按下去。
+    /// 唯一约束那一形删不动（要 <c>ALTER TABLE … DROP CONSTRAINT</c>），那一格由 <see cref="SchemaIndex.IsConstraint"/>
+    /// 挡在计划层，不会走到这里。</summary>
+    public bool TryEmitDropIndex(SqlWriter writer, TableInfo table, SchemaIndex index)
+    {
+        writer.Append("DROP INDEX ").Append(Identifiers.Quote(index.Name)).Append(" ON ");
+        EmitTable(writer, table);
+
+        return true;
     }
 
     string Definition(ColumnContract column)

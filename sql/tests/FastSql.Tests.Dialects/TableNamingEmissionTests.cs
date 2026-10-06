@@ -140,12 +140,16 @@ public sealed class TableNamingEmissionTests
         Assert.Equal(16, kinds.Length);
     }
 
-    /// <summary>收 <see cref="TableInfo"/> 的接口成员是一个<em>闭集</em>，九颗各有角色：DML 侧只有
+    /// <summary>收 <see cref="TableInfo"/> 的接口成员是一个<em>闭集</em>，十一颗各有角色：DML 侧只有
     /// <see cref="ISqlDialect.EmitTableName"/> 一颗，<c>WriteTargetAlias</c> 是同一条分岔的别名那半
-    /// （Oracle 血统的自引用名就是表名，所以它也得收这颗值）；<c>ICodeFirstDialect</c> 那四颗只可能被喂换算好的片，
+    /// （Oracle 血统的自引用名就是表名，所以它也得收这颗值）；<c>ICodeFirstDialect</c> 那六颗只可能被喂换算好的片，
     /// 那一头由 <see cref="Nothing_a_family_emits_ever_carries_a_placeholder"/> 的 DDL 两格量；
     /// <c>IdentityInsertToggle</c> 本版本不可达（§12.4），它现在是名单上的一处<em>已知敞口</em>而不是漏网；
-    /// 读系统表那两颗把名字放进绑定参数、不进文本。新开第十颗就是"又开了一条命名的路"，必须人来认账。</summary>
+    /// 读系统表那两颗把名字放进绑定参数、不进文本。新开第十一颗就是"又开了一条命名的路"，必须人来认账。
+    /// <b>本条认的账就是第十一颗</b>：<c>TryEmitDropIndex</c> 是 §9.5 结构同步"库里多出的那条索引要不要删"
+    /// 那一档开的（<c>SchemaSyncDropIndexes</c>，默认关，用户 2026-10-06 当面定的那一颗）。
+    /// 它带默认实现（false = 这一家不接），所以今天只有 SQL Server 一家覆写；它把表名写进的是
+    /// <c>DROP INDEX … ON 表</c> 的表名那一格，走 <c>EmitTableName</c> 同一条发射路径，不另造口径。</summary>
     [Fact]
     public void The_abstraction_surface_takes_a_table_in_exactly_the_named_members()
     {
@@ -163,6 +167,8 @@ public sealed class TableNamingEmissionTests
             "ICodeFirstDialect.EmitAlterColumnPrecision",
             "ICodeFirstDialect.EmitCreateIndex",
             "ICodeFirstDialect.TryEmitColumnComment",
+            "ICodeFirstDialect.TryEmitDropIndex",
+            "ICodeFirstDialect.TryEmitTableComment",
             "IKeyStrategy.IdentityInsertToggle",
             "ISchemaReader.ProbeLengthSemanticsAsync",
             "ISchemaReader.ReadTableAsync",

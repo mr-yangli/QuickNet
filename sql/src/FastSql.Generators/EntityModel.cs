@@ -19,6 +19,10 @@ sealed class EntityModel
 
     public string? TableSchema;
 
+    /// <summary>表备注，只可能来自 <c>[Table(Comment=…)]</c>（Fluent 那一层生成期读不到，与
+    /// <c>ToTable</c> 同一取向）。null = 注解没写这一格。</summary>
+    public string? TableComment;
+
     public List<ColumnModel> Columns = [];
 
     public List<IndexModel> Indexes = [];

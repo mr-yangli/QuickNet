@@ -118,9 +118,16 @@ public sealed class ContractResolver(IDbProvider provider, ModelConfiguration? c
         // "同一张表在两条路径上属于两座库"有能发生的形状，而那一格的代价是语句发到另一座库里去。
         var source = clrType.GetCustomAttribute<DataSourceAttribute>();
 
+        // 表备注与表名同一条优先级链（Fluent > 自研 > DataAnnotations），只是最后一层没有等价注解：
+        // <c>System.ComponentModel.DataAnnotations.Schema.TableAttribute</c> 只有 Name/Schema 两格。
+        // 这一格从前是<em>读了又丢</em>的（注解与 Fluent 两边都能写、契约里没处放），于是"改了表备注"
+        // 在结构同步那一头根本不是"改了一格契约"，而是什么都没改。
+        var comment = fluent?.Comment ?? fastsql?.Comment;
+
         return new TableInfo(fluent?.Schema ?? fastsql?.Schema ?? data?.Schema, name,
             split is null ? null : new SplitFacts(split.Kind, split.Field, split.Buckets),
-            source is null ? null : new DataSourceFacts(source.Cluster));
+            source is null ? null : new DataSourceFacts(source.Cluster),
+            comment);
     }
 
     [RequiresUnreferencedCode("按 Type 扫描公共属性。")]

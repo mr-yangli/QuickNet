@@ -5,12 +5,12 @@ namespace FastSql.Sample;
 // ── 实体定义 ────────────────────────────────────────────────────────────
 
 /// <summary>客户：主表。</summary>
-[Table("Customers")]
+[Table("Customers", Comment = "客户主表")]
 public class Customer
 {
     public int Id { get; set; }
 
-    [Column(Length = 64)]
+    [Column(Length = 64, Comment = "客户姓名")]
     public string? Name { get; set; }
 
     [Column(Length = 32)]
@@ -145,4 +145,24 @@ public class SalesTotal
     public string? Metric { get; set; }
 
     public decimal Value { get; set; }
+}
+
+// ── 结构同步示范（示例 §14）：一张故意摆成旧形状的探针表 ──────────────────
+
+/// <summary>结构同步探针：只在 §14 那一段（真打 SQL Server）出现，它写的是<em>当前这一版</em>契约的形状，
+/// 那一段用裸 SQL 摆一张"上一版留下的"旧表去对它：旧表的 <see cref="Tag"/> 短一截、<see cref="Amount"/>
+/// 的整数位少、两句注释都还没有，而旧表上多一条契约不认识的索引。
+/// 旧表还多一列 <c>Legacy</c>，这里故意<em>不</em>写它 —— 契约上不认识的列属于"要人工"，同步不删它，
+/// 而那也正是"删索引为什么另开一颗开关"的邻居：多出来的东西一律不默认动手。</summary>
+[Table("FastSqlSampleProbe", Comment = "结构同步探针表")]
+[Index("IX_FastSqlSampleProbe_Tag", nameof(Tag))]
+public class SyncProbe
+{
+    public int Id { get; set; }
+
+    [Column(Length = 32, Comment = "标签")]
+    public string? Tag { get; set; }
+
+    [Column(Precision = 18, Scale = 2, Comment = "金额")]
+    public decimal Amount { get; set; }
 }

@@ -125,10 +125,30 @@ public interface ICodeFirstDialect
 
     void EmitAlterColumnPrecision(SqlWriter writer, TableInfo table, ColumnContract column);
 
-    /// <summary>返回 false 表示该库不支持列注释，Core 会改走表级注释或跳过并 WARN。</summary>
+    /// <summary>返回 false 表示这一家没有列注释这一档：Core 不重试、不改走别的形状，而是把那一列记进
+    /// 同步结果的 <c>NotJudged</c> 清单并指名（§9.5；<see cref="TryEmitTableComment"/> 同一取向）。
+    /// <b>它必须幂等</b>：§9.5 的备注同步会在"备注已经存在而值变了"的列上重发这一句，
+    /// 只发 <c>ADD</c> 的那一家在第二趟会撞"属性已存在"。</summary>
     bool TryEmitColumnComment(SqlWriter writer, TableInfo table, ColumnContract column);
 
+    /// <summary>表级备注。<b>默认 false = 这一家不接</b>（新增 SPI 槽位一律带默认值，否则接一家要改六家，
+    /// 与 <see cref="IDbProvider.CanCreateDatabase"/>、<see cref="IBulkStrategy.ResolveCopyChannel"/> 同一手法）。
+    /// 返回 true 的家在 Core 那里同时得到"能读回表备注"的义务（<see cref="SchemaTable.Comment"/>），
+    /// 否则写进去的备注下一趟判不出差别 —— 那是单向发射，不是同步。</summary>
+    bool TryEmitTableComment(SqlWriter writer, TableInfo table, string? comment) => false;
+
     void EmitCreateIndex(SqlWriter writer, TableInfo table, IndexContract index);
+
+    /// <summary>删掉库里<em>读回来</em>的那一条索引。<b>默认 false = 这一家不接</b>（新增 SPI 槽位一律带默认值，
+    /// 接一家不必改六家，与 <see cref="TryEmitTableComment"/> 同一手法）。
+    /// <para><b>Core 只在调用方显式开了"允许删索引"那一档时才问这一颗</b>：默认形态下结构同步
+    /// 永不 <c>DROP INDEX</c>——它会当场拖慢正在跑的查询，是这一档里最难回滚的动作，而契约里没有这条索引
+    /// 可能只是"这一册实体没覆盖那张表的全部查询"，不代表它没人用。没开的时候库里多出的那一条只进
+    /// 同步结果的"要人工"清单并指名。</para>
+    /// <para><b>接了这一颗的家同时欠着"读得回索引清单"的义务</b>（<see cref="SchemaTable.Indexes"/>）：
+    /// 读不回来的那一家里"库里多出一条"根本判不出来，而按"契约里没有"去删就是把<em>读不出</em>读成"没有"、
+    /// 删掉全部索引。那条形状由 <see cref="SchemaTable.Indexes"/> 的 null 挡在计划层，不靠这里。</para></summary>
+    bool TryEmitDropIndex(SqlWriter writer, TableInfo table, SchemaIndex index) => false;
 }
 
 /// <summary>系统表读结构（§4 里差异最大的部分）。</summary>
@@ -138,11 +158,81 @@ public interface ISchemaReader
 
     /// <summary>§10.4 的量纲探测：只读，不建临时表、不写数据（生产库常禁 DDL 权限）。</summary>
     Task<LengthSemanticsReading?> ProbeLengthSemanticsAsync(DbConnection connection, TableInfo table, string columnName, CancellationToken ct = default);
+
+    /// <summary>"库里这一列"与"契约说的这一列"是不是同一个形状。列级结构同步（§9.5）的判据位。
+    ///
+    /// <para><b>它归 provider 而不是 Core，只因为一件事</b>：类型名怎么折、量纲按字符还是字节、精度藏在哪颗
+    /// 目录字段里，全是这一家自己的目录说了算。Core 拿 <see cref="SchemaColumn.StoreType"/> 文本与
+    /// <see cref="ITypeMap.GetStoreType"/> 的发射形直接比，今天必然假红：发射侧一律大写而目录一律小写，
+    /// <c>DATETIME2(3)</c> 发出去而目录回 <c>datetime2</c> 加一颗标度，<c>DECIMAL</c> 在别人手工建的表上
+    /// 回 <c>numeric</c>，而 GBase 8s 的 <c>(n)</c> 是字节不是字符。跨家比文本更是没有这回事。</para>
+    ///
+    /// <para>三态里的 <b>null 是"这一家今天判不了"</b>，不是"判过了、一样"：那一格进同步结果的"判不了"清单并指名，
+    /// 既不响也不假装同步过（§12.2）。默认实现交回 null，所以六家在本版一个字节都不必改。</para>
+    ///
+    /// <para>可空性<em>不在</em>这一颗的职责里：那是一格布尔，家与家同义，Core 自己比
+    /// （比的是 <see cref="ColumnContract.NullableInStore"/>，不是 <see cref="ColumnContract.IsNullable"/>）。</para></summary>
+    bool? ColumnShapeMatches(ColumnContract expected, SchemaColumn actual) => null;
 }
 
-public sealed record SchemaColumn(string Name, string StoreType, int? MaxChars, int? MaxBytes, bool IsNullable, int? OrdinalPosition);
+/// <summary>库里读回的一列。<b>后头那几格全可空，而空的意思是"这一家读不出"</b>，不是"库里没有"——
+/// 所以每一格在 <see cref="ISchemaReader"/> 那一家支持时必须给真值（列备注没有就是空串，
+/// 自增不是就是 <see langword="false"/>），不给就是放弃那一档 diff。</summary>
+/// <param name="Name">列名。</param>
+/// <param name="StoreType">归一到<em>本家建侧字形</em>的类型文本（各家 reader 自己折长名，
+/// 所以它只保证同家自比；跨家、跨"故意不折"那几支都不作数，见 <see cref="ISchemaReader.ColumnShapeMatches"/>）。</param>
+/// <param name="MaxChars">字符上限；读不出的家给 null。</param>
+/// <param name="MaxBytes">字节上限；只有一家用另一把尺量它（MySQL/Oracle），其余留 null。</param>
+/// <param name="IsNullable">库里这一列能不能为空。</param>
+/// <param name="OrdinalPosition">列序。</param>
+public sealed record SchemaColumn(
+    string Name,
+    string StoreType,
+    int? MaxChars,
+    int? MaxBytes,
+    bool IsNullable,
+    int? OrdinalPosition)
+{
+    /// <summary>列备注。<b>null = 这一家没有列注释这个概念</b>（SQLite、GBase 8s），空串 = 有这概念而库里没写。
+    /// 两者分不开的话，"备注同步"就永远只有单向发射：写进去的备注下一趟读不回来，判不出差别。</summary>
+    public string? Comment { get; init; }
 
-public sealed record SchemaTable(TableInfo Table, IReadOnlyList<SchemaColumn> Columns);
+    /// <summary>这一列是不是库给值的那几列（自增 / <c>rowversion</c>）。null = 读不出。</summary>
+    public bool? IsIdentity { get; init; }
+
+    /// <summary>这一列是不是主键的一员。null = 读不出。</summary>
+    public bool? IsPrimaryKey { get; init; }
+
+    /// <summary>标度（小数的位数，也是 <c>datetime2</c> 那一族的时间精度）。null = 本家没有这一格或没读。</summary>
+    public int? Scale { get; init; }
+}
+
+/// <summary>库里读回的一张表。扩出来的两格同样以 <b>null = 这一家读不出</b> 说话。</summary>
+/// <param name="Table">表名。</param>
+/// <param name="Columns">列清单，按 <see cref="SchemaColumn.OrdinalPosition"/> 的顺序。</param>
+public sealed record SchemaTable(TableInfo Table, IReadOnlyList<SchemaColumn> Columns)
+{
+    /// <summary>表备注。null = 读不出；空串 = 这一家有这概念而库里没写。</summary>
+    public string? Comment { get; init; }
+
+    /// <summary>这张表上现有的索引（含唯一性）。<b>null = 读不出 ⇒ 补建索引那一档在这一家判不了</b>；
+    /// 空清单 = 读得出而这张表确实一个索引都没有。主键不在这一格里（它不是"补建"的对象）。</summary>
+    public IReadOnlyList<SchemaIndex>? Indexes { get; init; }
+}
+
+/// <summary>库里读回的一个非主键索引。<b>列的顺序是内容的一部分</b>：<c>(a,b)</c> 与 <c>(b,a)</c>
+/// 是两个索引，名字一样也不能当成同一个。</summary>
+/// <param name="Name">索引名（不是契约里那颗名字，是库里那一颗）。</param>
+/// <param name="IsUnique">是不是唯一索引。</param>
+/// <param name="Columns">列序，内容的一部分。</param>
+public sealed record SchemaIndex(string Name, bool IsUnique, IReadOnlyList<string> Columns)
+{
+    /// <summary>这一颗其实是<em>约束</em>（唯一约束那一形，不是 <c>CREATE UNIQUE INDEX</c> 的产物）。
+    /// <b>它和主键同一个处境：不是"补建"的对象，也不是 <c>DROP INDEX</c> 能删的对象</b>——那一句在
+    /// SQL Server 上直接报错，要拆它得走 <c>ALTER TABLE … DROP CONSTRAINT</c>。所以开了删索引那一档时
+    /// 这一条不进删除清单，只进"要人工"清单并指名它是约束。</summary>
+    public bool IsConstraint { get; init; }
+}
 
 public sealed record LengthSemanticsReading(string CollationName, int DeclaredLength, int DefinitionByteLength, bool CharSemanticsProven);
 

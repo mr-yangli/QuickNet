@@ -5,15 +5,43 @@ using FastSql.Providers;
 namespace FastSql.Providers.SqlServer;
 
 /// <summary>从 <c>sys.columns</c> 读结构（§4）。这里只有 ADO.NET 抽象层的虚调用：
-/// 驱动类型由 <c>DriverRegistry</c> 在运行期解析，本文件不认识 <c>SqlConnection</c>。</summary>
+/// 驱动类型由 <c>DriverRegistry</c> 在运行期解析，本文件不认识 <c>SqlConnection</c>。
+///
+/// <para>一趟读三样：列（含列备注、自增、标度）、表备注、索引清单（含主键列）。后两样从
+/// <c>sys.extended_properties</c> 与 <c>sys.indexes</c> 来，而这两张视图从前根本没人查——
+/// 于是"改了表备注/加了索引"在结构同步那一头读不回来，判不出差别，也就同步不了（§9.5）。</para></summary>
 public sealed class SqlServerSchemaReader : ISchemaReader
 {
+    /// <summary><c>class = 1</c> 是 <c>OBJECT_OR_COLUMN</c>，<c>minor_id</c> 是列序（0 留给表本身）。
+    /// 备注的值位是 <c>sql_variant</c>，所以必须 CAST 出来才读得成字符串。</summary>
     const string ColumnsSql = """
-        SELECT c.column_id, c.name, ty.name AS type_name, c.max_length, c.precision, c.scale, c.is_nullable
+        SELECT c.column_id, c.name, ty.name AS type_name, c.max_length, c.precision, c.scale, c.is_nullable,
+               c.is_identity, CAST(ep.value AS nvarchar(4000)) AS comment
         FROM sys.columns c
         JOIN sys.types ty ON ty.user_type_id = c.user_type_id
+        LEFT OUTER JOIN sys.extended_properties ep
+            ON ep.major_id = c.object_id AND ep.class = 1 AND ep.minor_id = c.column_id AND ep.name = N'MS_Description'
         WHERE c.object_id = OBJECT_ID(@table)
         ORDER BY c.column_id
+        """;
+
+    const string TableCommentSql = """
+        SELECT CAST(ep.value AS nvarchar(4000))
+        FROM sys.extended_properties ep
+        WHERE ep.major_id = OBJECT_ID(@table) AND ep.class = 1 AND ep.minor_id = 0 AND ep.name = N'MS_Description'
+        """;
+
+    /// <summary><c>type IN (1,2)</c> 是有行的索引（聚集 / 非聚集），排掉 0（堆）与 3/4（XML、全文）——
+    /// 后两样的形状契约里表达不了，把它们读回来只会在"库里多出一条索引"那一格里多一条假名。
+    /// 主键也一起读，不为补建，为的是判出"库里的主键列与契约差哪一列"。
+    /// <c>is_unique_constraint</c> 一起带回来：那一颗是唯一<em>约束</em>不是索引，
+    /// <c>DROP INDEX</c> 删不动它（要 <c>ALTER TABLE … DROP CONSTRAINT</c>），所以它在计划层单独一格。</summary>
+    const string IndexesSql = """
+        SELECT i.name, i.is_unique, i.is_primary_key, i.is_unique_constraint, COL_NAME(ic.object_id, ic.column_id) AS column_name
+        FROM sys.indexes i
+        JOIN sys.index_columns ic ON ic.object_id = i.object_id AND ic.index_id = i.index_id
+        WHERE i.object_id = OBJECT_ID(@table) AND i.type IN (1, 2) AND i.is_hypothetical = 0
+        ORDER BY i.index_id, ic.key_ordinal
         """;
 
     /// <summary>§10.4 的量纲探测。只读目录视图与会话属性，不建临时表、不写数据：
@@ -27,14 +55,14 @@ public sealed class SqlServerSchemaReader : ISchemaReader
 
     public async Task<SchemaTable?> ReadTableAsync(DbConnection connection, TableInfo table, CancellationToken ct = default)
     {
-        using var command = Command(connection, ColumnsSql);
-
-        command.Parameters.Add(Parameter(command, "table", Qualified(table)));
-
         var columns = new List<SchemaColumn>();
+        string? tableComment = null;
 
-        using (var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false))
+        await using (var command = Command(connection, ColumnsSql))
         {
+            command.Parameters.Add(Parameter(command, "table", Qualified(table)));
+
+            using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
             if (!await reader.ReadAsync(ct).ConfigureAwait(false))
                 return null;
 
@@ -43,15 +71,85 @@ public sealed class SqlServerSchemaReader : ISchemaReader
                 var name = reader.GetString(1);
                 var storeType = reader.GetString(2);
                 var byteLength = reader.GetInt16(3);
-                var isNullable = reader.GetBoolean(6);
 
-                columns.Add(new SchemaColumn(name, StoreType(storeType, byteLength, reader),
-                    MaxChars(storeType, byteLength), MaxBytes(storeType, byteLength), isNullable, reader.GetInt32(0)));
+                columns.Add(new SchemaColumn(
+                    name,
+                    StoreType(storeType, byteLength, reader.GetByte(4), reader.GetByte(5)),
+                    MaxChars(storeType, byteLength),
+                    MaxBytes(storeType, byteLength),
+                    reader.GetBoolean(6),
+                    reader.GetInt32(0))
+                {
+                    // 与表备注那一格同一个折法：<b>LEFT JOIN 没配上行 = 这一列没写备注</b>，交回空串。
+                    // 交 null 说的是"这一家没有列注释这个概念"，而 §9.5 因此会把"库里备注被删掉"读成
+                    // "这一格判不了"——判据永远比不出差别，被删的那一条再也补不回去。
+                    Comment = reader.IsDBNull(8) ? string.Empty : reader.GetString(8),
+                    IsIdentity = reader.GetBoolean(7),
+                    IsPrimaryKey = false,
+                    Scale = reader.GetByte(5),
+                });
             }
             while (await reader.ReadAsync(ct).ConfigureAwait(false));
         }
 
-        return new SchemaTable(table, columns);
+        await using (var command = Command(connection, TableCommentSql))
+        {
+            command.Parameters.Add(Parameter(command, "table", Qualified(table)));
+
+            await using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
+
+            // 读不到那一行 = 这张表没有表备注扩展属性，交回空串而不是 null：null 在 §9.5 里说的是
+            // "这一家没有表备注这个概念"，而那会把补备注那一档整格关掉。
+            tableComment = await reader.ReadAsync(ct).ConfigureAwait(false) && !reader.IsDBNull(0) ? reader.GetString(0) : string.Empty;
+        }
+
+        var indexes = await ReadIndexesAsync(connection, table, columns, ct).ConfigureAwait(false);
+
+        return new SchemaTable(table, [.. columns]) { Comment = tableComment, Indexes = indexes };
+    }
+
+    /// <summary>索引一趟读两件事：非主键的那几条原样交回，主键那一条的列回写进 <see cref="SchemaColumn.IsPrimaryKey"/>。
+    /// 列名按 <c>key_ordinal</c> 聚合成有序清单——索引的列序是它的内容的一部分（<c>(a,b)</c> 与 <c>(b,a)</c> 不是同一条）。</summary>
+    static async Task<IReadOnlyList<SchemaIndex>> ReadIndexesAsync(
+        DbConnection connection,
+        TableInfo table,
+        List<SchemaColumn> columns,
+        CancellationToken ct)
+    {
+        var read = new List<(string Name, bool Unique, bool Primary, bool Constraint, List<string> Columns)>();
+
+        await using (var command = Command(connection, IndexesSql))
+        {
+            command.Parameters.Add(Parameter(command, "table", Qualified(table)));
+
+            using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
+
+            while (await reader.ReadAsync(ct).ConfigureAwait(false))
+            {
+                var name = reader.GetString(0);
+                var unique = reader.GetBoolean(1);
+                var primary = reader.GetBoolean(2);
+                var constraint = reader.GetBoolean(3);
+                var columnName = reader.IsDBNull(4) ? null : reader.GetString(4);
+
+                if (columnName is null)
+                    continue;
+
+                if (read.Count > 0 && read[^1].Name == name)
+                    read[^1].Columns.Add(columnName);
+                else
+                    read.Add((name, unique, primary, constraint, [columnName]));
+            }
+        }
+
+        var keys = new HashSet<string>(read.Where(static x => x.Primary).SelectMany(static x => x.Columns), StringComparer.OrdinalIgnoreCase);
+
+        for (var i = 0; i < columns.Count; i++)
+            if (keys.Contains(columns[i].Name))
+                columns[i] = columns[i] with { IsPrimaryKey = true };
+
+        return [.. read.Where(static x => !x.Primary)
+            .Select(x => new SchemaIndex(x.Name, x.Unique, [.. x.Columns]) { IsConstraint = x.Constraint })];
     }
 
     public async Task<LengthSemanticsReading?> ProbeLengthSemanticsAsync(DbConnection connection, TableInfo table, string columnName, CancellationToken ct = default)
@@ -80,12 +178,33 @@ public sealed class SqlServerSchemaReader : ISchemaReader
         return new LengthSemanticsReading(collation, declared, definitionBytes, charSemantics);
     }
 
-    static string StoreType(string storeType, int byteLength, DbDataReader reader) => storeType switch
+    /// <summary>形状对得上吗——比的是<em>归一后的存储类型文本</em>，而归一只有本家做得起（§9.5 的 diff）。
+    /// 发射侧一律大写而目录一律小写；<c>DATETIME2(3)</c> 发出去而目录把标度单存一格；
+    /// 手工建的表上 <c>DECIMAL</c> 读回 <c>numeric</c>；<c>rowversion</c> 在目录里干脆就叫 <c>binary(8)</c>。
+    /// 这四折全在这一个私有归一口里，所以建侧与读侧不可能各自折成两个样子。</summary>
+    public bool? ColumnShapeMatches(ColumnContract expected, SchemaColumn actual)
+        => string.Equals(Normalize(SqlServerTypes.Instance.GetStoreType(expected)), Normalize(actual.StoreType), StringComparison.Ordinal);
+
+    static string Normalize(string storeType)
+    {
+        var lower = storeType.Trim().ToLowerInvariant();
+
+        // rowversion 在 sys.types 里落回 binary(8)：那是同一个型的两个名字，不是两种形状。
+        if (lower is "rowversion" or "timestamp")
+            return "binary(8)";
+
+        return lower.Replace("numeric", "decimal", StringComparison.Ordinal);
+    }
+
+    static string StoreType(string storeType, int byteLength, byte precision, byte scale) => storeType switch
     {
         "nvarchar" or "nchar" or "varchar" or "char" or "varbinary" or "binary" => byteLength < 0
             ? $"{storeType}(max)"
             : $"{storeType}({(storeType.StartsWith('n') ? byteLength / 2 : byteLength)})",
-        "decimal" or "numeric" => $"{storeType}({reader.GetByte(4)},{reader.GetByte(5)})",
+        "decimal" or "numeric" => $"{storeType}({precision},{scale})",
+        // 发射侧写的是 DATETIME2(3) 而目录把标度单存一格（不写精度时它是 7），
+        // 不带出来就成了"每颗时间列都判不出差"——而 §9.3 那张表里唯一会变的那一格正是它。
+        "datetime2" or "datetimeoffset" or "time" => $"{storeType}({scale})",
         _ => storeType,
     };
 

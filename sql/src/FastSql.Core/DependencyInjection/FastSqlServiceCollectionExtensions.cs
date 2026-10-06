@@ -48,6 +48,14 @@ public sealed class FastSqlOrmBuilder
     /// <summary>§9.5：非 Development 环境下强制执行结构同步的开关。</summary>
     public bool ForceSchemaSync { get; set; }
 
+    /// <summary>§9.5：已经在的表要不要逐列比形状（补列、改长度与标度、改可空、重发备注、补索引）。
+    /// 默认 true；关掉即退到"只有缺表才建"那一档。</summary>
+    public bool SchemaSyncColumns { get; set; } = true;
+
+    /// <summary>§9.5：库里多出来的那条索引要不要 <c>DROP</c>。默认 false（opt-in）——它与上面那颗
+    /// 不是一个风险档：补一列不丢数据，删一条正在被用的索引会当场拖慢查询。唯一约束即便开了也不碰。</summary>
+    public bool SchemaSyncDropIndexes { get; set; }
+
     internal FastSqlOrmOptions BuildOptions(IDbProvider provider, string connectionString) => new()
     {
         Provider = provider,
@@ -59,6 +67,8 @@ public sealed class FastSqlOrmBuilder
         PagingOrdering = PagingOrdering,
         SchemaSync = SchemaSync,
         ForceSchemaSync = ForceSchemaSync,
+        SchemaSyncColumns = SchemaSyncColumns,
+        SchemaSyncDropIndexes = SchemaSyncDropIndexes,
     };
 }
 

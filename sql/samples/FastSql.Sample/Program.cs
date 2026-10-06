@@ -1,7 +1,9 @@
 using FastSql;
 using FastSql.Aop;
+using FastSql.DriverLoading;
 using FastSql.Metadata;
 using FastSql.Providers;
+using FastSql.Providers.SqlServer;
 using FastSql.Query;
 using FastSql.Sample;
 using FastSql.Schema;
@@ -49,6 +51,25 @@ var syncResult = await orm.SyncStructureAsync();
 Console.WriteLine($"表结构同步完成：新建 {syncResult.CreatedTables.Count} 张表");
 foreach (var t in syncResult.CreatedTables)
     Console.WriteLine($"  - {t}");
+
+// 结构同步不止"建缺失的表"：表已在的时候它逐列比（缺的列、长度/标度、可空性、备注、缺失的索引），
+// 而比出来的东西分三份交回——发了什么、这一家读不回来所以判不了什么、读得回来而故意不发的什么。
+// 本示例跑在 SQLite 上：那一家没有列注释也没有表注释这一档，所以 Customers 上写的两句备注落进"判不了"，
+// 而不是被静默丢掉。换 SQL Server 跑同一段代码，这两句会真的写进 sys.extended_properties。
+// 库里"多出来"的东西一律只进那两份话单：多一列不删（会带走数据），多一条索引也不删——
+// 删索引要 SchemaSyncDropIndexes 显式开，它默认关，所以这一行的最后一格在这里恒为 0。
+Console.WriteLine($"补列 {syncResult.AddedColumns.Count} ∶ 改列 {syncResult.AlteredColumns.Count} ∶ 备注 {syncResult.AppliedComments.Count} ∶ 建索引 {syncResult.CreatedIndexes.Count} ∶ 删索引 {syncResult.DroppedIndexes.Count}");
+
+foreach (var line in syncResult.NotJudged)
+    Console.WriteLine($"  判不了：{line}");
+
+foreach (var line in syncResult.Refused)
+    Console.WriteLine($"  要人工：{line}");
+
+// 同一趟再跑一次：一个字节都不发。这一句是"比的是归一后的结构事实"的唯一裁判——
+// 判据写成类型文本逐字符比的话，第二趟会在每张表上重发一句 ALTER（目录里是小写 numeric，我们发的是大写 DECIMAL）。
+var secondPass = await orm.SyncStructureAsync();
+Console.WriteLine($"第二趟：{(secondPass.IsEmpty ? "0 个动作" : $"还在发：{string.Join("、", secondPass.AddedColumns.Concat(secondPass.AlteredColumns))}")}");
 
 Console.WriteLine();
 
@@ -958,6 +979,97 @@ foreach (var line in ddl.Replace("\r\n", "\n").Split('\n'))
 //    · 从库按声明顺序轮询：没有权重、不做延迟探测、也不问哪颗活着。
 //    · 没有"库里现有哪些库、哪些片"的反查口：在册清单读得出（上面那句 ClusterNames），
 //      库里的现状读不出 —— 所以建片仍然要业务给范围，分库仍然要启动期给全清单。
+
+// ── 14. 库里多出来的那条索引：另一颗开关（SQL Server；没给连接串就整段跳过） ─
+Console.WriteLine();
+Console.WriteLine("═══ 14. SchemaSyncDropIndexes：库里多出来的那条索引（SQL Server） ═══");
+Console.WriteLine();
+
+// 为什么这一段要换一家库：§2 那一行末尾的「删索引」在 SQLite 上恒为 0，那不是开关没生效，
+// 而是那一家的读侧交不回"库里现有哪些索引"（交回 null 是判不了，不是没有），计划层比不出"多出一条"这件事。
+// SQL Server 的索引清单来自 sys.indexes，所以那一档在这里才第一次真跑。
+// 连接串两种给法，两处都不打印也不入库：环境变量 FASTSQL_SAMPLE_MSSQL，或仓库根那份本机凭据文件的首行非 # 内容。
+var mssql = MssqlConnectionString();
+
+if (mssql is null)
+{
+    Console.WriteLine("  跳过：这一格故意没有默认库——它要发 DDL，打在哪个实例上得人给。");
+    Console.WriteLine("        两种给法（两处都不打印、也不入库）：环境变量 FASTSQL_SAMPLE_MSSQL，" +
+                      "或仓库根那份本机凭据文件 fastsql-test.connection.local.txt 的首行非 # 内容。");
+}
+else
+{
+    // 组装根自己造 provider（§12.7 F：内核不做 Type.GetType(string)），且走清单里 "sqlserver" 那一行的
+    // 运行期解析，而不是直接 new SqlClientFactory()——绕开清单就等于绕开这里要示范的那条链。
+    var mssqlProvider = new SqlServerProvider(DriverRegistry.Load().Factory(SqlServerProvider.DriverKey));
+
+    // 同一份输入开成两台，而不是中途改一颗开关：那些选项是 init-only，用法上就是"启动期定死"。
+    var asUsual = MssqlOrm(mssqlProvider, mssql, false);
+    var optedIn = MssqlOrm(mssqlProvider, mssql, true);
+
+    // 契约是惰性登记的：实体第一次被碰到才进在册清单，而整库同步只认在册的那几张。
+    _ = asUsual.Select<SyncProbe>();
+    _ = optedIn.Select<SyncProbe>();
+
+    // ① 旧形状是<em>裸 T-SQL 摆出来的</em>，不是让库自己建出来的 —— 这一格的裁判是"库里多出来"这件事，
+    //    而那件事只有靠手工摆才能摆出来。三处对不上契约（Tag 短一截、Amount 的整数位少、两句注释都没有），
+    //    另外库里多出契约不认识的三样：一列 Legacy、一条建在它上面的索引、一条唯一约束。
+    await asUsual.Ado.ExecuteBatchAsync(
+    [
+        "DROP TABLE IF EXISTS [FastSqlSampleProbe]",
+        """
+        CREATE TABLE [FastSqlSampleProbe] (
+            [Id] int NOT NULL IDENTITY(1,1) PRIMARY KEY,
+            [Tag] nvarchar(16) NULL,
+            [Amount] decimal(10, 2) NOT NULL,
+            [Legacy] nvarchar(32) NULL
+        )
+        """,
+        "CREATE INDEX [IX_FastSqlSampleProbe_Legacy] ON [FastSqlSampleProbe] ([Legacy])",
+        "ALTER TABLE [FastSqlSampleProbe] ADD CONSTRAINT [UQ_FastSqlSampleProbe_Legacy] UNIQUE ([Legacy])",
+        "INSERT INTO [FastSqlSampleProbe] ([Tag], [Amount], [Legacy]) VALUES (N'留着', 1.25, N'旧数据')",
+    ]);
+
+    const string Extra = "IX_FastSqlSampleProbe_Legacy";
+    const string Constraint = "UQ_FastSqlSampleProbe_Legacy";
+    const string Declared = "IX_FastSqlSampleProbe_Tag";
+
+    // ② 默认那一档：一条索引都不 DROP，只把它指名进"要人工"，而那句话里带着出路。
+    var firstPass = await asUsual.SyncStructureAsync();
+
+    Console.WriteLine($"  默认配置（{SyncCounts(firstPass)}）∶ 要人工 {firstPass.Refused.Count} 条");
+
+    foreach (var message in firstPass.Refused)
+        Console.WriteLine($"    {message}");
+
+    Console.WriteLine($"    目录里那条还在吗：{(await IndexExists(asUsual, Extra) ? "在" : "不在")}" +
+                      $" ∶ 契约上那条建出来了吗：{(await IndexExists(asUsual, Declared) ? "在" : "不在")}");
+
+    // ③ 开了那一档：同一张表、同一份契约，只多那一颗开关。于是那条索引真的从目录里消失了，
+    //    而<em>唯一约束不跟着消失</em>（T-SQL 上 DROP INDEX 删不动约束，要拆得走 ALTER TABLE … DROP CONSTRAINT），
+    //    Legacy 那一列与它的值也一根手指都没碰——这一格顺带证的是"删索引不顺手把列带走"。
+    var dropPass = await optedIn.SyncStructureAsync();
+
+    Console.WriteLine($"  开 SchemaSyncDropIndexes（{SyncCounts(dropPass)}）∶ 删掉的 ∶ {string.Join("、", dropPass.DroppedIndexes)}");
+    Console.WriteLine($"    目录里：多出的那条{(await IndexExists(optedIn, Extra) ? "还在" : "没了")}" +
+                      $" ∶ 契约上那条{(await IndexExists(optedIn, Declared) ? "还在" : "没了")}" +
+                      $" ∶ 唯一约束{(await IndexExists(optedIn, Constraint) ? "还在（开关也删不动它）" : "没了")}");
+
+    var surviving = await optedIn.Ado.ExecuteScalarAsync(
+        "SELECT COUNT(*) FROM [FastSqlSampleProbe] WHERE [Legacy] = @value", new { value = "旧数据" });
+
+    Console.WriteLine($"    那一列与它的值：{surviving} 行 Legacy=旧数据 还在 ∶ 要人工从 {firstPass.Refused.Count} 条剩 {dropPass.Refused.Count} 条（列与约束那两条永久留着）");
+
+    // ④ 同一颗开关下第二趟零动作——"库里多出一条索引"这件事已经不存在了。
+    //    这一格钉的是下一版不会在每次同步里把同一颗索引删了又建、建了又删。
+    var thirdPass = await optedIn.SyncStructureAsync();
+
+    Console.WriteLine($"  同一档第二趟：{(thirdPass.IsEmpty ? "0 个动作" : $"仍有 {thirdPass.DroppedIndexes.Count} 个删索引动作")}");
+
+    // 探针表用完就收：这一段会在真实例上留一张表，不收是示例的锅。
+    await optedIn.Ado.ExecuteNonQueryAsync("DROP TABLE IF EXISTS [FastSqlSampleProbe]");
+}
+
 Console.WriteLine();
 Console.WriteLine("═══ 示例完成 ═══");
 
@@ -1000,3 +1112,53 @@ static bool HasTable(string file, string table)
 }
 
 static string Head(string text, int take = 64) => text.Length <= take ? text : text[..take] + "…";
+
+// ── §14 的那台 SQL Server：连接串、组装、目录那三颗口子 ────────────────────
+
+// 示例自己那一颗环境变量优先，其次复用集成测试那一份本机凭据文件（含密码，不入库）。
+// 两处都没有就返回 null，由调用方整段跳过 —— 这一格不退回某个"肯定连得上"的默认实例。
+static string? MssqlConnectionString()
+{
+    var fromEnv = Environment.GetEnvironmentVariable("FASTSQL_SAMPLE_MSSQL");
+
+    if (!string.IsNullOrWhiteSpace(fromEnv)) return fromEnv.Trim();
+
+    for (var dir = new DirectoryInfo(AppContext.BaseDirectory); dir is not null; dir = dir.Parent)
+    {
+        var file = Path.Combine(dir.FullName, "fastsql-test.connection.local.txt");
+
+        if (!File.Exists(file)) continue;
+
+        var line = File.ReadLines(file).FirstOrDefault(static l => !l.StartsWith('#') && !string.IsNullOrWhiteSpace(l));
+
+        if (line is not null) return line.Trim();
+    }
+
+    return null;
+}
+
+// §14 那两台的组装：同一份输入只差那颗 opt-in 的开关。ForceSchemaSync 是因为示例不在 Development
+// 环境下跑，而发 DDL 就是那一格要的示范 —— 真实应用里这一颗该由环境给。
+static FastSqlOrm MssqlOrm(IDbProvider provider, string connectionString, bool dropIndexes)
+    => new(new FastSqlOrmOptions
+    {
+        Provider = provider,
+        ConnectionString = connectionString,
+        SchemaSync = SchemaSyncPolicy.Execute,
+        ForceSchemaSync = true,
+        SchemaSyncDropIndexes = dropIndexes,
+    });
+
+// 问<em>目录</em>而不是问返回值：「我发过 DROP INDEX」与「那条索引现在不在 sys.indexes 里」是两件事，
+// 而 §14 那两格要的正是后者。type IN (1,2) = 簇索引与非簇索引，hypothetical 那种统计用的不算。
+static async Task<bool> IndexExists(FastSqlOrm target, string index)
+{
+    var found = await target.Ado.ExecuteScalarAsync(
+        "SELECT COUNT(*) FROM sys.indexes WHERE object_id = OBJECT_ID(@table) AND name = @index AND type IN (1, 2)",
+        new { table = "FastSqlSampleProbe", index });
+
+    return Convert.ToInt32(found) > 0;
+}
+
+static string SyncCounts(FastSql.Core.Schema.SchemaSyncResult result)
+    => $"补列 {result.AddedColumns.Count} ∶ 改列 {result.AlteredColumns.Count} ∶ 备注 {result.AppliedComments.Count} ∶ 建索引 {result.CreatedIndexes.Count} ∶ 删索引 {result.DroppedIndexes.Count}";

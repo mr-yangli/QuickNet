@@ -87,6 +87,8 @@ static class EntityFactsBuilder
             Name = GeneratedName(entity),
             TableName = Text(table, 0, "Name") ?? Text(dataTable, 0, "Name") ?? entity.Name,
             TableSchema = Text(table, -1, "Schema") ?? Text(dataTable, -1, "Schema"),
+            // 表备注只有自研那一层有（DataAnnotations 的 [Table] 没这一格），所以这里不比对 dataTable。
+            TableComment = Text(table, -1, "Comment"),
             Split = SplitOf(attributes),
             Source = SourceOf(attributes),
         };

@@ -10,7 +10,15 @@ namespace FastSql.Metadata;
 /// <b>null 说的是"没声明"，不是"没有归属"</b>：没声明即 <see cref="DataSourceRouting.DefaultCluster"/>，
 /// 而那一座就是 <c>FastSqlOrmOptions.ConnectionString</c> 那条串。留着 null 而不是填上 <c>main</c>，
 /// 为的是让"用户一个字没写"与"用户显式写了 main"在换算前后留得住区别。</param>
-public sealed record TableInfo(string? Schema, string Name, SplitFacts? Split = null, DataSourceFacts? Source = null);
+/// <param name="Comment">表备注，来自 <c>[Table(Comment=…)]</c> 或 Fluent 的 <c>HasComment</c>（优先级同列名那一条链）。
+/// <b>null = 没有任何一层说过</b>，与空串（说过而说的是"没有备注"）不是一回事：§9.5 的结构同步比的就是这一格，
+/// 把两者折成一格会让"清掉备注"与"从来没写过备注"在计划里长同一个样。</param>
+public sealed record TableInfo(
+    string? Schema,
+    string Name,
+    SplitFacts? Split = null,
+    DataSourceFacts? Source = null,
+    string? Comment = null);
 
 /// <summary>一条引用导航（to-one 关系）的已解析事实。<b>只有依赖侧</b>：外键列就在这张表上，
 /// 而主端那一半要另一份契约才算得出来（<see cref="TargetType"/> 是唯一的跨实体线索）。

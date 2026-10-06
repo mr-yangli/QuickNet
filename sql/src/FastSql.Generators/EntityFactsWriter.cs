@@ -178,13 +178,17 @@ static class EntityFactsWriter
             ? ", new " + Metadata + "DataSourceFacts(" + Lit(cluster) + ")"
             : ", null";
 
+        // 表备注是第五颗：没写也要把 null 写出来，与前两颗同一纪律（G2 反射侧交的是缺省的那一颗，
+        // 两侧到 EntityContractFactory 之前形状一致，§13.11 的逐字段相等才比得到这一格）。
+        var comment = m.TableComment is { } note ? ", " + Lit(note) : ", null";
+
         b.AppendLine("/// <summary>编译期算好的实体事实。provider 那一半（storage defaults、自增约定、索引与外键的列名换算）")
          .AppendLine("/// 由运行期的 EntityContractFactory 补上——只有 provider 知道自己是 nvarchar 还是 VARCHAR2(n BYTE)（§10.4）。</summary>")
          .AppendLine("static class " + m.Name + "Metadata")
          .AppendLine("{")
          .AppendLine("    public static " + Schema + "GeneratedEntityMetadata Facts { get; } = new(")
          .AppendLine("        typeof(" + m.Entity + "),")
-         .AppendLine("        new " + Metadata + "TableInfo(" + Lit(m.TableSchema) + ", " + Lit(m.TableName) + split + source + "),")
+         .AppendLine("        new " + Metadata + "TableInfo(" + Lit(m.TableSchema) + ", " + Lit(m.TableName) + split + source + comment + "),")
          .AppendLine("        [");
 
         foreach (var column in m.Columns)

@@ -9,14 +9,16 @@ using FastSql.Sql;
 namespace FastSql.Core.Schema;
 
 /// <summary><c>SyncStructure</c> 的执行体（§9.5）。按 <see cref="IEntitySchemaRegistry.RegisteredTypes"/> 枚举全部实体，
-/// 逐个比对库中是否已有对应表；缺失的用 <see cref="ICodeFirstDialect.EmitCreateTable"/> 生成 DDL，再按策略执行或收集。
+/// 逐个比对库中是否已有对应表；缺失的用 <see cref="ICodeFirstDialect.EmitCreateTable"/> 生成 DDL，已有的按
+/// <see cref="StructureDiff"/> 算出列级改动，再按策略执行或收集。
 ///
 /// <para><b>一册实体从此可能住在几座库里</b>（§16.4 的分库）：这一格不再是"打开那条连接、逐张问一遍"，
 /// 而是<em>先按每张表自己声明的那座集群分组，再一座一趟</em>。分组判据与读写共用同一颗
 /// <see cref="DataSourceRouting.ClusterOf"/>，所以"这张表建在哪座库"与"这条 INSERT 发往哪座库"
 /// 不会是两件事——那是这一格最坏的一种错法（表建在 A 库、写进 B 库，症状是运行期"表不存在"）。</para></summary>
-/// <remarks>今天只做"表是否缺失"这一档 diff：<see cref="ISchemaReader"/> 读回的 <c>SchemaColumn</c> 不含主键、
-/// 自增、注释、默认值，列级 diff（ADD COLUMN / ALTER COLUMN）要等这些字段补齐后才能做（§14 P2）。</remarks>
+/// <remarks><b>列级 diff 只在 Execute 档判</b>：Script 档不连库，而 diff 的另一半是<em>库里的现形状</em>——
+/// 没有读数就没有差别可判。那一档因此今天只出建表脚本，并在结果里写明这一格（不是静默少做，是
+/// <see cref="SchemaSyncResult.NotJudged"/> 那一行）。要列级的脚本，出路是给一个只读的连接、走 Execute。</remarks>
 /// <remarks><b>分表实体在这一格里是跳过的</b>（两档策略都跳，跳了的名字进
 /// <see cref="SchemaSyncResult.SkippedSplitTemplates"/>）：模板名带着占位符，它不是一张能建的表，
 /// 而"把全部片都建出来"要的范围只有业务知道。那几张片由 <see cref="CreateShardsAsync"/> 按清单建，
@@ -26,8 +28,19 @@ public sealed class SchemaSyncer
     readonly IDbProvider _provider;
     readonly IEntitySchemaRegistry _schemas;
     readonly ConnectionSources _sources;
+    readonly bool _diffColumns;
+    readonly bool _dropIndexes;
 
-    public SchemaSyncer(IDbProvider provider, IEntitySchemaRegistry schemas, ConnectionSources sources)
+    /// <param name="diffColumns">列级同步那一档（<c>SchemaSyncColumns</c>）：关掉时已经在的表一格都不改。</param>
+    /// <param name="dropIndexes">库里多出的索引要不要 <c>DROP</c>（<c>SchemaSyncDropIndexes</c>）。
+    /// <b>默认关</b>：它与 <paramref name="diffColumns"/> 不是一个风险档——补一列不丢数据，删一条正在被用的
+    /// 索引会当场拖慢查询，所以这一档只能由调用方显式开，不会因为"开了列级同步"就顺带生效。</param>
+    public SchemaSyncer(
+        IDbProvider provider,
+        IEntitySchemaRegistry schemas,
+        ConnectionSources sources,
+        bool diffColumns = true,
+        bool dropIndexes = false)
     {
         ArgumentNullException.ThrowIfNull(provider);
         ArgumentNullException.ThrowIfNull(schemas);
@@ -36,6 +49,8 @@ public sealed class SchemaSyncer
         _provider = provider;
         _schemas = schemas;
         _sources = sources;
+        _diffColumns = diffColumns;
+        _dropIndexes = dropIndexes;
     }
 
     /// <summary>按策略同步全部已注册实体的表结构。<b>一次调用 = 在册的每座集群各一趟</b>：
@@ -44,7 +59,8 @@ public sealed class SchemaSyncer
     /// <param name="policy">同步策略：<see cref="SchemaSyncPolicy.Execute"/> 直接执行、
     /// <see cref="SchemaSyncPolicy.Script"/> 只生成不执行、<see cref="SchemaSyncPolicy.Disabled"/> 返回空结果。</param>
     /// <param name="ct">取消令牌。</param>
-    /// <returns>同步结果：已创建的表清单与（Script 模式下的）完整 DDL 文本。</returns>
+    /// <returns>同步结果：已创建的表、已补的列/改的列/发的备注/建的索引，以及两份给人看的清单
+    /// （<see cref="SchemaSyncResult.NotJudged"/> 与 <see cref="SchemaSyncResult.Refused"/>）。</returns>
     public async Task<SchemaSyncResult> SyncAsync(SchemaSyncPolicy policy, CancellationToken ct = default)
     {
         if (policy == SchemaSyncPolicy.Disabled)
@@ -55,10 +71,8 @@ public sealed class SchemaSyncer
         if (types.Count == 0)
             return SchemaSyncResult.Empty;
 
-        var created = new List<string>();
+        var tally = new Tally();
         var skipped = new List<string>();
-        var sb = new StringBuilder();
-        var executed = false;
 
         // 先分组再动工：一张表属于哪座库这件事只在这一处问一次（判据与读写共用 DataSourceRouting），
         // 于是"这一趟要开几条连接、脚本要分几段"是分组的结果，而不是各处再判一遍。
@@ -70,6 +84,7 @@ public sealed class SchemaSyncer
             // 只有一座集群时<em>不加</em>那行段头：那一份文本与这一格落地之前逐字相等，
             // 而 §13 的脚本金标基线因此不必为一件本来不存在的事改口径。多座才分得出段，段头才有读者。
             var segmented = byCluster.Count > 1;
+            var sb = new StringBuilder();
 
             foreach (var cluster in byCluster.Keys.Order(StringComparer.Ordinal))
             {
@@ -79,11 +94,11 @@ public sealed class SchemaSyncer
                     segment.Add($"-- 集群 {cluster}：下面这几句要落在这座集群的主库上");
 
                 foreach (var contract in byCluster[cluster])
-                {
-                    var ddl = EmitCreateTable(contract);
-                    created.Add(contract.Table.Name);
-                    segment.Add(ddl.EndsWith(';') ? ddl : ddl + ';');
-                }
+                    foreach (var statement in CreateStatements(contract, tally.NotJudged.Add))
+                    {
+                        tally.Record(statement);
+                        segment.Add(statement.Sql.EndsWith(';') ? statement.Sql : statement.Sql + ";");
+                    }
 
                 if (sb.Length > 0)
                     sb.AppendLine().AppendLine();
@@ -91,7 +106,20 @@ public sealed class SchemaSyncer
                 sb.Append(string.Join(Environment.NewLine + Environment.NewLine, segment));
             }
 
-            return new SchemaSyncResult(created, false, sb.ToString()) { SkippedSplitTemplates = [.. skipped] };
+            if (_diffColumns)
+                tally.NotJudged.Add("列级同步在 Script 档不判：判据的另一半是库里的现形状，而这一档压根不连库（要列级脚本，出路是给一个只读连接走 Execute）");
+
+            return new SchemaSyncResult(tally.Created, false, sb.ToString())
+            {
+                AddedColumns = [.. tally.AddedColumns],
+                AlteredColumns = [.. tally.AlteredColumns],
+                AppliedComments = [.. tally.Comments],
+                CreatedIndexes = [.. tally.Indexes],
+                DroppedIndexes = [.. tally.Dropped],
+                NotJudged = [.. tally.NotJudged],
+                Refused = [.. tally.Refused],
+                SkippedSplitTemplates = [.. skipped],
+            };
         }
 
         // Execute 模式要连库检查表是否存在；一座一趟，每趟先尝试建库（如果 provider 支持）
@@ -109,19 +137,170 @@ public sealed class SchemaSyncer
             {
                 var existing = await _provider.Schema.ReadTableAsync(connection, contract.Table, ct).ConfigureAwait(false);
 
-                if (existing is not null)
+                if (existing is null)
+                {
+                    foreach (var statement in CreateStatements(contract, tally.NotJudged.Add))
+                    {
+                        await ExecuteDdlAsync(connection, statement.Sql, ct).ConfigureAwait(false);
+                        tally.Record(statement);
+                    }
+
+                    continue;
+                }
+
+                if (!_diffColumns)
                     continue;
 
-                var ddl = EmitCreateTable(contract);
-                created.Add(contract.Table.Name);
-
-                await ExecuteDdlAsync(connection, ddl, ct).ConfigureAwait(false);
-                executed = true;
+                await ApplyAsync(tally, connection, contract, existing, ct).ConfigureAwait(false);
             }
         }
 
-        return new SchemaSyncResult(created, executed, sb.ToString()) { SkippedSplitTemplates = [.. skipped] };
+        return new SchemaSyncResult(tally.Created, tally.Changed, string.Empty)
+        {
+            AddedColumns = [.. tally.AddedColumns],
+            AlteredColumns = [.. tally.AlteredColumns],
+            AppliedComments = [.. tally.Comments],
+            CreatedIndexes = [.. tally.Indexes],
+            DroppedIndexes = [.. tally.Dropped],
+            NotJudged = [.. tally.NotJudged],
+            Refused = [.. tally.Refused],
+            SkippedSplitTemplates = [.. skipped],
+        };
     }
+
+    /// <summary>一张已经在的表：先算计划，再把计划里的每一句发出去。<b>清单里没有的一句都不会发</b>，
+    /// 而那几格拒（删列、改主键与自增；删索引要调用方显式开那一档）在计划层就已经挡掉了，
+    /// 执行层拿不到它们。</summary>
+    async Task ApplyAsync(Tally tally, DbConnection connection, EntityContract contract, SchemaTable existing, CancellationToken ct)
+    {
+        var plan = StructureDiff.Build(contract, existing, _provider.Schema, _provider.CodeFirst.Identifiers, _dropIndexes);
+
+        foreach (var note in plan.NotJudged)
+            tally.NotJudged.Add($"{contract.Table.Name}：{note}");
+
+        foreach (var note in plan.Refused)
+            tally.Refused.Add($"{contract.Table.Name}：{note}");
+
+        foreach (var statement in ApplyStatements(contract, plan, tally))
+        {
+            await ExecuteDdlAsync(connection, statement.Sql, ct).ConfigureAwait(false);
+            tally.Record(statement);
+        }
+    }
+
+    /// <summary>一句 <c>CREATE TABLE</c> 加上它欠的那几份备注。<b>建表那一趟从前一个字节都不发备注</b>：
+    /// <c>TryEmitColumnComment</c> 在 SPI 上挂了很多版而没有调用点，于是"实体上写了备注、库里查不到"
+    /// 是每一次新建表都发生的事，而不是只有改备注时才发生。</summary>
+    List<Statement> CreateStatements(EntityContract contract, Action<string> notJudged)
+    {
+        var items = new List<Statement> { new(EmitCreateTable(contract), ChangeKind.CreateTable, contract.Table.Name) };
+
+        foreach (var column in contract.Columns)
+        {
+            if (column.Comment is null)
+                continue;
+
+            var sql = ColumnCommentText(contract, column);
+
+            if (sql is not null)
+                items.Add(new Statement(sql, ChangeKind.ColumnComment, $"{contract.Table.Name}.{column.ColumnName}"));
+            else
+                notJudged($"{contract.Table.Name}.{column.ColumnName}：这一家写不出列注释，备注只落在契约里");
+        }
+
+        if (contract.Table.Comment is not null)
+        {
+            var sql = TableCommentText(contract.Table);
+
+            if (sql is not null)
+                items.Add(new Statement(sql, ChangeKind.TableComment, contract.Table.Name));
+            else
+                notJudged($"{contract.Table.Name}：这一家写不出表注释，备注只落在契约里");
+        }
+
+        return items;
+    }
+
+    List<Statement> ApplyStatements(EntityContract contract, StructurePlan plan, Tally tally)
+    {
+        var items = new List<Statement>();
+
+        // 删索引排在补列与改列<em>之前</em>：T-SQL 上"这一列被索引覆盖着"会让 ALTER COLUMN 直接失败
+        // （ALTER TABLE ... ALTER COLUMN ... 因为访问此列的对象而失败），而计划里那条索引正是建在这列上的
+        // 那一条。顺序反过来就是"这一趟发不出去"，而不是"发得出去但慢一点"。
+        foreach (var index in plan.DropIndexes)
+        {
+            var sql = DropIndexText(contract.Table, index);
+
+            if (sql is not null)
+                items.Add(new Statement(sql, ChangeKind.DropIndex, $"{contract.Table.Name}.{index.Name}"));
+            else
+                tally.NotJudged.Add($"{contract.Table.Name}.{index.Name}：这一家写不出删索引那一句，那条索引留在库里");
+        }
+
+        foreach (var column in plan.AddColumns)
+            items.Add(new Statement(Emit(w => _provider.CodeFirst.EmitAddColumn(w, contract.Table, column)),
+                ChangeKind.AddColumn, $"{contract.Table.Name}.{column.ColumnName}"));
+
+        foreach (var column in plan.AlterColumns)
+            items.Add(new Statement(Emit(w => _provider.CodeFirst.EmitAlterColumnPrecision(w, contract.Table, column)),
+                ChangeKind.AlterColumn, $"{contract.Table.Name}.{column.ColumnName}"));
+
+        foreach (var column in plan.ColumnComments)
+        {
+            var sql = ColumnCommentText(contract, column);
+
+            if (sql is not null)
+                items.Add(new Statement(sql, ChangeKind.ColumnComment, $"{contract.Table.Name}.{column.ColumnName}"));
+            else
+                tally.NotJudged.Add($"{contract.Table.Name}.{column.ColumnName}：这一家写不出列注释");
+        }
+
+        if (plan.EmitTableComment)
+        {
+            var sql = TableCommentText(contract.Table);
+
+            if (sql is not null)
+                items.Add(new Statement(sql, ChangeKind.TableComment, contract.Table.Name));
+            else
+                tally.NotJudged.Add($"{contract.Table.Name}：这一家写不出表注释");
+        }
+
+        foreach (var index in plan.CreateIndexes)
+            items.Add(new Statement(Emit(w => _provider.CodeFirst.EmitCreateIndex(w, contract.Table, index)),
+                ChangeKind.CreateIndex, $"{contract.Table.Name}.{index.Name}"));
+
+        return items;
+    }
+
+    /// <summary>交回 null 说的是<em>这一家没有这一档</em>（<c>TryEmit*</c> 交回 false），
+    /// 别让"没有"退化成"发了一条空句"。</summary>
+    string? ColumnCommentText(EntityContract contract, ColumnContract column)
+        => EmitTry(w => _provider.CodeFirst.TryEmitColumnComment(w, contract.Table, column));
+
+    string? TableCommentText(TableInfo table)
+        => EmitTry(w => _provider.CodeFirst.TryEmitTableComment(w, table, table.Comment));
+
+    string? DropIndexText(TableInfo table, SchemaIndex index)
+        => EmitTry(w => _provider.CodeFirst.TryEmitDropIndex(w, table, index));
+
+    string? EmitTry(Func<SqlWriter, bool> emit)
+    {
+        var writer = NewWriter();
+
+        return emit(writer) ? writer.ToSqlString() : null;
+    }
+
+    string Emit(Action<SqlWriter> emit)
+    {
+        var writer = NewWriter();
+
+        emit(writer);
+
+        return writer.ToSqlString();
+    }
+
+    SqlWriter NewWriter() => new(new StringBuilder(), [], _provider.Dialect.ParameterPrefix);
 
     /// <summary>把册子里每张表分到它自己那座集群那一格，分不进去的分表模板进 <paramref name="skipped"/>。
     /// <b>集群不在册时这里就抛</b>（<see cref="ConnectionSources.PrimaryConnectionString"/> 那句带在册清单的）：
@@ -269,16 +448,111 @@ public sealed class SchemaSyncer
     }
 }
 
-/// <summary><c>SyncStructure</c> 的产物：已创建的表名清单、是否真正执行了 DDL、以及 Script 模式下的完整文本。</summary>
+/// <summary>一条要发出去的 DDL，连"它改的是哪一格"的那句话。<b>文本与名字同行</b>是因为两档策略读的是
+/// 同一份清单：Execute 发文本、把名字记进结果；Script 把文本拼进脚本、同样把名字记进结果。
+/// 少了名字那一格，结果里就只能说"发了几句"，而 §9.5 要答的是"哪一列被改了"。</summary>
+readonly record struct Statement(string Sql, ChangeKind Kind, string Name);
+
+/// <summary>一句 DDL 改的是哪一档。它决定这句话落进 <see cref="SchemaSyncResult"/> 的哪一份清单。</summary>
+enum ChangeKind
+{
+    CreateTable,
+    AddColumn,
+    AlterColumn,
+    ColumnComment,
+    TableComment,
+    CreateIndex,
+    DropIndex,
+}
+
+/// <summary>一趟同步的七份点名清单。<b>内部类型，因为它只活在这一格里</b>：两档策略共用一个累加点
+/// （<see cref="Record"/>），于是"哪些算动作、哪些只是给人的话"这一判据也只有一份。</summary>
+sealed class Tally
+{
+    public List<string> Created { get; } = [];
+    public List<string> AddedColumns { get; } = [];
+    public List<string> AlteredColumns { get; } = [];
+    public List<string> Comments { get; } = [];
+    public List<string> Indexes { get; } = [];
+    public List<string> Dropped { get; } = [];
+    public List<string> NotJudged { get; } = [];
+    public List<string> Refused { get; } = [];
+
+    /// <summary>这一趟真发出去过至少一句。<see cref="SchemaSyncResult.Executed"/> 读的是这一格，
+    /// 而它说的不是"连了库"——一趟只读的同步连了库、判了所有档、一个字节没发，那一格必须是 false。</summary>
+    public bool Changed { get; private set; }
+
+    public void Record(Statement statement)
+    {
+        Changed = true;
+
+        switch (statement.Kind)
+        {
+            case ChangeKind.CreateTable:
+                Created.Add(statement.Name);
+                break;
+            case ChangeKind.AddColumn:
+                AddedColumns.Add(statement.Name);
+                break;
+            case ChangeKind.AlterColumn:
+                AlteredColumns.Add(statement.Name);
+                break;
+            case ChangeKind.ColumnComment:
+            case ChangeKind.TableComment:
+                Comments.Add(statement.Name);
+                break;
+            case ChangeKind.CreateIndex:
+                Indexes.Add(statement.Name);
+                break;
+            case ChangeKind.DropIndex:
+                Dropped.Add(statement.Name);
+                break;
+        }
+    }
+}
+
+/// <summary><c>SyncStructure</c> 的产物：这一趟发了什么、判不了什么、拒了什么，
+/// 以及（Script 模式下的）完整 DDL 文本。</summary>
 /// <remarks><see cref="Ddl"/> 在 Execute 模式下为空字符串（DDL 已逐条发掉，不回存）；
-/// 在 Script 模式下包含全部 CREATE TABLE 语句，可直接交给 DBA 审批后手动执行。</remarks>
+/// 在 Script 模式下包含全部 <c>CREATE TABLE</c> 与备注语句，可直接交给 DBA 审批后手动执行。</remarks>
 public sealed record SchemaSyncResult(
     IReadOnlyList<string> CreatedTables,
     bool Executed,
     string Ddl)
 {
-    /// <summary>没有需要同步的表（全部已存在，或没有注册任何实体）。</summary>
-    public bool IsEmpty => CreatedTables.Count == 0;
+    /// <summary>这一趟补上的列，逐项写 <c>表.列</c>。</summary>
+    public IReadOnlyList<string> AddedColumns { get; init; } = [];
+
+    /// <summary>这一趟 <c>ALTER COLUMN</c> 过的列，逐项写 <c>表.列</c>。改的可能是长度、标度，也可能是可空性——
+    /// 那一格在 T-SQL 里必须整列定义重写，所以两者在同一句里，报告里也在同一格里。</summary>
+    public IReadOnlyList<string> AlteredColumns { get; init; } = [];
+
+    /// <summary>这一趟发过（或重发过）的备注，逐项写 <c>表.列</c>，表自身那一条只写表名。
+    /// <b>新增与被改的列都在这一格</b>：ALTER 会连带抹掉那一列的备注，不发回去就是"同步成功而备注没了"。</summary>
+    public IReadOnlyList<string> AppliedComments { get; init; } = [];
+
+    /// <summary>这一趟建出来的索引，逐项写 <c>表.索引名</c>。</summary>
+    public IReadOnlyList<string> CreatedIndexes { get; init; } = [];
+
+    /// <summary>这一趟 <c>DROP</c> 掉的索引，逐项写 <c>表.索引名</c>，名字是库里读回来的那一个。
+    /// <b>这一格在默认配置下永远是空的</b>：删索引要 <c>SchemaSyncDropIndexes</c> 显式开，而唯一约束
+    /// 即便开了也不在这里（它进 <see cref="Refused"/>，因为 <c>DROP INDEX</c> 删不动约束）。
+    /// 非空就是"库里现在少了几条索引"——那些查询从这一刻起走全表扫，这一格要有人看。</summary>
+    public IReadOnlyList<string> DroppedIndexes { get; init; } = [];
+
+    /// <summary>这一家<em>读不出</em>所以判不了的档，逐条指名。<b>它非空就是"这一趟有几档根本没同步过"</b>：
+    /// 六家在补齐读侧之前各有一串这样的名字，而一句"同步完成"盖不住它们（§12.2 那句不假装）。</summary>
+    public IReadOnlyList<string> NotJudged { get; init; } = [];
+
+    /// <summary>读得出而<em>故意不发</em>的那几格（删列、改主键与自增、DROP 索引），逐条指名并给出路。
+    /// 与 <see cref="NotJudged"/> 的分工见 <see cref="StructurePlan"/>。</summary>
+    public IReadOnlyList<string> Refused { get; init; } = [];
+
+    /// <summary>这一趟一个字节都没发。<b>只看五份动作清单，不看两份话单</b>：判不了与要人工是那几档
+    /// <em>本来就发不出东西</em>的格，把它们算进"有变化"会让幂等裁判永远红。</summary>
+    public bool IsEmpty
+        => CreatedTables.Count == 0 && AddedColumns.Count == 0 && AlteredColumns.Count == 0
+           && AppliedComments.Count == 0 && CreatedIndexes.Count == 0 && DroppedIndexes.Count == 0;
 
     /// <summary>被这一趟<em>跳过</em>的分表模板，每项写着模板名、分片档与分片键列。<b>跳过不是漏掉</b>：
     /// 整库同步拿不到"要建哪几段"的范围，而默认建全部片是一张日档表上凭空造几千张 —— 范围由

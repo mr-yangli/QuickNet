@@ -54,6 +54,21 @@ public sealed class FastSqlOrmOptions
 
     /// <summary>§9.5。非 Development 环境下强制执行结构同步的开关。默认 false：光设 <see cref="SchemaSync"/> 不够，还要这一颗显式环境变量才放行。</summary>
     public bool ForceSchemaSync { get; init; } = false;
+
+    /// <summary>§9.5 的<em>列级</em>同步那一档：库里已经在的表，要不要逐列比形状、补备注、补索引。
+    /// <b>默认开</b>（用户 2026-10-06 当面定的那一句"改了表备注、小数长度、索引那些都要同步"）。
+    /// 关掉它退到只有"缺表就建"的那一档，与这一格落地之前逐字同形。
+    /// 它是一颗 opt-out 而不是 opt-in，因为会丢数据的那两档（删列、改主键与自增）不在这一格里——
+    /// 它们在计划层就拒了，任何一颗开关都放行不了（见 <c>StructurePlan</c> 那几条拒）。
+    /// <b>删索引不在这一颗下面</b>，它另开 <see cref="SchemaSyncDropIndexes"/>。</summary>
+    public bool SchemaSyncColumns { get; init; } = true;
+
+    /// <summary>§9.5 的<em>删索引</em>那一档：库里有一条契约上没有的索引时，要不要 <c>DROP</c> 掉它。
+    /// <b>默认关</b>（用户 2026-10-06 定的是"补一列与删一条索引不是一个风险档"）：关掉时那一条只进同步结果的
+    /// "要人工"清单并指名。开与关的分别只在<b>库里多出来</b>的那一条上——契约上有、库里没有的照建，
+    /// 而同样的列序列换了名算同一条，不会因为它而删掉再重建。
+    /// 唯一约束即便开了也不删：那一句 <c>DROP INDEX</c> 删不动约束，发出去只会以报错收尾。</summary>
+    public bool SchemaSyncDropIndexes { get; init; }
 }
 
 /// <summary>一座具名集群：<b>一个名字、一颗主库、若干从库</b>。直给的记录形状，没有 <c>UseReplicaOn()</c>
@@ -382,8 +397,12 @@ public sealed class FastSqlOrm
     // ── 结构同步（§9.5） ──────────────────────────────────────────────
 
     /// <summary>§9.5 同步已注册实体的表结构。按 <see cref="FastSqlOrmOptions.SchemaSync"/> 策略决定行为：
-    /// <see cref="SchemaSyncPolicy.Disabled"/> 返回空结果；<see cref="SchemaSyncPolicy.Execute"/> 直接建缺失的表；
-    /// <see cref="SchemaSyncPolicy.Script"/> 只生成 DDL 不执行。今天只做"表是否缺失"这一档 diff（§14 P2）。</summary>
+    /// <see cref="SchemaSyncPolicy.Disabled"/> 返回空结果；<see cref="SchemaSyncPolicy.Execute"/> 建缺失的表，
+    /// 并按 <see cref="FastSqlOrmOptions.SchemaSyncColumns"/> 决定要不要逐列比形状（补列、改长度与标度、
+    /// 改可空、重发备注、补索引）；<see cref="SchemaSyncPolicy.Script"/> 只生成建表 DDL 不执行，
+    /// 而列级那一档在它身上判不了（不连库就没有"库里现形状"那半份判据）——结果里的 NotJudged 会指名这一句。
+    /// 库里<em>多出来</em>的那条索引默认只进"要人工"清单，要它真 <c>DROP</c> 得开
+    /// <see cref="FastSqlOrmOptions.SchemaSyncDropIndexes"/>。</summary>
     /// <remarks>非 Development 环境下 <see cref="SchemaSyncPolicy.Execute"/> 要求 <see cref="FastSqlOrmOptions.ForceSchemaSync"/> 为 true，
     /// 否则抛 <see cref="InvalidOperationException"/>。生产库常禁 DDL 权限，这一道闸门防止误操作。</remarks>
     public async Task<SchemaSyncResult> SyncStructureAsync(CancellationToken ct = default)
@@ -393,7 +412,7 @@ public sealed class FastSqlOrm
         if (policy == SchemaSyncPolicy.Execute)
             GuardSchemaSyncAllowed();
 
-        var syncer = new Core.Schema.SchemaSyncer(Provider, Schemas, Sources);
+        var syncer = new Core.Schema.SchemaSyncer(Provider, Schemas, Sources, Options.SchemaSyncColumns, Options.SchemaSyncDropIndexes);
 
         return await syncer.SyncAsync(policy, ct).ConfigureAwait(false);
     }
