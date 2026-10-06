@@ -14,8 +14,9 @@ public sealed record TableInfo(string? Schema, string Name, SplitFacts? Split = 
 
 /// <summary>一条引用导航（to-one 关系）的已解析事实。<b>只有依赖侧</b>：外键列就在这张表上，
 /// 而主端那一半要另一份契约才算得出来（<see cref="TargetType"/> 是唯一的跨实体线索）。
-/// 今天的消费者只有一个：§8.2 那句「先插被依赖的、再删依赖方」的写序。级联、缝合读取、
-/// FK 约束文本都从这一格长出去，但都还没接线（§14）。</summary>
+/// 消费者：<c>SaveChanges</c> 那句「先插被依赖的、再删依赖方」的写序、<c>Include</c> 的 JOIN、
+/// 以及临时主键改写时那一格外键列。<b>级联不看这一格</b>，它看的是父端那根集合导航
+/// （<see cref="EntityContract.Collections"/>）；FK 约束文本仍未接线（§14）。</summary>
 /// <param name="MemberNames">依赖侧的外键属性名，与 <see cref="ColumnContract.MemberName"/> 同一口径。</param>
 /// <param name="ColumnNames">换算后的列名，顺序与 <paramref name="MemberNames"/> 对齐（复合外键才有多条）。</param>
 public sealed record RelationshipContract(
@@ -27,17 +28,43 @@ public sealed record RelationshipContract(
     public required OriginTrace Origin { get; init; }
 }
 
+/// <summary>一根<em>集合</em>导航（父端 → 子端）解析出来的事实，级联唯一的来源。与
+/// <see cref="RelationshipContract"/> 分两格是因为外键住在不同那张表上：这一格的
+/// <see cref="DeclaredForeignKeyMembers"/> 说的是<em>子端</em>的成员名，要换算成列得拿子端的契约，
+/// 而子端的契约在这一格建立时未必已经存在（注册表按需解析），所以换算推迟到级联真要用那一刻，
+/// 推不出就响（<c>ChangeTracker</c> 那一处）。</summary>
+/// <param name="MemberName">父实体上那根集合导航的属性名，它自己不是列。</param>
+/// <param name="ChildType">子端实体的 CLR 类型。</param>
+/// <param name="DeclaredForeignKeyMembers"><c>[ForeignKey]</c> 打在集合导航上时给的那几个子端成员名；
+/// <b>空 = 没有声明</b>，运行期按「子端的 to-one 边 → 约定 {父类型名}Id」两档推。</param>
+/// <param name="NavigationReader">读父实体那一格集合位的委托（编译一次、级联每行只调用）。</param>
+/// <param name="CascadeEnter">级联的入口那一格：<c>TChild</c> 在写这一格的代码里是编译期已知的，
+/// 会话才不必 <c>MakeGenericType</c>（理由见 <see cref="FastSql.Tracking.ICascadeSink"/>）。</param>
+public sealed record CollectionEdgeContract(
+    string MemberName,
+    Type ChildType,
+    IReadOnlyList<string> DeclaredForeignKeyMembers,
+    Func<object, object?> NavigationReader,
+    Action<FastSql.Tracking.ICascadeSink, object> CascadeEnter)
+{
+    public required OriginTrace Origin { get; init; }
+
+    /// <summary>级联开关，缺省开；<c>[NoCascade]</c> 折在这一格。</summary>
+    public bool Cascade { get; init; } = true;
+}
+
 /// <summary>一个实体的解析结果。启动期一次性构建，之后不可变（§10.3）。</summary>
 public sealed class EntityContract
 {
     public EntityContract(Type clrType, TableInfo table, ColumnContract[] columns, IReadOnlyList<IndexContract>? indexes,
-        IReadOnlyList<RelationshipContract> relationships)
+        IReadOnlyList<RelationshipContract> relationships, IReadOnlyList<CollectionEdgeContract>? collections = null)
     {
         ClrType = clrType;
         Table = table;
         Columns = columns;
         Indexes = indexes ?? [];
         Relationships = relationships;
+        Collections = collections ?? [];
         ByMember = columns.ToFrozenDictionary(c => c.MemberName, StringComparer.Ordinal);
         ByColumn = columns.ToFrozenDictionary(c => c.ColumnName, StringComparer.Ordinal);
         PrimaryKey = Array.FindAll(columns, c => c.IsPrimary);
@@ -58,6 +85,11 @@ public sealed class EntityContract
     /// 与 <see cref="Columns"/> 同一纪律：两侧生成的是同一份顺序，对拍才比得出「谁漏了一条」。</summary>
     public IReadOnlyList<RelationshipContract> Relationships { get; }
 
+    /// <summary>集合导航解析出来的父端边（级联的来源，§8.2 那张状态机图上「顺着导航带人」那一条）。
+    /// 顺序 = 实体里的声明序，与 <see cref="Columns"/> 同一纪律。<b>空 = 这个实体没有集合导航</b>，
+    /// 于是级联那两步（<c>Add</c> 带人、<c>Remove</c> 删子行）一次都不跑。</summary>
+    public IReadOnlyList<CollectionEdgeContract> Collections { get; }
+
     public IReadOnlyDictionary<string, ColumnContract> ByMember { get; }
 
     public IReadOnlyDictionary<string, ColumnContract> ByColumn { get; }
@@ -76,5 +108,5 @@ public sealed class EntityContract
     /// 只给第一张发则是一句<em>看起来建好了</em>的假绿。所以这里不发，而 <c>SplitTablesResult.IndexesNotCreated</c>
     /// 每次都点名"模板上有几条索引没随片建"（规格 §16.4 记为已裁，随片索引的建档口径排在 P2）。</remarks>
     public EntityContract ForShardDdl(TableInfo shard)
-        => new(ClrType, shard, Columns, [], Relationships);
+        => new(ClrType, shard, Columns, [], Relationships, Collections);
 }

@@ -493,7 +493,7 @@ sealed class QueryEngine
                 $"属性 {parentContract.ClrType.Name}.{memberName} 不是集合类型（IEnumerable<T>）。IncludeMany 只用于集合导航。");
 
         var childContract = Orm.Schemas.Contract(childType);
-        var fkColumns = DiscoverFkColumns(parentContract, childContract);
+        var fkColumns = DiscoverFkColumns(parentContract, childContract, memberName);
 
         var node = new IncludeManyNode
         {
@@ -506,8 +506,9 @@ sealed class QueryEngine
     }
 
     /// <summary>从子实体契约上发现指向父实体 PK 的外键列。先查显式关系（子端有引用导航回父），
-    /// 再按约定匹配列名。返回的列顺序与父实体 PK 列对齐。</summary>
-    static IReadOnlyList<string> DiscoverFkColumns(EntityContract parentContract, EntityContract childContract)
+    /// 再看那根集合导航上点名的外键成员，最后按约定匹配列名 —— 三档与级联落键同序（见
+    /// <see cref="ContractResolver.ResolveDeclaredFkColumns"/>）。返回的列顺序与父实体 PK 列对齐。</summary>
+    static IReadOnlyList<string> DiscoverFkColumns(EntityContract parentContract, EntityContract childContract, string memberName)
     {
         var parentKeys = parentContract.PrimaryKey;
 
@@ -527,6 +528,9 @@ sealed class QueryEngine
                 return rel.ColumnNames;
             }
         }
+
+        if (ContractResolver.ResolveDeclaredFkColumns(parentContract, childContract, memberName) is { } declaredColumns)
+            return declaredColumns;
 
         var parentTypeName = parentContract.ClrType.Name;
 
@@ -867,8 +871,12 @@ sealed class QueryEngine
 
             if (parentMap.TryGetValue(key, out var matchedParents))
             {
+                // 缝的是<em>会话里的那一只</em>：这一行可能早就在身份映射里（先查过明细、再补载父的那一串），
+                // 而按刚物化那只实例缝会让会话里同一行留两只 —— 级联删除撞上第二只时只能说"同键两只没有定义"。
+                var stitched = _tracker?.CanonicalOf(child, node.ChildType) ?? child;
+
                 foreach (var parent in matchedParents)
-                    nav.Attach(parent, child);
+                    nav.Attach(parent, stitched);
             }
         }
 
@@ -999,6 +1007,13 @@ sealed class QueryEngine
                 null,
                 ct).ConfigureAwait(false);
 
+            // 先登记再缝：TrackAll 就地写回"会话里的那一只"（§8.2），于是导航上挂的、往下递归加载的都是那一只。
+            // 这里可以登记在配之前，因为配的是子端<em>主键</em>对父端外键 —— 身份映射就是按主键建的，
+            // 那一只与这一只在这个判据上恒等；而 IncludeMany 那一档配的是外键，改成登记之后缝就会把
+            // "会话里改过外键、还没写出去"的那一行配到错的父上，所以那一档缝的时候才现问身份映射。
+            if (_tracker is not null)
+                _tracker.TrackAll(children, childContract.ClrType);
+
             var childPkGetters = BuildKeyGetters(childContract.ClrType, childPkColumns);
 
             foreach (var child in children)
@@ -1033,9 +1048,6 @@ sealed class QueryEngine
 
                 await LoadSplitIncludeNodesAsync(childObjects, childContract, node.Children, ct).ConfigureAwait(false);
             }
-
-            if (_tracker is not null)
-                _tracker.TrackAll(children, childContract.ClrType);
         }
     }
 

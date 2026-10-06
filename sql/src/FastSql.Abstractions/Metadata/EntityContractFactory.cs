@@ -83,7 +83,7 @@ public sealed record IndexFacts(
     bool Clustered = false,
     bool Descending = false);
 
-/// <summary>引用导航在两侧的声明形状：G2 由 <c>ContractResolver</c> 反射填，G1 由源生成器写成代码。
+/// <summary>导航在两侧的声明形状：G2 由 <c>ContractResolver</c> 反射填，G1 由源生成器写成代码。
 /// 与 <see cref="IndexFacts"/> 同一取向——只抄声明，成员名 → 列名的换算与「外键指向没映射的属性」
 /// 那条拒绝都只有 <see cref="EntityContractFactory"/> 一份。</summary>
 public sealed record RelationshipFacts
@@ -95,13 +95,35 @@ public sealed record RelationshipFacts
     /// 而今天唯一的消费者（写侧的依赖排序）只要这一条边。补 FK 约束文本时要先补它（§14）。</summary>
     public required Type TargetType { get; init; }
 
-    /// <summary>依赖侧的外键成员名。一颗 <c>[ForeignKey("A,B")]</c> 折成两条，复合与单列走同一条判定。</summary>
+    /// <summary>依赖侧的外键成员名。一颗 <c>[ForeignKey("A,B")]</c> 折成两条，复合与单列走同一条判定。
+    /// <b><see cref="IsCollection"/> 那一档这里装的是<em>子端</em>的成员名</b>（<c>[ForeignKey]</c> 打在集合
+    /// 导航上，EF 同一口径），所以那一档不能拿本实体的列清单去换算，空数组说"没有声明、交给运行期解算"。</summary>
     public required IReadOnlyList<string> ForeignKeyMembers { get; init; }
 
     /// <summary>外键成员名来自哪一层：自研属性那一层今天没有等价注解，所以只有 DataAnnotations 与约定两档。</summary>
     public required MetadataLayer Layer { get; init; }
 
     public required string Note { get; init; }
+
+    /// <summary>true = 这是一根<em>集合</em>导航（父端 → 子端，如 <c>Order.Items</c>）。它不进
+    /// <see cref="EntityContract.Relationships"/> 而是进 <see cref="EntityContract.Collections"/>：
+    /// 两根边的外键住在不同那张表上，混在一格里会让每一个只认 to-one 的消费者（写序、Include、
+    /// 外键列改写）拿子端的名字去查本实体的列清单。</summary>
+    public bool IsCollection { get; init; }
+
+    /// <summary>级联开关，缺省开。<c>[NoCascade]</c> 打在实体或这一根导航上时折成 <c>false</c>。</summary>
+    public bool Cascade { get; init; } = true;
+
+    /// <summary>集合导航的读口（父实体 → 集合位当时的值），只有 <see cref="IsCollection"/> 那一档带。
+    /// <b>级联走这把委托而不是现场反射</b>：G1 由生成器写成 lambda，G2 由反射侧在启动期编译一次
+    /// （§1.2 原则 3「加载可以反射，调用不行」，与 schema 上那把 <c>Reader</c> 同一取向）。</summary>
+    public Func<object, object?>? NavigationReader { get; init; }
+
+    /// <summary>级联的入口那一格，同样只有 <see cref="IsCollection"/> 那一档带：它拿会话交出的
+    /// <see cref="FastSql.Tracking.ICascadeSink"/> 把这一根导航里的子实体送去建档，而
+    /// <c>TChild</c> 在<em>写这一格的代码里</em>是编译期已知的（生成的 lambda / 反射侧编译的委托）。
+    /// 为什么不能由会话自己 <c>MakeGenericType</c>，理由在 <c>ICascadeSink</c> 的注释上。</summary>
+    public Action<FastSql.Tracking.ICascadeSink, object>? CascadeEnter { get; init; }
 }
 
 /// <summary>事实 → <see cref="EntityContract"/> 的唯一收尾路径。</summary>
@@ -131,8 +153,10 @@ public static class EntityContractFactory
         if (table.Source is { } source)
             table = table with { Source = source with { Name = DataSourceRouting.ValidateName(source.Name, clrType.Name) } };
 
+        var (edges, collections) = MapRelationships(relationships, resolved);
+
         return new EntityContract(clrType, table, resolved, MapIndexes(indexes, resolved, clrType.Name),
-            MapRelationships(relationships, resolved));
+            edges, collections);
     }
 
     /// <summary>分片声明 → 已换算的声明，顺手把四条启动期判据比一遍：分片键得是一列、
@@ -214,25 +238,48 @@ public static class EntityContractFactory
         return [.. result.Values];
     }
 
-    /// <summary>外键成员名换算成列名。<b>不查主端</b>：被引用侧的列要另一份契约才算得出来，
+    /// <summary>导航声明按朝向分成两格。<b>to-one 那一格才换算列名</b>：外键列就在这张表上，
+    /// 而集合那一格的名字属于子端那张表（换算要另一份契约，于是挪到运行期解算那一处，见
+    /// <c>ChangeTracker</c> 的级联）。<b>不查主端</b>：被引用侧的列要另一份契约才算得出来，
     /// 而这一格的消费者（§8.2 的写序）只需要「谁依赖谁」那一条边。</summary>
-    static IReadOnlyList<RelationshipContract> MapRelationships(IReadOnlyList<RelationshipFacts> facts, ColumnContract[] columns)
+    static (IReadOnlyList<RelationshipContract> Edges, IReadOnlyList<CollectionEdgeContract> Collections)
+        MapRelationships(IReadOnlyList<RelationshipFacts> facts, ColumnContract[] columns)
     {
-        var result = new RelationshipContract[facts.Count];
+        var edges = new List<RelationshipContract>(facts.Count);
+        var collections = new List<CollectionEdgeContract>(0);
 
-        for (var i = 0; i < facts.Count; i++)
+        foreach (var fact in facts)
         {
-            var fact = facts[i];
+            if (!fact.IsCollection)
+            {
+                edges.Add(new RelationshipContract(fact.MemberName, fact.TargetType, [.. fact.ForeignKeyMembers],
+                    MapToColumns(fact.ForeignKeyMembers, columns, $"引用导航 {fact.MemberName}"))
+                {
+                    Origin = new OriginTrace(fact.Layer, fact.Note),
+                });
 
-            result[i] = new RelationshipContract(fact.MemberName, fact.TargetType, [.. fact.ForeignKeyMembers],
-                MapToColumns(fact.ForeignKeyMembers, columns, $"引用导航 {fact.MemberName}"))
+                continue;
+            }
+
+            // 集合那一格没有可读的列名，但两把委托必须在：读口拿父实体手里那一串子实体，
+            // 入口把取到的子实体送进子端的跟踪器 —— 都是静态型的东西，只能由两侧各自编好带过来。
+            collections.Add(new CollectionEdgeContract(fact.MemberName, fact.TargetType,
+                [.. fact.ForeignKeyMembers],
+                fact.NavigationReader ?? throw new FastSqlException(MissingAccessor(fact, "读口")),
+                fact.CascadeEnter ?? throw new FastSqlException(MissingAccessor(fact, "级联入口")))
             {
                 Origin = new OriginTrace(fact.Layer, fact.Note),
-            };
+                Cascade = fact.Cascade,
+            });
         }
 
-        return [.. result];
+        return (edges, collections);
     }
+
+    /// <summary>集合边的委托缺口的消息：把「哪一层声明的这条边」一起写进去，因为两侧生成器与反射解析器
+    /// 只有一侧漏带时，报错的那次运行可能走的是另一侧，光看成员名分不出是谁的锅。</summary>
+    static string MissingAccessor(RelationshipFacts fact, string what)
+        => $"集合导航 {fact.MemberName} 没有{what}（声明来自 {fact.Layer}：{fact.Note}）：级联要靠它取子实体并送进会话，两侧生成器与反射解析器都必须带这把委托。";
 
     /// <summary>同名且同形 = 两层声明了同一件事，留高优先级的最后那条；同名不同形 = 配置错误，抛。</summary>
     static void Add(IDictionary<string, IndexContract> result, IndexContract index)

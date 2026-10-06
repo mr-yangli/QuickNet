@@ -55,18 +55,43 @@ public sealed class MetadataEquivalenceTests
     // ArchiveNote 是第三、第四颗参数同时非空的那一张：漏抄任一颗都是"片名对、库错"。
     [InlineData(typeof(ReportRow))]
     [InlineData(typeof(ArchiveNote))]
+    // 级联那五对（§8.2 的集合边）在这里的对拍同样是不可替代的：Cascade 那一格 G1 读的是符号上的
+    // [NoCascade]（属性档与类档两档），G2 读的是注解实例；[ForeignKey] 点名的成员名同理。
+    // 两侧对同一根边给出一真一假的开关，落到库里就是"同一份代码在两条启动路径上带不同数量的明细"。
+    // SlotHook 是那条链的第三层（架 → 位 → 钩）：摘行那一档要说"摘掉的一只连带它自己手里的子串"，
+    // 而这句话在两层模型上根本判不出来 —— 两侧的第三层边只要差一格，级联的深度就不一样了。
+    [InlineData(typeof(Board))]
+    [InlineData(typeof(Card))]
+    [InlineData(typeof(Rack))]
+    [InlineData(typeof(ShelfSlot))]
+    [InlineData(typeof(SlotHook))]
+    [InlineData(typeof(Folder))]
+    [InlineData(typeof(Paper))]
+    [InlineData(typeof(Ledger))]
+    [InlineData(typeof(LedgerNote))]
+    [InlineData(typeof(Crate))]
+    [InlineData(typeof(Parcel))]
     public void Both_paths_produce_the_same_contract(Type clrType)
         => Assert.Equal(Shape(Reflected().Contract(clrType)), Shape(Generated().Contract(clrType)));
 
     [Theory]
     [InlineData(typeof(Order), "table = -.FastSqlOrder", "primary = Id", "index IX_FastSqlOrder_CreatedAt NonClustered (CreatedAt) → (CreatedAt)",
-        "nav Customer → FastSql.TestInfra.Customer fk=(CustomerId) cols=(CustomerId)")]
+        "nav Customer → FastSql.TestInfra.Customer fk=(CustomerId) cols=(CustomerId)",
+        // 集合边钉一条绝对值：两侧同时把 Items 记成"不是边"也是一样的形状，那条相等断言照样绿，
+        // 而级联在两条路径上都没有边可走 —— 这一格正是"逐字段相同"覆盖不到的那种共同退化。
+        "coll Items → FastSql.TestInfra.OrderItem fk=() cascade=True")]
     [InlineData(typeof(LegacyShipment), "table = -.FastSqlLegacyShipment", "primary = ShipmentId", "[1] CarrierCode clr=String col=carrier_code len=Char:32/64B")]
     [InlineData(typeof(Project), "nav = (0)")]
     [InlineData(typeof(Milestone), "nav Project → FastSql.TestInfra.Project fk=(ProjectId) cols=(ProjectId) origin=Convention: 约定：Project ⇒ ProjectId")]
     [InlineData(typeof(SelfRef), "nav Manager → FastSql.TestInfra.SelfRef fk=(ManagerId) cols=(ManagerId)")]
     [InlineData(typeof(TwoKeys), "nav = (0)")]
     [InlineData(typeof(ReportRow), "source = report")]
+    // 开关那一格钉绝对值：两条路径同时把 [NoCascade] 读成"照旧级联"也是相等的，
+    // 而那种共同退化会让看板在两条启动路径上各自带出一串卡片 —— 相等断言看不见，这一条看得见。
+    [InlineData(typeof(Board), "coll Cards → FastSql.TestInfra.Card fk=() cascade=False")]
+    [InlineData(typeof(Crate), "coll Parcels → FastSql.TestInfra.Parcel fk=() cascade=False")]
+    [InlineData(typeof(Rack), "coll Slots → FastSql.TestInfra.ShelfSlot fk=(RackKey) cascade=True")]
+    [InlineData(typeof(ShelfSlot), "coll Hooks → FastSql.TestInfra.SlotHook fk=(SlotId) cascade=True")]
     public void Contract_carries_the_layer_it_claims(Type clrType, params string[] expected)
     {
         var shape = Shape(Generated().Contract(clrType));
@@ -102,6 +127,12 @@ public sealed class MetadataEquivalenceTests
 
             $"primary = {string.Join(",", contract.PrimaryKey.Select(c => c.MemberName))}",
             $"nav = ({contract.Relationships.Count})",
+
+            // 集合边那一格（级联的来路）：两侧都要比「有几根、哪一根指向哪个子型、声明了什么外键成员、
+            // 关没关级联」，但<b>不比委托的身份</b> —— 那两把委托按构造就不可能是同一个对象
+            // （G1 是生成的 lambda，G2 是编译的表达式树），能比的只有它<b>在不在</b>，而不在的话
+            // EntityContractFactory 在建契约时就抛了，这一格根本到不了这里。
+            $"coll = ({contract.Collections.Count})",
         };
 
         for (var i = 0; i < contract.Columns.Length; i++)
@@ -118,6 +149,11 @@ public sealed class MetadataEquivalenceTests
         foreach (var nav in contract.Relationships)
             lines.Add($"nav {nav.MemberName} → {nav.TargetType.FullName} fk=({string.Join(",", nav.MemberNames)}) cols=({string.Join(",", nav.ColumnNames)})"
                 + (withOrigin ? $" origin={nav.Origin}" : ""));
+
+        // 集合边：外键成员名属于子端那张表，这里只比声明的原样（没声明就是空），换算在级联那一处运行期做。
+        foreach (var edge in contract.Collections)
+            lines.Add($"coll {edge.MemberName} → {edge.ChildType.FullName} fk=({string.Join(",", edge.DeclaredForeignKeyMembers)}) cascade={edge.Cascade}"
+                + (withOrigin ? $" origin={edge.Origin}" : ""));
 
         return [.. lines];
     }

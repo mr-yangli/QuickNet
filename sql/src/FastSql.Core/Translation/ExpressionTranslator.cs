@@ -653,7 +653,7 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
 
         IReadOnlyList<string> fkColumnNames;
 
-        try { fkColumnNames = DiscoverFkColumnsForSubquery(parentContract, childContract); }
+        try { fkColumnNames = DiscoverFkColumnsForSubquery(parentContract, childContract, navName); }
         catch { return false; }
 
         var parentKeys = parentContract.PrimaryKey;
@@ -1003,9 +1003,10 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
         return null;
     }
 
-    /// <summary>子查询版的 FK 发现：与 <c>QueryEngine</c>/<c>DbSet</c> 里那两份逻辑同构，
+    /// <summary>子查询版的 FK 发现：与 <c>QueryEngine</c>/<c>DbSet</c> 里那两份逻辑同三档（点名那一档走
+    /// <see cref="ContractResolver.ResolveDeclaredFkColumns"/>，同一根边不许两个答案），
     /// 但只返回列名清单、不抛带上下文的异常（调用方按 <c>return false</c> 处理）。</summary>
-    static IReadOnlyList<string> DiscoverFkColumnsForSubquery(EntityContract parentContract, EntityContract childContract)
+    static IReadOnlyList<string> DiscoverFkColumnsForSubquery(EntityContract parentContract, EntityContract childContract, string memberName)
     {
         var parentKeys = parentContract.PrimaryKey;
 
@@ -1014,6 +1015,9 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
             if (rel.TargetType == parentContract.ClrType)
                 return rel.ColumnNames;
         }
+
+        if (ContractResolver.ResolveDeclaredFkColumns(parentContract, childContract, memberName) is { } declaredColumns)
+            return declaredColumns;
 
         var parentTypeName = parentContract.ClrType.Name;
 

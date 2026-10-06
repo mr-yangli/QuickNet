@@ -28,6 +28,7 @@ static class EntityFactsBuilder
     const string DataSchemaColumn = "System.ComponentModel.DataAnnotations.Schema.ColumnAttribute";
     const string DataNotMapped = "System.ComponentModel.DataAnnotations.Schema.NotMappedAttribute";
     const string DataForeignKey = "System.ComponentModel.DataAnnotations.Schema.ForeignKeyAttribute";
+    const string FastSqlNoCascade = "FastSql.Metadata.NoCascadeAttribute";
     const string IEnumerable = "System.Collections.IEnumerable";
     const string DataRequired = "System.ComponentModel.DataAnnotations.RequiredAttribute";
     const string DataStringLength = "System.ComponentModel.DataAnnotations.StringLengthAttribute";
@@ -105,7 +106,12 @@ static class EntityFactsBuilder
 
             if (!IsColumnShape(property.Type))
             {
+                // 两格导航都收，收在<em>同一份列表</em>里按声明序：反射侧那一格是按 MetadataToken 序
+                // 一次走完的，而 §13.11 的对拍比的是逐行相等（顺序也算内容），分成两份列表去产出会把
+                // "先声明集合再声明引用"那一张实体判成分叉。
                 if (IsReferenceNavigation(property.Type))
+                    navigations.Add(property);
+                else if (property.GetMethod is not null && CollectionElementOf(property.Type) is not null)
                     navigations.Add(property);
 
                 continue;
@@ -118,7 +124,7 @@ static class EntityFactsBuilder
         }
 
         // 关系要等列收齐（约定那一档问的是"这张表上有没有 XxxId 那一列",而导航属性常写在前面）。
-        RelationshipsOf(navigations, model, outcome, at, conflicts);
+        RelationshipsOf(navigations, entity, model, outcome, at, conflicts);
 
         IndexesOf(entity, model, outcome, at, conflicts);
 
@@ -324,15 +330,36 @@ static class EntityFactsBuilder
         return false;
     }
 
-    static void RelationshipsOf(List<IPropertySymbol> navigations, EntityModel model, BuildOutcome outcome, Location at, bool alreadyFailed)
+    static void RelationshipsOf(List<IPropertySymbol> navigations, INamedTypeSymbol entity, EntityModel model, BuildOutcome outcome, Location at, bool alreadyFailed)
     {
         if (alreadyFailed)
             return;
 
         foreach (var property in navigations)
         {
+            var declared = ForeignKeyOf(property);
+
+            // 集合那一格：外键成员在<em>子端</em>那张表上，这里既拿本实体的列清单换算不了，也不该换算
+            // （换算要另一份契约，而注册表是按需解析的，子端契约此刻未必存在）。声明只带着成员名走，
+            // 真到了级联要用那一刻才解，解不出就响。约定那一档同理不在编译期判。
+            if (CollectionElementOf(property.Type) is { } child)
+            {
+                model.Relationships.Add(new RelationshipModel
+                {
+                    Member = property.Name,
+                    TargetType = TypeExpression(child),
+                    Members = [.. declared ?? []],
+                    Layer = declared is null ? "Convention" : "DataAccessAnnotation",
+                    Note = declared is null ? $"集合导航：{property.Name} ⇒ {child.Name}" : $"[ForeignKey(\"{string.Join(",", declared)}\")]",
+                    IsCollection = true,
+                    Cascade = !IsNoCascade(property, entity),
+                });
+
+                continue;
+            }
+
             // 显式声明：写了却没那一列 = 配置错，编译期就得说（反射侧是启动期抛同一句话）。
-            if (ForeignKeyOf(property) is { } declared)
+            if (declared is not null)
             {
                 foreach (var member in declared)
                 {
@@ -373,6 +400,36 @@ static class EntityFactsBuilder
             });
         }
     }
+
+    /// <summary>集合导航的元素型：收下 <see cref="IEnumerable"/>（非泛型那一颗）又不是 <c>string</c>
+    /// 的形状，取它 <c>IEnumerable&lt;T&gt;</c> 的那个 <c>T</c>，<b>只有类形态的才算子行</b>
+    /// （<c>List&lt;string&gt;</c> 是标签、<c>Dictionary&lt;K,V&gt;</c> 的元素是 <c>KeyValuePair</c> 结构体，
+    /// 给它们出一条边等于让 <c>Add</c> 在根本没有子行的地方找外键）。反射侧 <c>CollectionElementOf</c> 同一条。</summary>
+    static ITypeSymbol? CollectionElementOf(ITypeSymbol type)
+    {
+        var core = Core(type);
+
+        if (core.SpecialType == SpecialType.System_String || !ImplementsEnumerable(core))
+            return null;
+
+        foreach (var iface in core.AllInterfaces)
+        {
+            if (iface is { IsGenericType: true, OriginalDefinition.SpecialType: SpecialType.System_Collections_Generic_IEnumerable_T })
+            {
+                var element = iface.TypeArguments[0];
+
+                return element.TypeKind == TypeKind.Class && element.SpecialType != SpecialType.System_String ? element : null;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary><c>[NoCascade]</c> 的两档：打在实体上这一张表的导航都不带人，打在那根集合导航上只有它不带。
+    /// 级联缺省为开，所以这里只判退出（反射侧 <c>IsNoCascade</c> 同一条）。</summary>
+    static bool IsNoCascade(IPropertySymbol property, INamedTypeSymbol entity)
+        => Find(property.GetAttributes(), FastSqlNoCascade) is not null
+           || Find(entity.GetAttributes(), FastSqlNoCascade) is not null;
 
     static string[]? ForeignKeyOf(IPropertySymbol property)
         => Find(property.GetAttributes(), DataForeignKey) is { } declared ? Split(Text(declared, 0, "Name")) : null;

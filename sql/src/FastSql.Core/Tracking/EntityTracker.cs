@@ -97,6 +97,10 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
 
     readonly bool _hasIdentity;
 
+    /// <summary>这一型有没有集合边（级联的闸门）。<b>为假时 <c>Add</c>/<c>Remove</c> 一句都不多付</b>：
+    /// 绝大多数实体没有导航，而级联的遍历要为每一次调用新建一份游标。</summary>
+    readonly bool _cascades;
+
     bool _mayHaveWrites;
 
     public EntityTracker(FastSqlOrm orm, ChangeTracker session)
@@ -128,6 +132,7 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
         }
 
         _keyOrdinals = [.. keys];
+        _cascades = _contract.Collections.Count > 0;
         _writable = writable;
         _tokens = [.. tokens];
 
@@ -311,6 +316,11 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
         if (key is null)
             AssignTempKey(node, typed, values);
 
+        // 级联插入：顺这一张实体的集合边把子实体一起带进会话（§8.2）。放在新登记之后、且在
+        // 上面那句"已跟踪就直接还回原节点"的早退之外 —— 递归靠的正是「只有新登记才往下走」。
+        if (_cascades)
+            _session.Cascade(this, entity, CascadeMode.Insert);
+
         return node;
     }
 
@@ -408,6 +418,9 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
         {
             if (node.State == EntityState.Added)
             {
+                // 父本轮还没写出去，删它的正确执行方式是忘掉它（既有语义）。这里不替它连带忘掉子实体：
+                // 那要把"哪些是这一串带进来的"记成一份账，而那份账一旦记错就是静默漏删。
+                // 子还留在会话里 = 它的键落不下去，SaveChanges 会在级联落键那一格响亮地拒。
                 Detach(node);
 
                 return node;
@@ -415,6 +428,9 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
 
             node.State = EntityState.Deleted;
             _mayHaveWrites = true;
+
+            if (_cascades)
+                _session.Cascade(this, entity, CascadeMode.Delete);
 
             return node;
         }
@@ -425,11 +441,74 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
         if (_identity.TryGetValue(key, out var clash))
             throw new FastSqlException(Collision(clash, values) + " 要删的是会话里那一只：对它调用 Remove。");
 
-        return Register(entity, EntityState.Deleted, key, typed);
+        var registered = Register(entity, EntityState.Deleted, key, typed);
+
+        if (_cascades)
+            _session.Cascade(this, entity, CascadeMode.Delete);
+
+        return registered;
     }
 
     /// <summary>这只引用是不是在本档里。<see cref="ChangeTracker.OwnerOf"/> 用它把 <c>Entry</c> 的拒绝说准。</summary>
     public bool Owns(object entity) => _byRef.ContainsKey(entity);
+
+    /// <summary>这一行在本档里已经是哪只实例（<see cref="ITypeTracker.Canonical"/>）。
+    /// <b>没有主键、键还没值、或这一行没进过身份映射都返回 null</b>：本句只是问，不登记，也不响 ——
+    /// 键没值的实例按规则不在映射里（<see cref="Find"/> 上方那句说的同一件事）。</summary>
+    public object? Canonical(object entity)
+    {
+        if (_keyOrdinals.Length == 0)
+            return null;
+
+        var values = KeyValues((T) entity);
+
+        return IsDefinite(values) && _identity.TryGetValue(new IdentityKey(values), out var node) ? node.Entity : null;
+    }
+
+    public EntityState? StateOf(object entity)
+        => _byRef.TryGetValue(entity, out var node) ? node.State : null;
+
+    public object?[] KeyValuesOf(object entity) => KeyValues((T) entity);
+
+    /// <summary>级联落键：把父那一串的键值写进本档这几列外键。<b>先换型再写</b> —— schema 的 setter
+    /// 是强转的装箱写入，主端 <c>bigint</c> 配子端 <c>int</c> 是合法 DDL，不換就是现场一次
+    /// <see cref="InvalidCastException"/>（与 <see cref="AdaptKey"/> 同一条理由，那一颗只服务临时键那条路径）。
+    /// 装不下要响亮地拒：静默截断出来的是一颗库里不属于任何父行的键。</summary>
+    public void SetForeignKeys(object entity, int[] ordinals, object?[] values)
+    {
+        var typed = (T) entity;
+
+        for (var i = 0; i < ordinals.Length; i++)
+            _schema.SetValue(typed, ordinals[i], AdaptKeyValue(values[i], _columns[ordinals[i]]));
+    }
+
+    object? AdaptKeyValue(object? value, ColumnContract column)
+    {
+        var type = Nullable.GetUnderlyingType(column.ClrType) ?? column.ClrType;
+
+        if (value is null || type == value.GetType())
+            return value;
+
+        // 整型之间按 long 过一遍：这是唯一到得了这一格的键型（发号那一档只发 int/long），
+        // 而子端那一列可以是 int/long/short/byte 里的任何一种。
+        if (value is int or long && IsIntegerClrType(type))
+        {
+            var wide = Convert.ToInt64(value);
+
+            try
+            {
+                return Convert.ChangeType(wide, type);
+            }
+            catch (OverflowException)
+            {
+                throw new FastSqlException($"{_contract.Table.Name} 的 {column.MemberName}（列 {column.ColumnName}）是 {type.Name}，" +
+                    $"装不下主端给回来的键 {wide}：外键列比主键列窄，这一版不替它截断 —— 把这两列做成同型。");
+            }
+        }
+
+        throw new FastSqlException($"{_contract.Table.Name} 的 {column.MemberName}（列 {column.ColumnName}）是 {type.Name}，" +
+            $"而主端那一列是 {value.GetType().Name}：级联要把父的键落成子的外键，两列不同型又没有可说的换型规则 —— 把这两列做成同型。");
+    }
 
     /// <summary>取入口。<b>不代替 Attach</b>：规格 §8.3 的写法本来就是「先 Attach 再改 State」，
     /// 而「查一个入口顺手把实体纳入会话」是一种没人说过的写入意图。
@@ -1275,9 +1354,10 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
     /// 一个键还没填的实例依旧是会话里的一个实例，只是查不到它。</summary>
     Node Register(object entity, EntityState state, IdentityKey? key, T typed)
     {
-        var node = new Node(entity, _columns.Length) { State = state, Registered = key };
+        var node = new Node(entity, _columns.Length, _contract.Collections.Count) { State = state, Registered = key };
 
         Snapshot(node, typed);
+        RememberCollections(node, typed);
 
         _byRef[entity] = node;
         _order.Add(node);
@@ -1289,6 +1369,31 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
             _mayHaveWrites = true;
 
         return node;
+    }
+
+    /// <summary>把这一张实体手里那几串集合位<em>此刻的成员</em>记成基线 —— 摘行那一档（裁决③）唯一的判据：
+    /// <c>collection.Remove(x)</c> 既不发事件也不留痕迹，会话要说出"这一只刚从那一串里被摘掉"，
+    /// 就只能拿自己上一次看见的那一串跟现在这一串比。登记入口只有一处（<see cref="Register"/>），
+    /// 所以 <c>Add</c> / <c>Attach</c> / 物化各记一次，<c>Load</c> 之后由 <see cref="RememberCollections(T)"/> 补记。
+    /// <b>没有集合边的类型上这一步一次都不跑</b>（<c>node.Baselines</c> 在那一档是 null）。</summary>
+    void RememberCollections(Node node, T entity)
+    {
+        if (node.Baselines is not { } baselines)
+            return;
+
+        var edges = _contract.Collections;
+
+        for (var slot = 0; slot < edges.Count; slot++)
+            if (edges[slot].Cascade)
+                baselines[slot] = CascadeWalker.LiveMembers(edges[slot], entity);
+    }
+
+    /// <summary><c>DbSet.Load</c> 缝完一根集合导航之后重新记基线：从这一刻起"这一串里有谁"是一句<em>捞过</em>的声明，
+    /// 之后从里面摘掉一只就是要删那一行。不在会话里的实例不记 —— 会话对它没有账，也就没有要还的摘行。</summary>
+    internal void RememberCollections(T parent)
+    {
+        if (_byRef.TryGetValue(parent, out var node))
+            RememberCollections(node, parent);
     }
 
     void Detach(Node node)

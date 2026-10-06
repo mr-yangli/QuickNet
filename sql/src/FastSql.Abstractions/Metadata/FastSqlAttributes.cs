@@ -109,3 +109,10 @@ public sealed class DataSourceAttribute(string cluster) : Attribute
 /// 而「谁负责 +1」还没定，缺口与判据记在 §14 的 P1 余项。</para></remarks>
 [AttributeUsage(AttributeTargets.Property)]
 public sealed class ConcurrencyTokenAttribute : Attribute;
+
+/// <summary>关掉级联：这一颗实体（打在类上）或这一根集合导航（打在属性上）在 <c>Add</c>/<c>Remove</c>
+/// 顺导航图带人时<em>不出边</em>，子实体要自己 <c>Add</c>/<c>Remove</c>。</summary>
+/// <remarks><b>级联默认是开的</b>，所以这一颗只有退出用途，没有开启用途：它给的是「这张表的子行不归父行管」
+/// 那一类（多对多的中间表、由别的流程维护的从属行、以及库里根本不该被父行带着走的集合）。</remarks>
+[AttributeUsage(AttributeTargets.Class | AttributeTargets.Property)]
+public sealed class NoCascadeAttribute : Attribute;

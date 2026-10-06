@@ -435,6 +435,10 @@ public sealed class TrackingTests
         var db = session();
         var order = row(7);
 
+        // 级联删除看得见子行才动手：这一格写空数组是"我看过这张单的明细，确实没有"的一句声明。
+        // 留 null 会被判成"还没捞出来"而拒（裁决①），那是另一条用例的形状。
+        order.Items = [];
+
         db.Attach(order);
         db.Remove(order);
 
@@ -530,7 +534,11 @@ public sealed class TrackingTests
 
         Assert.Null(quiet);
 
-        db.Remove(row(21));
+        // 级联删除要先看得见子行（裁决①）：这一格同样是"没有明细"的声明，不是留 null 让会话替它猜。
+        var stale = row(21);
+        stale.Items = [];
+
+        db.Remove(stale);
 
         // 探针的响法在这里被加载层吞了一次：SqlServerConnectorFactory.TryEnsureLoaded 探测连接时 catch 一切，
         // 那句"不该碰驱动"于是以 detail 的身份出现在 DriverNotAvailableException 里。断言看消息，不看类型。

@@ -616,6 +616,10 @@ public sealed class TrackingPathTests
         await ReadTagged(db, note + "/keep");
         var toDelete = Assert.Single(await ReadTagged(db, note + "/drop"));
 
+        // 裁决①（可达才删）的前置：删一只声明了级联的父之前，先把它的明细捞进会话。
+        // 这一格的现场里没有明细行，Load 带回来的是空串 —— 那句"没有要删的"从此是<em>说过</em>的，不是猜的。
+        db.Set<Order>().Load(o => o.Items!);
+
         db.Remove(toDelete);
 
         Assert.True(db.ChangeTracker.HasChanges);
@@ -726,6 +730,10 @@ public sealed class TrackingPathTests
         var fresh = row("午公司", 7m, note + "/new");
 
         db.Add(fresh);
+
+        // 同上一条的理由：Remove 一只声明了级联的父要先让子行可达（裁决①），这里带回来的是空串。
+        db.Set<Order>().Load(o => o.Items!);
+
         db.Remove(drop);
         edit.Amount = 42m;
 

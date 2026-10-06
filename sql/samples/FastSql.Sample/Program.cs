@@ -150,14 +150,63 @@ await db.SaveChangesAsync();
 var remaining = await db.OrderItems.Where(i => i.OrderId == order.Id).ToListAsync();
 Console.WriteLine($"删除明细后：剩余 {remaining.Count} 行");
 
-// ── 4.5 删除主表（先删明细再删主表，或一起交给 SaveChanges 排先后） ──
+// ── 4.5 删除主表（级联删除：明细要先在会话里，父才删得动） ──
+//
+// 会话看不见子行时，它说不出"这一串是真的没有，还是还没捞出来"，所以直接删父会响
+// （可达才删，捞不到就拒）。先把那一串捞进会话再删：明细跟着一起标删，
+// SaveChanges 按逆序发语句（先明细再父），不必再一只只 db.Remove。
+db.Orders.Load(o => o.Items!);
 db.Remove(order);
-db.Remove(remaining[0]); // 删最后一行明细
 await db.SaveChangesAsync();
 
 var orderCount = await db.Orders.Where(o => o.CustomerId == cust.Id).ToListAsync();
 var itemCount = await db.OrderItems.Where(i => i.OrderId == order.Id).ToListAsync();
 Console.WriteLine($"删除主从后：订单 {orderCount.Count} 条，明细 {itemCount.Count} 条");
+
+// ── 4.6 级联插入：只 Add 父，明细跟着进会话 ──
+//
+// 上面那两行明细是一只只 db.Add 进去的；这一节只 Add 父。集合导航 Order.Items
+// 上没打 [NoCascade]，会话顺那根边把明细一起带进来，并按边排写入先后：
+// 先 INSERT 父拿到自增 Id，再把那颗 Id 落进每一行明细的 OrderId（临时键不进库）。
+var bill = new Order
+{
+    CustomerId = cust.Id,
+    Amount = 120.00m,
+    CreatedAt = DateTime.Now,
+    Note = "级联那一笔",
+    Items =
+    [
+        new OrderItem { Sku = "SKU-A", Quantity = 1, Price = 40.00m },
+        new OrderItem { Sku = "SKU-B", Quantity = 2, Price = 40.00m },
+    ],
+};
+
+db.Add(bill);
+Console.WriteLine($"一句 Add 之后会话里：{db.ChangeTracker.Count} 只（1 父 + 2 明细）");
+
+await db.SaveChangesAsync();
+Console.WriteLine($"级联插入：父 Id={bill.Id}，两行明细回填到的外键 = {bill.Items[0].OrderId} / {bill.Items[1].OrderId}");
+
+// ── 4.7 摘行：从集合里摘掉一只，就是删掉库里那一行 ──
+//
+// 先把那一串捞进会话（Load 那根导航），再从集合里 Remove 一只。会话比的是
+// "上一次看见的那一串"与"此刻这一串"，缺席的那一只进删除档；留着的那一行不动，父也不动。
+db.Orders.Load(o => o.Items!);
+
+var pulled = bill.Items!.First(i => i.Sku == "SKU-B");
+bill.Items.Remove(pulled);
+
+var detachReport = await db.SaveChangesAsync();
+var survivors = await db.OrderItems.Where(i => i.OrderId == bill.Id).ToListAsync();
+Console.WriteLine($"摘掉一行：发了 {string.Join(" → ", detachReport.Operations.Select(op => op.Table + "/" + op.Operation))}，库里剩 {survivors.Count} 行（{string.Join("、", survivors.Select(s => s.Sku))}）");
+
+// ── 4.8 级联删除：明细在手，删父一起走（逆序发语句）──
+db.Orders.Load(o => o.Items!);
+db.Remove(bill);
+
+var cascadeReport = await db.SaveChangesAsync();
+var leftItems = await db.OrderItems.Where(i => i.OrderId == bill.Id).ToListAsync();
+Console.WriteLine($"级联删除：{string.Join(" → ", cascadeReport.Operations.Select(op => op.Table + "/" + op.Operation))}，父 {bill.Id} 名下剩 {leftItems.Count} 行");
 
 Console.WriteLine();
 

@@ -10,7 +10,7 @@ namespace FastSql.Tracking;
 /// <b>三张数组都按 <see cref="EntityContract.Columns"/> 的下标对齐</b>，不按名字：跟踪一万行时
 /// 每次比较都要查一次字典的话，<c>DetectChanges</c> 的开销就从"读一遍字段"变成"读一遍字段 + 一万次哈希"。
 /// 列名只出现在出入口（<see cref="EntityEntry.ModifiedMembers"/> 与报告）。</summary>
-sealed class Node(object entity, int columnCount)
+sealed class Node(object entity, int columnCount, int collectionCount)
 {
     /// <summary>被跟踪的实例本体。身份映射与去重判的都是它的<b>引用</b>，所以这张表用的是引用相等比较器。</summary>
     public readonly object Entity = entity;
@@ -25,6 +25,17 @@ sealed class Node(object entity, int columnCount)
 
     /// <summary>本次要进 <c>SET</c> 的列（比较结论与覆盖的合成）。只在 <c>DetectChanges</c> 里被写。</summary>
     public bool[] Dirty { get; } = new bool[columnCount];
+
+    /// <summary>每一根<em>集合边</em>上一次看见的那一串子实体的引用，按 <see cref="EntityContract.Collections"/>
+    /// 的下标对齐（与上面三张数组按列下标对齐是同一条理由）。<b>没有集合边的类型上是 <c>null</c></b>，
+    /// 所以跟踪一万行标量实体不会为这一格多付一只数组。
+    ///
+    /// <para>它是摘行那一档（裁决③）唯一的判据：<c>collection.Remove(x)</c> 既不发事件也不留痕迹，
+    /// 会话要说出"这一只刚从那一串里被摘掉"，就只能拿自己上一次看见的那一串跟现在这一串比。
+    /// <b>某一格为 <c>null</c> 是"这一串我从来没见过"</b> —— 与"见过且为空"（一只空列表）严格不同：
+    /// 前者不判（不替没看见的东西编一份缺席的账），后者才判得出摘掉的是谁。裁决①那一条"捞不到就拒"
+    /// 在这里翻过来用：捞不到也就<em>不摘</em>，而不是把整串当成没人。</para></summary>
+    public List<object>?[]? Baselines { get; } = collectionCount > 0 ? new List<object>?[collectionCount] : null;
 
     public EntityState State { get; set; } = EntityState.Detached;
 
@@ -64,10 +75,31 @@ interface ITypeTracker
     /// 实现侧第一句就是 <c>(T) entity</c> —— 静态类型不匹配是内核的不变量破了，不是调用方写错。</summary>
     Node Track(object entity);
 
+    /// <summary>这一行在本档里<em>已经</em>是哪只实例；<b>没登记过返回 null，而且不登记</b>。
+    /// 它挂在 <see cref="Track"/> 旁边是为了补一条 Track 补不到的问句：补载（<c>Load</c> /
+    /// <c>IncludeMany</c>）把子实体缝进导航时只想知道"会话里那一行是哪一只"，
+    /// 而<b>要不要把这一行收进会话不是这一步决定的</b>（那是 Track 的职权，见 §8.2 的建档口径）——
+    /// 拿 Track 办这件事会顺手把没建档的类型撞响。</summary>
+    object? Canonical(object entity);
+
     /// <summary>这一档里有没有<em>这个引用</em>（不取入口，所以不构造对象）。
     /// 存在的理由只有一条：<see cref="ChangeTracker"/> 要能说出"这只实例在哪一档"，
     /// 而不是让 <c>Entry</c> 拿推断出来的泛型参数去猜（派生实例会猜错，见 <c>DbContext.Entry{T}</c>）。</summary>
     bool Owns(object entity);
+
+    /// <summary>这个引用在这一档<em>此刻</em>的状态；<b>null = 不在这一档里</b>。
+    /// 摘行那一档用它把「已经在删的」与「从没进过会话的」分开：前者不必再判第二次（它本来就归这次删除），
+    /// 后者才是要新登记成 <see cref="EntityState.Deleted"/> 的那一只 —— 拿 <see cref="Owns"/> 判分不开这两格。</summary>
+    EntityState? StateOf(object entity);
+
+    /// <summary>读一只实例的主键值（级联落键那一步要拿父的键）。挂在接口上又是那条「泛型参数只住在类型上」
+    /// 的产物：读键要走 <c>IEntityTypeSchema&lt;T&gt;</c>，而调度层手里只有 <see cref="Type"/> 与一只装箱实例。</summary>
+    object?[] KeyValuesOf(object entity);
+
+    /// <summary>把父的键写进子行手里那几列外键（级联插入，§8.2）。<b>型不合要在这里说</b>：
+    /// schema 的 setter 是强转的装箱写入，而主键列 <c>bigint</c> 配外键列 <c>int</c> 是合法 DDL ——
+    /// 装不下的现场本来是一次 <c>InvalidCastException</c>，不是一句话。</summary>
+    void SetForeignKeys(object entity, int[] ordinals, object?[] values);
 
     /// <summary>把已有的节点包成入口。<b>不做查找</b>：调度层已经按引用表拿到了节点，这里只补 <c>T</c>。
     /// 挂在接口上是因为 <see cref="ChangeTracker.Entries"/> 手里只有 <see cref="Node"/>，

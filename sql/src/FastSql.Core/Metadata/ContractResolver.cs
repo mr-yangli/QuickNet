@@ -2,6 +2,7 @@ using System.Collections;
 using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using FastSql.Materialization;
 using FastSql.Metadata.Fluent;
 using FastSql.Providers;
 using Da = System.ComponentModel.DataAnnotations;
@@ -21,13 +22,60 @@ public sealed class ContractResolver(IDbProvider provider, ModelConfiguration? c
     public ModelConfiguration Configuration { get; } = configuration ?? new ModelConfiguration();
 
     [RequiresUnreferencedCode("G2 兜底路径按 Type 扫描属性与注解；AOT 场景要用 G1 生成的契约（§12.7）。")]
+    [RequiresDynamicCode("G2 兜底路径为集合导航编译读口委托；AOT 场景要用 G1 生成的契约（§12.7）。")]
     public EntityContract Resolve(Type clrType) => _cache.GetValue(clrType, Build);
 
     [RequiresUnreferencedCode("G2 兜底路径按 Type 扫描属性与注解；AOT 场景要用 G1 生成的契约（§12.7）。")]
+    [RequiresDynamicCode("G2 兜底路径为集合导航编译读口委托；AOT 场景要用 G1 生成的契约（§12.7）。")]
     public EntityContract Resolve<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>()
         where T : class => Resolve(typeof(T));
 
+    /// <summary>那一根集合边上点名的外键成员（<c>[ForeignKey]</c> 的第二档）。
+    /// 找不到那一根边（导航没被契约收录）就给空串，调用方照旧走第一、第三档 —— 这一格不替配置错误编一个"没有声明"。</summary>
+    static IReadOnlyList<string> DeclaredFkMembers(EntityContract parent, string memberName)
+    {
+        foreach (var edge in parent.Collections)
+            if (edge.MemberName == memberName)
+                return edge.DeclaredForeignKeyMembers;
+
+        return [];
+    }
+
+    /// <summary>第二档：把集合导航上点名的外键成员换算成<b>子端的列名</b>；这根导航没有点名就返回 <c>null</c>。
+    /// 三处反推外键的路（<c>DbSet.Load</c>、<c>IncludeMany</c>、子查询里的集合导航）与级联落键那一条
+    /// （<c>ChangeTracker.ResolveCascadeForeignKey</c>）共用这一颗：同一根边不许在两条路径上得到两个答案，
+    /// 否则"级联插得进去、Load 捞不上来"会把级联删除那条出路（先捞进会话再删）走成死路。</summary>
+    internal static IReadOnlyList<string>? ResolveDeclaredFkColumns(EntityContract parent, EntityContract child, string memberName)
+    {
+        var declared = DeclaredFkMembers(parent, memberName);
+
+        if (declared.Count == 0)
+            return null;
+
+        var keys = parent.PrimaryKey;
+
+        if (declared.Count != keys.Length)
+            throw new FastSqlException(
+                $"{child.ClrType.Name} 到 {parent.ClrType.Name} 的导航 {memberName} 点了 {declared.Count} 个外键成员，" +
+                $"而父实体有 {keys.Length} 个主键列，数量不匹配 —— 复合主键要逐列点名。");
+
+        var columns = new List<string>(declared.Count);
+
+        foreach (var member in declared)
+        {
+            if (!child.ByMember.TryGetValue(member, out var column))
+                throw new FastSqlException(
+                    $"{child.ClrType.Name} 上没有名为 {member} 的列（{parent.ClrType.Name}.{memberName} 点名的外键成员）：" +
+                    "外键成员点了名而子端没有那一列，是配置错误。");
+
+            columns.Add(column.ColumnName);
+        }
+
+        return columns;
+    }
+
     [RequiresUnreferencedCode("G2 兜底路径按 Type 扫描属性与注解；主路径是 G1 源生成。")]
+    [RequiresDynamicCode("G2 兜底路径为集合导航编译读口委托；主路径是 G1 源生成。")]
     EntityContract Build(Type clrType)
     {
         var fluent = Configuration.Find(clrType);
@@ -76,6 +124,7 @@ public sealed class ContractResolver(IDbProvider provider, ModelConfiguration? c
     }
 
     [RequiresUnreferencedCode("按 Type 扫描公共属性。")]
+    [RequiresDynamicCode("集合导航的读口要编译委托。")]
     List<MemberFacts> ReadMembers(Type clrType)
     {
         var result = new List<MemberFacts>();
@@ -107,8 +156,16 @@ public sealed class ContractResolver(IDbProvider provider, ModelConfiguration? c
                 facts.Reference = Nullable.GetUnderlyingType(property.PropertyType) ?? property.PropertyType;
                 facts.ForeignKeyMembers = ForeignKeyOf(property);
             }
+            else if (property.CanRead && CollectionElementOf(property.PropertyType) is { } element)
+            {
+                // 集合导航也不是列，但它是<em>朝反了的那一根</em>关系（父端 → 子端，外键在子端那张表上）。
+                // 丢掉它 = 级联没有边可走，于是 Add 不带子实体、Remove 留一串孤行。
+                facts.Ignored = "集合导航（不是列）";
+                facts.Collection = element;
+                facts.ForeignKeyMembers = ForeignKeyOf(property);
+            }
             else
-                facts.Ignored = "非可映射类型（集合导航由 §5.6 的缝合路径处理，今天未接线）";
+                facts.Ignored = "非可映射类型";
 
             result.Add(facts);
         }
@@ -131,16 +188,48 @@ public sealed class ContractResolver(IDbProvider provider, ModelConfiguration? c
                || core.IsEnum;
     }
 
-    /// <summary>引用导航 = 类类型、不是 <c>string</c>、不是集合形态。数组与 <c>List&lt;T&gt;</c> 走不到这里：
-    /// 那是集合导航，§5.6 的缝合路径还没接线，今天仍然只是「不可映射而跳过」。
+    /// <summary>引用导航 = 类类型、不是 <c>string</c>、不是集合形态（数组与 <c>List&lt;T&gt;</c> 走
+    /// <see cref="CollectionElementOf"/> 那一格，成为朝反了的边）。
     /// <b>判定不要求目标类型是实体</b>——一个 <c>Uri</c> 属性配上 <c>UriId</c> 列也会算出一条边，
-    /// 而这条边今天唯一的用法（写序）对没有跟踪档的类型天然无效。G1 侧同一条判定。</summary>
+    /// 而这条边今天唯一的用法（写序）对没有跟踪档的类型天然无效。G1 侧 <c>IsReferenceNavigation</c> 同一条。</summary>
     static bool IsReferenceNavigation(Type type)
     {
         var core = Nullable.GetUnderlyingType(type) ?? type;
 
         return core.IsClass && core != typeof(string) && !typeof(IEnumerable).IsAssignableFrom(core);
     }
+
+    /// <summary>集合导航的元素型：收下了 <see cref="IEnumerable"/>（非泛型那一颗）又不是 <c>string</c>
+    /// 也不是 <c>byte[]</c>（那两格在上面那条链里已经是列）的形状，取它 <c>IEnumerable&lt;T&gt;</c> 的那个 <c>T</c>。
+    /// <b>只有类形态的元素才算集合导航</b>：<c>List&lt;string&gt;</c>、<c>List&lt;int&gt;</c>、
+    /// <c>Dictionary&lt;K,V&gt;</c>（元素是 <c>KeyValuePair</c> 结构体）这些都是标签或配置，不是一串子行，
+    /// 给它们出一条边会让 <c>Add</c> 在根本不该级联的地方找外键。两侧同一判据（G1 侧
+    /// <c>CollectionElementOf</c>）。</summary>
+    [RequiresUnreferencedCode("按运行期 Type 反射判集合元素型。")]
+    [RequiresDynamicCode("按运行期 Type 反射判集合元素型。")]
+    static Type? CollectionElementOf(Type type)
+    {
+        if (type == typeof(string) || !typeof(IEnumerable).IsAssignableFrom(type))
+            return null;
+
+        foreach (var iface in type.GetInterfaces())
+        {
+            if (iface.IsGenericType && iface.GetGenericTypeDefinition() == typeof(IEnumerable<>))
+            {
+                var element = iface.GetGenericArguments()[0];
+
+                return element.IsClass && element != typeof(string) ? element : null;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary><c>[NoCascade]</c> 的两档：打在实体上是"这一张表的导航都不带人"，打在具体那根集合导航上
+    /// 是"只有这一根不带"。级联缺省为开，所以这里只判退出（G1 侧同一条，注解读的是源码符号）。</summary>
+    static bool IsNoCascade(MemberFacts member)
+        => member.Property.GetCustomAttribute<NoCascadeAttribute>() is not null
+           || member.Property.DeclaringType!.GetCustomAttribute<NoCascadeAttribute>() is not null;
 
     /// <summary><c>[ForeignKey]</c> 只读<em>导航属性</em>上那一颗（反向标注在属性上、指向导航的那一种
     /// 形态没有实现，§10.2 的层清单里它本来就只有一格）。逗号分隔 = 复合外键，两侧同一句拆分。</summary>
@@ -161,13 +250,41 @@ public sealed class ContractResolver(IDbProvider provider, ModelConfiguration? c
     /// <summary>声明折成 <see cref="RelationshipFacts"/>，与索引同一取向：列名换算、
     /// 「外键指向未映射属性」那条拒绝都在 <see cref="EntityContractFactory"/>，只有一份。
     /// <b>约定那一档要先自己确认属性在场</b>：命不中就根本没有关系（不是错误），
-    /// 而 <c>[ForeignKey]</c> 写了却没那一列 = 配置错误，交给收尾那条消息抛出去。</summary>
+    /// 而 <c>[ForeignKey]</c> 写了却没那一列 = 配置错误，交给收尾那条消息抛出去。
+    ///
+    /// <para>集合那一格另算：它的外键成员在<em>子端</em>那张表上，这里既换算不了、也不该拿本实体的列清单
+    /// 去比，所以声明只带着成员名原样走（没声明就是空数组，运行期级联那一处再解），而级联要的那把读口
+    /// 在这里编译一次 —— 启动期反射、级联每行只调委托（§12.7 C 那条界线）。</para></summary>
+    [RequiresUnreferencedCode("集合导航的读口按运行期类型与成员名定位属性。")]
+    [RequiresDynamicCode("集合导航的读口是编译出来的表达式树。")]
     static IReadOnlyList<RelationshipFacts> ResolveRelationships(List<MemberFacts> members, List<ColumnFacts> columns)
     {
         var result = new List<RelationshipFacts>();
 
         foreach (var member in members)
         {
+            if (member.Collection is { } child)
+            {
+                result.Add(new RelationshipFacts
+                {
+                    MemberName = member.Property.Name,
+                    TargetType = child,
+                    ForeignKeyMembers = member.ForeignKeyMembers ?? [],
+                    Layer = member.ForeignKeyMembers is null ? MetadataLayer.Convention : MetadataLayer.DataAccessAnnotation,
+                    Note = member.ForeignKeyMembers is { } named
+                        ? $"[ForeignKey(\"{string.Join(",", named)}\")]"
+                        : $"集合导航：{member.Property.Name} ⇒ {child.Name}",
+                    IsCollection = true,
+                    Cascade = !IsNoCascade(member),
+                    NavigationReader = MemberAccessors.Getter(member.Property.DeclaringType!, member.Property.Name,
+                        $"实体 {member.Property.DeclaringType!.Name} 上没有属性 {member.Property.Name}"),
+                    CascadeEnter = MemberAccessors.CascadeEnter(member.Property.DeclaringType!, child, member.Property.Name,
+                        $"实体 {member.Property.DeclaringType!.Name} 上没有可读的集合属性 {member.Property.Name}"),
+                });
+
+                continue;
+            }
+
             if (member.Reference is not { } target)
                 continue;
 
@@ -347,6 +464,10 @@ public sealed class ContractResolver(IDbProvider provider, ModelConfiguration? c
         /// <summary>非 null = 这一格是引用导航，值为主端实体的 CLR 类型。它与 <see cref="Ignored"/> 同时存在
         /// 是故意的：「不是列」与「是一条关系」是两个问题，各自有各自的答案。</summary>
         public Type? Reference { get; set; }
+
+        /// <summary>非 null = 这一格是<em>集合</em>导航，值为元素型（子端 CLR 型）。与 <see cref="Reference"/>
+        /// 互斥：一根导航的型要么是引用要么是集合，判定链上先问引用。</summary>
+        public Type? Collection { get; set; }
 
         /// <summary>只有 <c>[ForeignKey]</c> 给过名字才非 null；约定那一档在 <c>ResolveRelationships</c> 里判。</summary>
         public string[]? ForeignKeyMembers { get; set; }

@@ -38,8 +38,10 @@ public class Order
     /// 于是这一格长在契约的 <c>Relationships</c> 上而不是 <c>Columns</c> 上（§8.2 的写序读它）。</summary>
     public Customer? Customer { get; set; }
 
-    /// <summary>集合导航：形态上不可映射，今天也<em>不是</em>边 —— 一个 <c>Customer</c> 对应多少条 <c>Order</c>
-    /// 由反方向的引用导航表达，这里两头都记不出先后（§10.3）。留一列<em>不</em>成为边，是这条判据的负样本。</summary>
+    /// <summary>集合导航：形态上不可映射（不是列），但它<em>是一根边</em> —— 只是朝向与
+    /// <see cref="Customer"/> 相反：这一格的外键成员在子端那张表上，所以契约把它单记在
+    /// <c>Collections</c> 里，列名换算留到级联解算那一次（§8.2）。它是级联的正样本：
+    /// <c>Add(order)</c> 顺这一格把明细带进会话，<c>Remove(order)</c> 顺它把明细删掉。</summary>
     public List<OrderItem>? Items { get; set; }
 }
 

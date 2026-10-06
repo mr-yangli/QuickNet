@@ -116,17 +116,18 @@ sealed class IndexModel
     public bool Descending;
 }
 
-/// <summary>一条引用导航（to-one 关系）。列名换算不在生成期做——那是运行期
-/// <c>EntityContractFactory</c> 的活，与索引同一份实现（§10.3）。</summary>
+/// <summary>一条导航边的声明（to-one 或集合，按 <see cref="IsCollection"/> 分）。列名换算不在生成期做——
+/// 那是运行期 <c>EntityContractFactory</c> 的活，与索引同一份实现（§10.3）。</summary>
 sealed class RelationshipModel
 {
     /// <summary>导航属性名，它自己不是列。</summary>
     public string Member = "";
 
-    /// <summary>主端实体类型表达式，<c>global::FastSql.TestInfra.Customer</c>。</summary>
+    /// <summary>对面那一端的实体类型表达式。<c>IsCollection</c> 为真时那是<em>子端</em>。</summary>
     public string TargetType = "";
 
-    /// <summary>依赖侧外键成员名；复合外键（<c>[ForeignKey("A,B")]</c>）有多条。</summary>
+    /// <summary>外键成员名，复合（<c>[ForeignKey("A,B")]</c>）有多条。to-one 那一档是<em>本端</em>的成员名，
+    /// 生成期就能对着列清单验；集合那一档是<em>子端</em>的，本端清单里没有，留空即"没声明、运行期再解"。</summary>
     public List<string> Members = [];
 
     /// <summary><see cref="FastSql.Metadata.MetadataLayer"/> 的成员名：这一格只有两档，
@@ -134,4 +135,10 @@ sealed class RelationshipModel
     public string Layer = "Convention";
 
     public string Note = "";
+
+    /// <summary>true = 这是一根集合导航（父端 → 子端），折进 <c>RelationshipFacts.IsCollection</c>。</summary>
+    public bool IsCollection;
+
+    /// <summary>级联开关，缺省开；<c>[NoCascade]</c>（打在实体或这根导航上）折成 <c>false</c>。</summary>
+    public bool Cascade = true;
 }

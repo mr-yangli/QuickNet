@@ -28,6 +28,10 @@ public sealed class DbSet<T> : FastSqlQuery<T>, ITrackedSet<T> where T : class
     /// 而查不到档意味着这一行没人跟 —— 那是"看起来跟了其实没跟"，本仓库不接受这种降级（§12.2）。</summary>
     readonly EntityTracker<T> _tracker;
 
+    /// <summary>会话那一份调度器。<b>本型的档不够用</b>：补载（<c>Load</c>）要把<em>子型</em>的实体缝进父的导航，
+    /// 而"这一行在会话里是哪一只"要按子型那一档问。留会话、不留一堆档，是因为档按 <see cref="Type"/> 查就好。</summary>
+    readonly ChangeTracker _session;
+
     LocalView<T>? _local;
 
     /// <remarks>这两个标注是从 <see cref="FastSqlOrm.RootEngine"/> 传下来的入口税（§5.10），
@@ -38,6 +42,7 @@ public sealed class DbSet<T> : FastSqlQuery<T>, ITrackedSet<T> where T : class
         : base(context.Orm.RootEngine(typeof(T), context.Tracker))
     {
         _tracker = context.Tracker.For<T>();
+        _session = context.Tracker;
     }
 
     /// <summary>会话里已跟踪实例的内存视图（§8.1）。<b>只反映本会话见过的实体</b>，不等于库里有什么；
@@ -181,8 +186,12 @@ public sealed class DbSet<T> : FastSqlQuery<T>, ITrackedSet<T> where T : class
 
             if (parentByFk.TryGetValue(pkKey, out var matchedParents))
             {
+                // 缝会话里的那一只（§8.2）：这一行可能早就在跟踪档里（先查过它、或它刚被别处补载过），
+                // 而按刚物化那只缝会让同一行在会话里有两只实例。
+                var stitched = _session.CanonicalOf(child, targetType) ?? child;
+
                 foreach (var parent in matchedParents)
-                    setNavigation(parent, child);
+                    setNavigation(parent, stitched);
             }
         }
     }
@@ -197,7 +206,7 @@ public sealed class DbSet<T> : FastSqlQuery<T>, ITrackedSet<T> where T : class
     {
         var childContract = Engine.Orm.Schemas.Contract(childType);
         var childRead = Engine.Orm.Schemas.ReadDelegate(childType);
-        var fkColumnNames = DiscoverFkColumns(parentContract, childContract);
+        var fkColumnNames = DiscoverFkColumns(parentContract, childContract, memberName);
 
         var parentPkGetters = BuildKeyGetters(parentContract.ClrType, parentContract.PrimaryKey);
 
@@ -285,17 +294,24 @@ public sealed class DbSet<T> : FastSqlQuery<T>, ITrackedSet<T> where T : class
             parentContract.ClrType, memberName, childType,
             $"实体 {parentContract.ClrType.Name} 上没有名为 {memberName} 的集合导航属性，无法把补载的子实体缝回父实体。");
 
-        foreach (var (fkKey, childList) in grouped)
+        // 枚举的是<em>父</em>而不是分组结果：一只没有子行的父同样要拿到一句"我捞过，这里没有人"。
+        // 只缝有人的那几只会让空串留下一颗 null，而 null 在级联删除那一档是"还没捞"（裁决①），
+        // 于是按消息给的出路 Load 一次之后仍然删不下去 —— 那句出路就成了死路。
+        foreach (var (pkKey, parent) in parentByPk)
         {
-            if (!parentByPk.TryGetValue(fkKey, out var parent))
-                continue;
-
             var collection = nav.NewCollection();
 
-            foreach (var child in childList)
-                nav.Add(collection, child);
+            if (grouped.TryGetValue(pkKey, out var childList))
+                foreach (var child in childList)
+                    // 同引用导航那一档：串里挂的是会话里的那一只，不是刚物化那一只（§8.2 同一行同一实例）。
+                    // 挂了双胞胎的后果要到级联删除才看得见：那一颗撞的是"同键两只实例在会话里没有定义"。
+                    nav.Add(collection, _session.CanonicalOf(child, childType) ?? child);
 
             nav.Setter(parent, collection);
+
+            // 缝完就记基线：从这一刻起"这一串里有谁"是一句<em>捞过</em>的声明，
+            // 之后从里面摘掉一只，会话才判得出要删的是那一行（裁决③，见 Node.Baselines）。
+            _tracker.RememberCollections((T) parent);
         }
     }
 
@@ -337,7 +353,11 @@ public sealed class DbSet<T> : FastSqlQuery<T>, ITrackedSet<T> where T : class
         return null;
     }
 
-    static IReadOnlyList<string> DiscoverFkColumns(EntityContract parentContract, EntityContract childContract)
+    /// <summary>补载/缝合那一条路的外键发现。<b>三档与级联落键那三档同名同序</b>
+    /// （跟踪器侧的 <c>ResolveCascadeForeignKey</c>）：同一根边在两条路径上不许有两个答案，
+    /// 否则「级联插得进去、Load 捞不上来」就成了裁决①那条出路自己走不通的死路。</summary>
+    static IReadOnlyList<string> DiscoverFkColumns(
+        EntityContract parentContract, EntityContract childContract, string memberName)
     {
         var parentKeys = parentContract.PrimaryKey;
 
@@ -357,6 +377,9 @@ public sealed class DbSet<T> : FastSqlQuery<T>, ITrackedSet<T> where T : class
                 return rel.ColumnNames;
             }
         }
+
+        if (ContractResolver.ResolveDeclaredFkColumns(parentContract, childContract, memberName) is { } declaredColumns)
+            return declaredColumns;
 
         var parentTypeName = parentContract.ClrType.Name;
 

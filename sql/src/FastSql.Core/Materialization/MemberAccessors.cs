@@ -1,5 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Linq.Expressions;
+using FastSql.Tracking;
 
 namespace FastSql.Materialization;
 
@@ -57,6 +58,37 @@ public static class MemberAccessors
                     Expression.Convert(entity, write.DeclaringType!), write,
                     Expression.Convert(value, property.PropertyType)),
                 entity, value)
+            .Compile();
+    }
+
+    /// <summary>集合导航的级联入口：把「拿这只集合送进子端会话」那一次泛型调用编译成委托。
+    /// <b>这是 G2 兜底侧的形状</b> —— <c>MakeGenericMethod</c> 只在这里出现一次（建契约那一次，启动期），
+    /// 级联每行拿到的是已编译委托；G1 侧由生成器直接写 <c>sink.Enter(parent, parent.Items, "Items")</c>，
+    /// 运行期零反射（§12.7 A 的「写侧 0 反射」）。之所以把这一格交给 <c>ICascadeSink</c> 而不是返回
+    /// <c>IEnumerable&lt;object&gt;</c>：跟踪器是按类型分格的（<c>For&lt;TChild&gt;()</c>），
+    /// 那一格的类型只有在编译期或这一次泛型方法绑定里才拿得到。</summary>
+    /// <param name="missingMessage">属性不存在或没有公共读口时的报错文本。</param>
+    public static Action<ICascadeSink, object> CascadeEnter(Type parentType, Type childType, string memberName, string missingMessage)
+    {
+        var read = (parentType.GetProperty(memberName)
+                    ?? throw new FastSqlException(missingMessage)).GetGetMethod()
+                   ?? throw new FastSqlException(missingMessage);
+
+        var enter = typeof(ICascadeSink).GetMethod(nameof(ICascadeSink.Enter))!
+            .MakeGenericMethod(parentType, childType);
+
+        var sink = Expression.Parameter(typeof(ICascadeSink), "sink");
+        var owner = Expression.Parameter(typeof(object), "o");
+        var parent = Expression.Convert(owner, parentType);
+
+        return Expression
+            .Lambda<Action<ICascadeSink, object>>(
+                Expression.Call(
+                    sink, enter,
+                    parent,
+                    Expression.Convert(Expression.Call(parent, read), typeof(IEnumerable<>).MakeGenericType(childType)),
+                    Expression.Constant(memberName, typeof(string))),
+                sink, owner)
             .Compile();
     }
 

@@ -220,8 +220,11 @@ static class EntityFactsWriter
         b.AppendLine("        ],")
          .AppendLine("        [");
 
-        // 只抄声明：外键成员名 → 列名的换算在运行期的 EntityContractFactory，与索引同一份。
+        // 只抄声明：to-one 那一档的成员名 → 列名换算在运行期的 EntityContractFactory，与索引同一份；
+        // 集合那一档连换算都不做（名字属于子端那张表），但级联要的两把委托在这里当场写成 lambda ——
+        // 生成器手里有编译期类型，闭包转换与 MakeGenericType 都不必出现在运行期（§12.7 A 的"写侧 0 反射"）。
         foreach (var relationship in m.Relationships)
+        {
             b.AppendLine("            new " + Metadata + "RelationshipFacts")
              .AppendLine("            {")
              .AppendLine("                MemberName = " + Lit(relationship.Member) + ",")
@@ -229,7 +232,17 @@ static class EntityFactsWriter
              .AppendLine("                ForeignKeyMembers = [" + string.Join(", ", relationship.Members.Select(Lit)) + "],")
              .AppendLine("                Layer = " + Metadata + "MetadataLayer." + relationship.Layer + ",")
              .AppendLine("                Note = " + Lit(relationship.Note) + ",")
-             .AppendLine("            },");
+             .AppendLine("                IsCollection = " + Bool(relationship.IsCollection) + ",")
+             .AppendLine("                Cascade = " + Bool(relationship.Cascade) + ",");
+
+            if (relationship.IsCollection)
+            {
+                b.AppendLine("                NavigationReader = static o => (object?)(((" + m.Entity + ")o)." + relationship.Member + "),")
+                 .AppendLine("                CascadeEnter = static (sink, o) => sink.Enter(((" + m.Entity + ")o), (((" + m.Entity + ")o)." + relationship.Member + "), " + Lit(relationship.Member) + "),");
+            }
+
+            b.AppendLine("            },");
+        }
 
         b.AppendLine("        ],")
          .AppendLine("        contract => new " + m.Name + "Schema(contract),")
