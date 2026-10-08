@@ -103,7 +103,7 @@ public sealed partial class AdoExecutor
     /// 传 null 表示行数确实未知（无 <c>Take</c> 的全量查询）。</summary>
     public async Task<List<T>> QueryAsync<T>(DialectSql sql, Func<DbDataReader, T> map, ExecutionTag tag, int? expectedRows, CancellationToken ct)
     {
-        CheckNotCancelled(sql, tag);
+        BeforeExecute(sql, tag);
 
         var started = Stopwatch.GetTimestamp();
 
@@ -143,7 +143,7 @@ public sealed partial class AdoExecutor
 
     public async Task<T?> FirstAsync<T>(DialectSql sql, Func<DbDataReader, T> map, ExecutionTag tag, CancellationToken ct)
     {
-        CheckNotCancelled(sql, tag);
+        BeforeExecute(sql, tag);
 
         var started = Stopwatch.GetTimestamp();
 
@@ -173,7 +173,7 @@ public sealed partial class AdoExecutor
     /// <summary>流式读取：连接活在整个枚举期间，调用方中途 <c>break</c> 时由 <c>DisposeAsync</c> 归还。</summary>
     public async IAsyncEnumerable<T> StreamAsync<T>(DialectSql sql, Func<DbDataReader, T> map, ExecutionTag tag, [EnumeratorCancellation] CancellationToken ct = default)
     {
-        CheckNotCancelled(sql, tag);
+        BeforeExecute(sql, tag);
 
         var started = Stopwatch.GetTimestamp();
         var rows = 0;
@@ -201,7 +201,7 @@ public sealed partial class AdoExecutor
     /// <summary>非查询出口，返回驱动报回的受影响行数。多值 INSERT 时这个数就是行数（§12.4 第 2 项）。</summary>
     public async Task<int> NonQueryAsync(DialectSql sql, ExecutionTag tag, CancellationToken ct)
     {
-        CheckNotCancelled(sql, tag);
+        BeforeExecute(sql, tag);
 
         var started = Stopwatch.GetTimestamp();
 
@@ -234,7 +234,7 @@ public sealed partial class AdoExecutor
     /// 下面那一句 while 对它们一次都不迭代：为回读而加，不为任何一家改路。</summary>
     public async Task<int> WriteWithResultAsync(DialectSql sql, ExecutionTag tag, Action<DbDataReader, int> consumeRow, CancellationToken ct)
     {
-        CheckNotCancelled(sql, tag);
+        BeforeExecute(sql, tag);
 
         var started = Stopwatch.GetTimestamp();
 
@@ -281,8 +281,10 @@ public sealed partial class AdoExecutor
     /// <see cref="DialectSql"/>。填 <c>null</c> 会把"这一句没有文本"变成"这两个钩子可能收到 null"，
     /// 让每个订阅方都去补一次空判；于是给一句人能读懂的 <c>BULK COPY INTO &lt;表&gt;</c>，
     /// 参数表是空的（<b>装载通道没有参数</b>，§12.1 那一句"不走文本、不走参数"就是这条空表的出处）。
-    /// <see cref="CheckNotCancelled"/> 照常放这句进去：<c>CommandTerminating</c> 是决策类闸门，
-    /// 新增一条写出口不能从它旁边绕过去 —— 拦整表写的现场至少能在 <paramref name="tag"/> 的表名上看住这一档。</para>
+    /// <see cref="BeforeExecute"/> 照常放这句进去：<c>CommandTerminating</c> 是决策类闸门，
+    /// 新增一条写出口不能从它旁边绕过去 —— 拦整表写的现场至少能在 <paramref name="tag"/> 的表名上看住这一档。
+    /// 同一道门上的 <see cref="FastSqlAop.Executing"/> 因此也收到这句合成描述符：装载通道没有文本可报，
+    /// 但"这一批要发出去了"这一行日志不该只有 <see cref="FastSqlAop.Executed"/> 一处才看得见。</para>
     ///
     /// <para><b>修剪税在这里交，不在 provider 里藏</b>：这一句要往上冒到 <c>IInsert&lt;T&gt;.ExecuteBulkAsync</c>
     /// 的公开签名上（IL2046 要求接口与实现两边标注一致），所以写路径上第一次出现一个带
@@ -297,7 +299,7 @@ public sealed partial class AdoExecutor
 
         var descriptor = new DialectSql($"BULK COPY INTO {request.DestinationTable}", []);
 
-        CheckNotCancelled(descriptor, tag);
+        BeforeExecute(descriptor, tag);
 
         var started = Stopwatch.GetTimestamp();
 
@@ -637,6 +639,23 @@ public sealed partial class AdoExecutor
     }
 
     static long Elapsed(long started) => Stopwatch.GetElapsedTime(started).Ticks / TimeSpan.TicksPerMillisecond;
+
+    /// <summary>§10.1 执行前的那道关口，两道按<em>固定顺序</em>走：<b>先决策类闸门</b>（<see cref="CheckNotCancelled"/>，
+    /// 它可以把这句叫停），<b>后观察类播报</b>（<see cref="FastSqlAop.Executing"/>，"这一句要发出去了"）。
+    /// 顺序是这一格的全部裁决，所以两条合在一处、不留在六个出口上各自排：被闸门取消的句子不该在日志里
+    /// 留下一行"正在执行"，而那一句也确实一个字节都没交给驱动。
+    /// <para>位置在 <c>Stopwatch.GetTimestamp()</c> 之前，于是播报这一刻手上只有文本、操作名与表名 ——
+    /// 耗时、行数与实际路由都还没被决定，那三格在 <see cref="Succeeded"/> 那一发上。未订阅时两条各是一次分支预测，
+    /// §12.8 的账不动。</para>
+    /// <para><b>六个出口都在这一道门上</b>：reader、scalar、stream、non-query、带结果集的写、装载通道。
+    /// 新增一条写出口从这一行旁边绕过去，就是同时绕过了禁整表写的硬闸与"这句话发过"的那一行日志。</para></summary>
+    void BeforeExecute(DialectSql sql, ExecutionTag tag)
+    {
+        CheckNotCancelled(sql, tag);
+
+        if (Aop.Executing is { } executing)
+            Aop.Observe(() => executing(new CommandExecutingEvent(sql, tag.Operation, tag.Tables)));
+    }
 
     /// <summary>§10.1 决策类钩子的发射点：执行前最后一道闸门。未订阅时零成本（一次分支预测），
     /// 订阅后返回 <c>true</c> = 取消执行、抛 <see cref="FastSqlCommandCancelledException"/>。

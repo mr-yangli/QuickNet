@@ -140,13 +140,17 @@ public sealed class FilterRegistry
     internal int CountFor(Type entity) => For(entity).Count;
 
     /// <summary>读侧的注入口：把在册的过滤器贴进这份模型的 <c>WHERE</c> 或那一个 <c>ON</c>。
-    /// <b>返回同一个实例表示什么都没贴</b>（这张表上没过滤器），于是调用方的 <c>with</c> 也不会发生。</summary>
+    /// <b>返回同一个实例表示什么都没贴</b>（这张表上没过滤器），于是调用方的 <c>with</c> 也不会发生。
+    /// <paramref name="ignored"/> 是这条链点名要跳过的那些注册键（<c>IgnoreQueryFilter&lt;TFilter&gt;()</c>，§10.7 约束 2）：
+    /// 它在 <see cref="For"/> 之后、<see cref="Translate"/> 之前问，所以被点名的那一条<em>连翻译都不付</em> ——
+    /// 而不是"翻出来再丢掉"。null 与空集都不跳任何一条，那条快路是每查询的常态（§12.8 第 1/4 行钉的每算子常数项）。</summary>
     [RequiresUnreferencedCode("谓词翻译走闭包常量求值。")]
     [RequiresDynamicCode("谓词翻译的退路是编译表达式树。")]
-    internal QueryModel Apply(QueryModel model)
+    internal QueryModel Apply(QueryModel model, IReadOnlyList<Type>? ignored = null)
     {
         List<SqlExpression>? where = null;
         List<JoinClause>? joins = null;
+        Dictionary<int, SqlExpression>? includeOn = null;
 
         for (var i = 0; i < model.Tables.Count; i++)
         {
@@ -154,6 +158,9 @@ public sealed class FilterRegistry
 
             foreach (var registration in For(table))
             {
+                if (ignored is not null && IsIgnored(registration.Key, ignored))
+                    continue;
+
                 var node = Translate(registration, table);
 
                 // LEFT 那一档进 ON，其余进 WHERE。这条分岔只有一处理由：把右表的过滤器写进 WHERE，
@@ -176,11 +183,31 @@ public sealed class FilterRegistry
                     continue;
                 }
 
+                // Include 的那一档走同一条判据，但要在另一个地方落脚：<b>Include 的 LEFT JOIN 不在
+                // <see cref="QueryModel.Joins"/> 里</b>，它是 <c>QueryCompiler.CollectIncludeColumns</c> 在编译期
+                // 照着 <see cref="IncludeNode.OnCondition"/> 现造的。于是上面那一岔对表位 tN 永远判不中，
+                // 这条过滤器就会落进 WHERE，而它引用的是那一张左联表 —— 两个后果各是一类事故：
+                // 未匹配的补 NULL 行被它一起筛掉（左联静默退化成内联，行在页面上凭空消失而不报错），
+                // 以及 <c>Count</c> 那一档把 Include 的联表省掉之后（聚合计划不是 <c>EntityProjection</c>，
+                // <c>UsesIncludeJoins</c> 就不响），WHERE 里剩下一句引用不到任何表位的 <c>t1.IsDeleted</c>，
+                // 库直接报"列不存在"。所以这里折进那颗节点自己的 ON。
+                // <b>折的是副本，不是那颗节点</b>：节点实例挂在链上、被同一份链的下一次执行共用，
+                // 就地改写会让第二次执行把同一条过滤器再叠一遍（ON 越长越离谱而结果不变，是最难查的那一类）。
+                if (model.Includes.Count > 0 && Covers(model.Includes, i))
+                {
+                    if (includeOn is null)
+                        includeOn = new Dictionary<int, SqlExpression>();
+
+                    includeOn[i] = includeOn.TryGetValue(i, out var stacked) ? And(stacked, node) : node;
+
+                    continue;
+                }
+
                 (where ??= []).Add(node);
             }
         }
 
-        if (where is null && joins is null)
+        if (where is null && joins is null && includeOn is null)
             return model;
 
         var result = model;
@@ -191,7 +218,54 @@ public sealed class FilterRegistry
         if (joins is not null)
             result = result with { Joins = joins };
 
+        if (includeOn is not null)
+            result = result with { Includes = Fold(result.Includes, includeOn) };
+
         return result;
+    }
+
+    /// <summary>这一颗表位是不是 Include 树里某个节点的目标表（<see cref="TableRef.Index"/> 就是它进 FROM 的位置，
+    /// 而 Include 的表位正是按 <c>Model.Tables.Count</c> 取的这一个号）。</summary>
+    static bool Covers(IReadOnlyList<IncludeNode> includes, int index)
+    {
+        foreach (var include in includes)
+            if (include.TargetTable.Index == index || Covers(include.Children, index))
+                return true;
+
+        return false;
+    }
+
+    /// <summary>把 <paramref name="on"/> 里那些过滤器折进对应节点的 ON，返回一份新树。
+    /// <b>只有真的被折到的那一颗连同它的每一层祖先才换实例</b>：祖先不换的话，改写的就不是副本而是原树
+    /// （子节点列表在父节点身上），下一次执行就又踩回就地改写那一格。没被点到的子树原样交回，不复制。</summary>
+    static IReadOnlyList<IncludeNode> Fold(IReadOnlyList<IncludeNode> includes, Dictionary<int, SqlExpression> on)
+    {
+        List<IncludeNode>? result = null;
+
+        for (var i = 0; i < includes.Count; i++)
+        {
+            var node = includes[i];
+            var children = Fold(node.Children, on);
+            var extra = on.TryGetValue(node.TargetTable.Index, out var expression) ? expression : null;
+
+            if (extra is null && ReferenceEquals(children, node.Children))
+                continue;
+
+            var rewritten = new IncludeNode
+            {
+                NavigationMemberName = node.NavigationMemberName,
+                Relationship = node.Relationship,
+                TargetTable = node.TargetTable,
+                OnCondition = extra is null ? node.OnCondition : And(node.OnCondition, extra),
+            };
+
+            foreach (var child in children)
+                rewritten.Children.Add(child);
+
+            (result ??= [.. includes])[i] = rewritten;
+        }
+
+        return result ?? includes;
     }
 
     /// <summary>约束 2 的另一半：<c>IgnoreQueryFilters()</c> 撞上 mandatory 就抛。<b>调用点有两处，
@@ -199,20 +273,49 @@ public sealed class FilterRegistry
     /// 一次<em>执行</em>里 —— 同一句 lambda 在 <c>ToList()</c> 才响的话，链式复用时会让人找不到出处）；
     /// 每一次出口再问一次（否则「先 <c>IgnoreQueryFilters()</c> 再 <c>LeftJoin</c> 一张带 mandatory 过滤器的表」
     /// 这一种绕法就是那条约束上留下的洞 —— 标记位已经生效，那条表位的过滤器会被整段跳过）。
-    /// 第二处只在 <c>Ignore</c> 过的链上付，未 Ignore 的链一次都不进这个方法。</summary>
-    internal void AssertIgnorable(IReadOnlyList<TableRef> tables)
+    /// 第二处只在 <c>Ignore</c> 过的链上付，未 Ignore 的链一次都不进这个方法。
+    ///
+    /// <para><paramref name="ignored"/> 非空时<b>只判被点名要跳的那些</b>：约束 2 拦的是"关掉一条不可忽略的过滤器"
+    /// 这句话，而点名 <c>IgnoreQueryFilter&lt;ISoftDelete&gt;()</c> 并没有关租户那一条，拦它就是把约束写过头。
+    /// 判据与真正跳过的那一处共用 <see cref="IsIgnored"/> —— 一处问、一处跳，两次实现迟早对不上。</para></summary>
+    internal void AssertIgnorable(IReadOnlyList<TableRef> tables, IReadOnlyList<Type>? ignored = null)
     {
         if (!HasAny)
             return;
 
         foreach (var table in tables)
             foreach (var registration in For(table))
+            {
+                if (ignored is not null && !IsIgnored(registration.Key, ignored))
+                    continue;
+
                 if (registration.Mandatory)
                     throw new FastSqlException(
                         $"{table.Table.Name}（表位 {table.Alias}）上有一条 mandatory 的全局过滤器（注册自 {registration.Key.Name}），" +
                         "它不能被 IgnoreQueryFilters() 关掉 —— 规格 §10.7 约束 2 那句「多租户隔离不能靠约定大家都记得加条件」" +
                         "说的就是这一档：能关掉的那一条不叫隔离。要跳过它只有两条路：注册时别写 mandatory，" +
                         "或者不走这条链、直接把自己的条件写全（那一句是你负责的，不是库默认帮你省的）。");
+            }
+    }
+
+    /// <summary>这一条注册是不是被 <paramref name="ignored"/> 里某一颗点名跳过的。
+    /// <b>判据是注册键的同一性，不是继承关系</b>：点名点的是<em>那一格注册</em>，不是"某个类型的所有过滤器"。
+    /// 一族式的匹配（<c>type.IsAssignableFrom(key)</c>）看着更省事，但它在一个要命的方向上漏：
+    /// <c>Ticket</c> 既实现 <c>ISoftDelete</c>、又可能带一条注册在 <c>Ticket</c> 上的租户过滤器，
+    /// 于是点名 <c>ISoftDelete</c> 会连租户那一条一起跳掉 —— 而约束 2 存在的理由恰恰是"隔离条件不能被
+    /// 一句看起来只关了软删的话关掉"。静默少一个租户条件是这句话唯一不能被原谅的失败形态。
+    ///
+    /// <para><see cref="object"/> 是这一句唯一的例外，而它不是特例而是顶类型：不带参数那颗
+    /// （<c>IgnoreQueryFilters()</c>）递进来的就是它，"接得住一切"由它在类型系统里的位置承担。
+    /// 所以 <c>IgnoreQueryFilter&lt;object&gt;()</c> 与不带参数那一句同一条路、同一个结果，
+    /// 判据仍然只有一条 —— "少跳一条"与"全跳"没有两套实现。</para></summary>
+    static bool IsIgnored(Type key, IReadOnlyList<Type> ignored)
+    {
+        foreach (var type in ignored)
+            if (type == key || type == typeof(object))
+                return true;
+
+        return false;
     }
 
     /// <summary>过滤器谓词 → AST，并且把翻译失败换成一句点名"是谁贴不进谁"的话。

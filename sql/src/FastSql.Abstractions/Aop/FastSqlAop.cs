@@ -10,7 +10,18 @@ public enum HookCategory { Observe, Rewrite, Decide }
 public sealed class FastSqlAop
 {
     // ── 观察类：异常只进 Error，不中断执行（硬规则 3）
-    public Action<CommandLogEvent>? Executing;
+    /// <summary>执行前的播报位。<b>发射点只有一处</b>：<c>AdoExecutor.BeforeExecute</c>，位置在
+    /// <see cref="CommandTerminating"/> 之后、命令交给驱动之前 —— 顺序是有裁决的：被闸门取消的句子
+    /// 不该留下一行"正在执行"，所以先判可否、再播报。
+    /// <para><b>它为什么不是 <see cref="CommandLogEvent"/></b>（v0.38 那一版把它记成"声明在场而不响"，
+    /// 开这一格的同时要一并改的那个类型）：那一颗记录的三格读数是 <see cref="CommandLogEvent.ElapsedMilliseconds"/>、
+    /// <see cref="CommandLogEvent.AffectedRows"/>、<see cref="CommandLogEvent.Route"/>，而播报这一刻
+    /// 一个都还不存在 —— 句子还没跑，没有耗时也没有行数，<c>Route</c> 更是要等取连接那一步由
+    /// <c>DataSourceRouting.Resolve</c> 才判得出（那颗记录自陈"它报的是结论不是意图"）。填 0 与假路由
+    /// 等于让订阅方每次都猜"这一份是读数还是占位"。要耗时、行数与实际走了哪条连接，订
+    /// <see cref="Executed"/>；要"这一句即将发出去"（挂住、死锁时唯一还留得下现场的那一位），订这一位。
+    /// 零成本规则照旧：未订阅时不构造事件对象。</para></summary>
+    public Action<CommandExecutingEvent>? Executing;
     public Action<CommandLogEvent>? Executed;
     public Action<CommandErrorEvent>? Error;
     public Action<SlowCommandEvent>? SlowQuery;
@@ -50,7 +61,7 @@ public sealed class FastSqlAop
 
     public long SlowQueryThresholdMilliseconds { get; set; } = 500;
 
-    public bool HasObservers => Executed is not null || Error is not null || SlowQuery is not null || Materialized is not null;
+    public bool HasObservers => Executing is not null || Executed is not null || Error is not null || SlowQuery is not null || Materialized is not null;
 
     public bool HasValueRewriters => AuditValue is not null || ParameterBinding is not null;
 
@@ -75,6 +86,15 @@ public sealed class FastSqlAop
         }
     }
 }
+
+/// <summary>执行前播报的事件（<see cref="FastSqlAop.Executing"/>）。形状就是"这一刻已知的东西"：
+/// 文本与参数（<paramref name="Sql"/> 自己带着）、操作名、涉及的表 —— 三格都是发射点手上确实有的，
+/// 没有一格是填了好看的占位。参数值不进日志之外的事：这一位是观察类，改不了句子，
+/// 整句文本级的改写槽位是 <see cref="CudBuilding"/>，取消这一句的闸门是 <see cref="CommandTerminating"/>。</summary>
+public sealed record CommandExecutingEvent(
+    Sql.DialectSql Sql,
+    string OperationKind,
+    IReadOnlyList<string> TableNames);
 
 /// <summary>一句已执行语句的观察事件。<paramref name="Route"/> 是<b>必填</b>的一格：发射点只有
 /// <c>AdoExecutor.Succeeded</c> 一处，而它手上一定有那次借用的路由结论，所以"订阅方看不见这句走了哪条连接"

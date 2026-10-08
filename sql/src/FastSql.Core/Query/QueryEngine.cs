@@ -47,8 +47,16 @@ sealed class QueryEngine
     /// 所以"这一条链不戴全局过滤器"是一句说一次就全程有效的话，而不是每次出口重新判断。
     /// 它<em>不</em>进 <see cref="QueryModel"/>：模型是查询的形状，而戴不戴过滤器是这一次执行的决定 ——
     /// 进了模型就会让 §13.2 那句「链式与 LINQ 两侧模型文本逐字节相等」的判据多一个自由度。
-    /// 代价是这个位只有读侧用得到（<c>WithCache</c> 的键不含它，见 <see cref="Cache"/> 那句提醒）。</summary>
-    readonly bool _ignoresFilters;
+    /// 代价是这个位只有读侧用得到（<c>WithCache</c> 的键不含它，见 <see cref="Cache"/> 那句提醒）。
+    ///
+    /// <para><b>形状是一颗可空清单而不是一颗 bool</b>：清单里是<em>被点名跳过的那些注册键</em>
+    /// （<c>IgnoreQueryFilter&lt;TFilter&gt;()</c>），"全部"那一句递进来的是唯一一颗 <see cref="object"/>，
+    /// 而 null 是"没点过名"。选清单而不是 <c>bool + Type</c> 两格，是因为多次点名（既跳软删又跳租户）
+    /// 本来就要往末尾追加 —— 那正是 <see cref="_navigation"/> 与 <c>Predicates</c> 用的同一个形状。
+    /// null 那一档是热路径：没点过名的链一次都不进 <c>AssertIgnorable</c>，也不为这一格多付一次分配。
+    /// 清单怎么对上一颗注册（按键的同一性，不按继承）判在 <c>FilterRegistry.IsIgnored</c> 一处，
+    /// 那里也写了"为什么不按一族匹配"那句代价更高的理由。</para></summary>
+    readonly IReadOnlyList<Type>? _ignoredFilters;
 
     /// <summary>分组链的翻译侧形状（§5.3）。<b>它不进 <see cref="QueryModel"/>：SQL 侧的
     /// <c>GROUP BY</c> 表达式已经在模型里</b>，这里只留"<c>g.Key</c> 落回哪颗表达式、<c>g.Sum(o =&gt; …)</c> 的
@@ -57,13 +65,29 @@ sealed class QueryEngine
     /// 没有这一格就绑不出作用域。</summary>
     readonly GroupingShape? _grouping;
 
-    public QueryEngine(FastSqlOrm orm, QueryModel model, ChangeTracker? tracker = null, bool ignoresFilters = false, GroupingShape? grouping = null)
+    /// <summary>这条链上<em>已经按引用导航自动补进 FROM</em> 的那几张表（§5.2）。它与
+    /// <see cref="_grouping"/>、<see cref="_tracker"/> 同一档：跟着 <see cref="Derive"/> 走，而不进
+    /// <see cref="QueryModel"/> —— 补出来的那条 <c>LEFT JOIN</c> 本身<em>已经</em>在模型的
+    /// <see cref="QueryModel.Joins"/> 里（那是查询形状，该进规范文本），这一份留的只是"宿主那一格的这根边
+    /// 已经联过"这条翻译时才要用的对照，为的是下一颗 lambda 再读 <c>o.Customer.City</c> 时复用同一个表位，
+    /// 而不是联出第二张 <c>Customer</c>。
+    ///
+    /// <para><b>它是只读清单，不是可变登记表</b>：链上的对象可复用（§5.11），而 <c>q.Where(导航1)</c> 与
+    /// <c>q.Where(导航2)</c> 这两个分叉各自的模型里只比自己那一条。共享一只可变字典的话，第二个分叉会
+    /// 看见第一颗 lambda 补的那张表位并复用之，而它自己那份 FROM 里没有那张表 —— 得到的是一句
+    /// 引用了不存在表位的错句。所以每颗 lambda 一份现场（<see cref="Scout"/>），落地时才延长这一份。</para></summary>
+    readonly IReadOnlyList<NavigationJoin> _navigation;
+
+    public QueryEngine(FastSqlOrm orm, QueryModel model, ChangeTracker? tracker = null,
+        IReadOnlyList<Type>? ignoredFilters = null, GroupingShape? grouping = null,
+        IReadOnlyList<NavigationJoin>? navigation = null)
     {
         Orm = orm;
         Model = model;
         _tracker = tracker;
-        _ignoresFilters = ignoresFilters;
+        _ignoredFilters = ignoredFilters;
         _grouping = grouping;
+        _navigation = navigation ?? [];
         _tables = [.. model.Tables.Select(t => t.Table.Name)];
         _cluster = DataSourceRouting.ClusterOf(model.Root.Table);
     }
@@ -72,11 +96,35 @@ sealed class QueryEngine
 
     public QueryModel Model { get; }
 
-    public QueryEngine Derive(QueryModel next) => new(Orm, next, _tracker, _ignoresFilters, _grouping);
+    public QueryEngine Derive(QueryModel next) => new(Orm, next, _tracker, _ignoredFilters, _grouping, _navigation);
 
     /// <summary>分组那一步专用：模型与形状同时换。<b>不写成 <c>Derive(next) with grouping</c></b>——
     /// 形状在引擎上而不在模型上，派生一次只会把刚立起来的分组丢掉。</summary>
-    QueryEngine Derive(QueryModel next, GroupingShape grouping) => new(Orm, next, _tracker, _ignoresFilters, grouping);
+    QueryEngine Derive(QueryModel next, GroupingShape grouping) => new(Orm, next, _tracker, _ignoredFilters, grouping, _navigation);
+
+    /// <summary>这一颗 lambda 的翻译现场：一份只读的已联清单 + 从进来的表位数往后长的位置。
+    /// <see cref="QueryModel"/> 是不可变的，所以补出来的联表只能<em>欠着</em>，由算子决定它落进哪一份新模型
+    /// （<see cref="Advanced"/>）—— 这就是它每颗 lambda 新建一颗、而不是挂在引擎上的理由。
+    ///
+    /// <para><b>没有 to-one 边的那一张表不建现场（返回 null）</b>：单表链上唯一的宿主就是那张表，
+    /// 它的契约里没有引用导航，就没有任何一次 <c>Resolve</c> 问得出结果 —— 而这一颗是每算子一份的，
+    /// §12.8 第 4 行「每谓词字节」钉的正是这种每算子常数项，所以「用不用自动联表」这笔钱只由真用得着的人付。
+    /// 两张表以上照旧建：联进来的任何一张都可能是宿主，而 <c>Tables[0]</c> 那一张没有边不代表其余的没有。</para></summary>
+    NavigationJoinScout? Scout(QueryModel model)
+        => model.Tables is [var only] && only.Contract?.Relationships is { Count: 0 }
+            ? null
+            : new NavigationJoinScout(_navigation, model.Tables.Count, Orm.TableRefFactory);
+
+    /// <summary>把这一颗 lambda 欠下的自动联表落地，并把它记进链级那份清单。
+    /// <b>两处要一起改</b>：只落模型则下一颗 lambda 认不出"已经联过"而联第二张；只记清单则这一颗的 ON
+    /// 根本没进 FROM，发出去的句子引用一张不存在的表。没有欠账时走 <see cref="Derive(QueryModel)"/>，
+    /// 一条数组拷贝都不付（§12.8 那几格被门禁钉住的分配数字里就有"每个算子都新建一份"这一形）。
+    /// <paramref name="grouping"/> 是给 <see cref="GroupBy"/> 那一步递新形状用的：那一次派生本来就要同时换
+    /// 模型与形状，为它另开一条出口只会把"欠账落地"这件事写成两份实现。</summary>
+    QueryEngine Advanced(NavigationJoinScout? scout, QueryModel model, GroupingShape? grouping = null)
+        => scout is { HasPending: true }
+            ? new(Orm, scout.Flush(model), _tracker, _ignoredFilters, grouping ?? _grouping, [.. _navigation, .. scout.Pending])
+            : grouping is { } shape ? Derive(model, shape) : Derive(model);
 
     // ── 算子 ──────────────────────────────────────────────────────────
 
@@ -84,11 +132,19 @@ sealed class QueryEngine
     {
         Filterable();
 
-        return Derive(Model.AddPredicate(Orm.Expressions.Predicate(predicate, Scope.Create(Model, predicate))));
+        var scout = Scout(Model);
+        var node = Orm.Expressions.Predicate(predicate, Scope.Create(Model, predicate, scout));
+
+        return Advanced(scout, Model.AddPredicate(node));
     }
 
     public QueryEngine Project(LambdaExpression projector)
-        => Derive(Model with { Plan = Orm.Projections.Translate(projector, Binding(projector)) });
+    {
+        var scout = Scout(Model);
+        var plan = Orm.Projections.Translate(projector, Binding(projector, scout));
+
+        return Advanced(scout, Model with { Plan = plan });
+    }
 
     /// <summary>分组（§5.3）。键的表达式落进 <see cref="QueryModel.GroupBy"/>（那是 SQL 侧的真相，
     /// <c>Explain()</c> 的文本里有它），而「<c>g.Key</c> 怎么落回去」这份 CLR 侧的对照表留在引擎的
@@ -111,7 +167,8 @@ sealed class QueryEngine
                 $"分组之前排的序（{Model.Ordering.Count} 颗）到分组之后没有对应物：组里的行不再有先后。请把 OrderBy 挪到 GroupBy 之后（那时它排的是组，键与聚合都能用）。");
 
         var table = Model.Tables[entity.TableIndex];
-        var scope = Scope.Create(Model, keySelector);
+        var scout = Scout(Model);
+        var scope = Scope.Create(Model, keySelector, scout);
         var body = UnwrapConvert(keySelector.Body);
 
         // 复合键 = "把几颗键构造成一个形状"（new { o.A, o.B } 或 new Key { A = o.A }）。
@@ -123,7 +180,7 @@ sealed class QueryEngine
         {
             var key = Orm.Expressions.Visit(body, scope);
 
-            return Derive(Model with { GroupBy = [key] }, new GroupingShape(table, key, null));
+            return Advanced(scout, Model with { GroupBy = [key] }, new GroupingShape(table, key, null));
         }
 
         var keys = new List<SqlExpression>(members.Count);
@@ -143,7 +200,7 @@ sealed class QueryEngine
         if (map.Count != members.Count)
             throw new FastSqlException("复合分组键里有重名的成员：g.Key.<名字> 无法决定落哪一颗。请给它们不同的名字。");
 
-        return Derive(Model with { GroupBy = [.. keys] }, new GroupingShape(table, null, map));
+        return Advanced(scout, Model with { GroupBy = [.. keys] }, new GroupingShape(table, null, map));
     }
 
     /// <summary>分组之后的筛条件。落 <see cref="QueryModel.Having"/> 而不是 <c>WHERE</c>：这件事由
@@ -153,10 +210,11 @@ sealed class QueryEngine
         if (_grouping is null)
             throw new FastSqlException("Having 要在 GroupBy 之后：没有分组键就没有可筛的聚合值。请把这一条放到 GroupBy 之前的 Where。");
 
-        var node = Orm.Expressions.Predicate(predicate, Scope.ForGrouping(Model, predicate, _grouping.Value));
+        var scout = Scout(Model);
+        var node = Orm.Expressions.Predicate(predicate, Scope.ForGrouping(Model, predicate, _grouping.Value, scout));
         var existing = Model.Having;
 
-        return Derive(Model with { Having = existing is null ? node : new SqlBinaryExpression(BinaryOperator.And, existing, node) });
+        return Advanced(scout, Model with { Having = existing is null ? node : new SqlBinaryExpression(BinaryOperator.And, existing, node) });
     }
 
     /// <summary>键选择器 lambda 的体是不是"由几颗键构造出来的形状"。是则给出<em>成员名 → 表达式</em>
@@ -179,18 +237,23 @@ sealed class QueryEngine
             : node;
 
     /// <summary>这一条 lambda 的作用域：分组链上形参是 <c>IGrouping</c>，它不是表位，
-    /// 所以走 <see cref="Scope.ForGrouping"/>；其余一律按位置绑表（§5.1）。</summary>
-    Scope Binding(LambdaExpression lambda)
+    /// 所以走 <see cref="Scope.ForGrouping"/>；其余一律按位置绑表（§5.1）。
+    /// <paramref name="scout"/> 是这一颗 lambda 的翻译现场（§5.2 的自动联表欠账）：绑作用域这一步
+    /// 自己一个都不补，它只是把"欠着了往哪儿记"递进去 —— 补与落地分在两层，是因为落点只有算子知道。</summary>
+    Scope Binding(LambdaExpression lambda, NavigationJoinScout? scout)
         => _grouping is { } grouping
-            ? Scope.ForGrouping(Model, lambda, grouping)
-            : Scope.Create(Model, lambda);
+            ? Scope.ForGrouping(Model, lambda, grouping, scout)
+            : Scope.Create(Model, lambda, scout);
 
     public QueryEngine Order(LambdaExpression key, bool descending, bool append)
     {
         if (Model.Plan is not EntityProjection)
             throw new FastSqlException("投影之后不能再排序：投影列没有列契约，补出来的序会指向错列。把 OrderBy 挪到 Select 之前，或在源查询上排好序再投影。");
 
-        return Append(new OrderExpression(Orm.Expressions.Visit(key.Body, Binding(key)), descending), append);
+        var scout = Scout(Model);
+        var order = new OrderExpression(Orm.Expressions.Visit(key.Body, Binding(key, scout)), descending);
+
+        return Append(scout, Model, order, append);
     }
 
     /// <summary>按成员名排序（v0.38 第二十笔）。<b>这一条不经过表达式翻译</b>：字符串只用来在契约上认列，
@@ -205,14 +268,17 @@ sealed class QueryEngine
         var contract = Model.Root.Contract
             ?? throw new FastSqlException($"根表位 {Model.Root.Table.Name} 没有实体契约，按成员名排不出序：认列靠的就是那份契约。用 lambda 形态，或把这条链的表源换成一张实体表。");
 
-        return Append(new OrderExpression(new ColumnExpression(Model.Root, Column(contract, memberName)), descending), append);
+        return Append(null, Model, new OrderExpression(new ColumnExpression(Model.Root, Column(contract, memberName)), descending), append);
     }
 
     /// <summary>把一颗序落到模型上。<b>追加还是替换由这一处决定</b>：契约上 <c>OrderBy</c> 之后再
     /// <c>OrderBy</c> 是替换前一串（那是 LINQ 的口径），而链式对象上那两颗口各自把 <paramref name="append"/>
-    /// 写死，所以两种形态（lambda 与成员名）不会各写一套叠加规则。</summary>
-    QueryEngine Append(OrderExpression order, bool append)
-        => Derive(append ? Model.AddOrdering(order) : Model with { Ordering = [order] });
+    /// 写死，所以两种形态（lambda 与成员名）不会各写一套叠加规则。
+    /// <paramref name="scout"/> 与 <paramref name="model"/> 成对进来：前者是 lambda 那一形欠下的自动联表
+    /// （§5.2），成员名那一形不经过表达式翻译，没有欠账可落，所以那一口递 null 进来 —— 于是两条口在
+    /// <see cref="Advanced"/> 那里合流，叠加规则仍然只有一份。</summary>
+    QueryEngine Append(NavigationJoinScout? scout, QueryModel model, OrderExpression order, bool append)
+        => Advanced(scout, append ? model.AddOrdering(order) : model with { Ordering = [order] });
 
     /// <summary>成员名 → 列。<b>三档，逐字节优先</b>：先属性名、再列名、最后大小写不敏感的<em>唯一</em>命中
     /// （HTTP 查询串上过来的是 <c>createTime</c> 那一形，实体上写的是 <c>Create_time</c> 或 <c>CreateTime</c>，
@@ -233,7 +299,7 @@ sealed class QueryEngine
 
         if (matches.Length == 0)
             throw new FastSqlException($"{contract.Table.Name} 没有名为 {memberName} 的列：按名字排只认这张表上映射过的列（属性名或列名），" +
-                "导航属性、投影列与 SQL 片段都不认。要排别的表那一侧的列请先联表，再用 lambda 形态（§5.2）。");
+                "导航属性、投影列与 SQL 片段都不认。要排别的表那一侧的列请改用 lambda 形态（读引用导航会自动联表，§5.2）。");
 
         if (matches.Length > 1)
             throw new FastSqlException($"{contract.Table.Name} 上能对上 {memberName} 的列不止一颗（{string.Join(" / ", matches.Select(m => m.MemberName))}）：" +
@@ -254,17 +320,27 @@ sealed class QueryEngine
     /// <summary><c>AsNoTracking()</c> 的落点：<b>模型一个字都不改，只把手里那份会话松开</b>。
     /// 所以它产出的是「同一条查询的无跟踪视图」而不是「另一条查询」—— §8.3 那句「前两行只差一个标记位」
     /// 说的就是这个，而 §13.2 ② 的逐字节相等也由这里直接成立（不再需要把标记位从文本里剥掉）。</summary>
-    public QueryEngine NoTracking() => new(Orm, Model, tracker: null, _ignoresFilters, _grouping);
+    public QueryEngine NoTracking() => new(Orm, Model, tracker: null, _ignoredFilters, _grouping, _navigation);
 
-    /// <summary><c>IgnoreQueryFilters()</c> 的落点。<b>先问 mandatory 再置位</b>：那条约束要的是
+    /// <summary>「这一条链上没有任何全局过滤器」那一句的落点：递进来的清单里只有 <see cref="object"/> 一颗，
+    /// 于是 <c>FilterRegistry.IsIgnored</c> 对每条注册都判真。<b>先问 mandatory 再置位</b>：那条约束要的是
     /// "关掉不可忽略的过滤器"这句话<em>当场</em>响，而不是安静地生成一条少了一个条件的语句 ——
     /// 少一个租户条件这件事在结果集上看不出来，等到有人发现数据串了才知道，那是 §10.7 点名的最坏形状。
     /// 判据本身在 <c>FilterRegistry.AssertIgnorable</c>，出口处还会再判一次（那里说了为什么要判两次）。</summary>
-    public QueryEngine IgnoreFilters()
-    {
-        Orm.Filters.AssertIgnorable(Model.Tables);
+    public QueryEngine IgnoreFilters() => IgnoreFilters(typeof(object));
 
-        return new QueryEngine(Orm, Model, _tracker, ignoresFilters: true, _grouping);
+    /// <summary><c>IgnoreQueryFilter&lt;TFilter&gt;()</c> 的落点（§10.7 约束 2 的按条那一档）：
+    /// 只把 <paramref name="key"/> 递进清单里，<b>其余在册的一条都不动</b>。
+    /// 判 mandatory 时递的是<em>叠过这一颗之后的</em>清单而不是这一颗：一条链先 <c>IgnoreQueryFilter&lt;ISoftDelete&gt;()</c>
+    /// 再 <c>IgnoreQueryFilter&lt;ITenant&gt;()</c>，第二次要把第一次那份账一起问一遍 —— 只问新来的那一颗的话，
+    /// 一条链上多颗 mandatory 只有第一颗响，而这两句在 SQL 上造成的缺口是一样的。</summary>
+    public QueryEngine IgnoreFilters(Type key)
+    {
+        IReadOnlyList<Type> ignored = _ignoredFilters is { } existing ? [.. existing, key] : [key];
+
+        Orm.Filters.AssertIgnorable(Model.Tables, ignored);
+
+        return new QueryEngine(Orm, Model, _tracker, ignored, _grouping, _navigation);
     }
 
     public QueryEngine Cache(string cacheKey, TimeSpan ttl) => Derive(Model with { CacheKey = cacheKey, CacheTtl = ttl });
@@ -480,8 +556,10 @@ sealed class QueryEngine
     }
 
     /// <summary>构建 LEFT JOIN 的 ON 条件：依赖侧的 FK 列 = 主端实体的 PK 列。
-    /// 复合外键时生成多个等值条件用 AND 连接。</summary>
-    static SqlExpression BuildJoinCondition(TableRef sourceTable, RelationshipContract relationship, TableRef targetTable)
+    /// 复合外键时生成多个等值条件用 AND 连接。<b>全仓库只有这一处会按一条引用导航造 JOIN 条件</b>：
+    /// <c>Include</c> 的急切加载与 §5.2 的自动联表（<see cref="NavigationJoinScout"/>）交出来的必须是同一句 ON，
+    /// 两条边在两种来路上长成两种形状的话，"这根导航怎么联"就有了第二套真相。</summary>
+    internal static SqlExpression BuildJoinCondition(TableRef sourceTable, RelationshipContract relationship, TableRef targetTable)
     {
         var targetContract = targetTable.Contract
             ?? throw new FastSqlException($"目标表 {targetTable.Alias} 没有实体契约，无法构建 JOIN 条件。");
@@ -669,7 +747,7 @@ sealed class QueryEngine
     /// <summary>全局过滤器（§10.7）贴进这份模型的那一步。<b>没注册过任何东西时这里一个对象都不造</b>
     /// （<see cref="FilterRegistry.HasAny"/> 一次数组长度比较就返回），所以那几格被门禁钉住的分配数字
     /// 不会为"有人可能用过滤器"这件事付钱 —— 与 §10.1 硬规则 2 对钩子的那句要求同一条。
-    /// <see cref="_ignoresFilters"/> 那一支仍然要问一次 mandatory：标记位可能是在表位长齐之前置的
+    /// <see cref="_ignoredFilters"/> 那一支仍然要问一次 mandatory：标记位可能是在表位长齐之前置的
     /// （<c>IgnoreQueryFilters()</c> 之后再 <c>InnerJoin</c> 一张带 mandatory 过滤器的表），漏掉那一次问
     /// 就等于给约束 2 留一条绕法。</summary>
     QueryModel Filtered()
@@ -677,11 +755,11 @@ sealed class QueryEngine
         if (!Orm.Filters.HasAny)
             return Model;
 
-        if (_ignoresFilters)
+        if (_ignoredFilters is { } ignored)
         {
-            Orm.Filters.AssertIgnorable(Model.Tables);
+            Orm.Filters.AssertIgnorable(Model.Tables, ignored);
 
-            return Model;
+            return Orm.Filters.Apply(Model, ignored);
         }
 
         return Orm.Filters.Apply(Model);
@@ -1274,13 +1352,18 @@ sealed class QueryEngine
             return Derived(model, kind);
         }
 
+        var scout = Scout(model);
         var plan = countLike
             ? new AggregateProjection(kind, new StarExpression(null), kind == AggregateKind.LongCount ? typeof(long) : typeof(int), Distinct: false)
             : key is null
                 ? throw new FastSqlException($"{kind} 需要值选择器，例如 q.Sum(o => o.Amount)。")
-                : new AggregateProjection(kind, Orm.Expressions.Visit(key.Body, Scope.Create(model, key)), key.Body.Type, Distinct: false);
+                : new AggregateProjection(kind, Orm.Expressions.Visit(key.Body, Scope.Create(model, key, scout)), key.Body.Type, Distinct: false);
 
-        return model with { Plan = plan, Ordering = [], Offset = null, Limit = null };
+        // 这一份是聚合出口就地换投影造出来的临时模型，它不进链（链上后面没有算子会再读它），
+        // 所以这一颗 lambda 欠下的联表落进这一句为止：<b>不延长 <see cref="_navigation"/></b>，那是链上的账。
+        var aggregate = model with { Plan = plan, Ordering = [], Offset = null, Limit = null };
+
+        return scout is null ? aggregate : scout.Flush(aggregate);
     }
 
     /// <summary>这一份模型能不能就地补一个聚合、还是必须先包成内层。</summary>

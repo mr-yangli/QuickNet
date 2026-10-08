@@ -282,6 +282,130 @@ public sealed class FilterTests
         Checks.Has("mandatory", failure.Message);
     }
 
+    // ── 按名跳过（IgnoreQueryFilter<TFilter>，约束 2 的第二档） ────────
+
+    [Fact]
+    public void Ignoring_one_key_leaves_every_other_registration_in_place()
+    {
+        var target = orm();
+
+        target.Filters.Add<ISoftDelete>(e => !e.Deleted).Add<Ticket>(t => t.TenantId == 3);
+
+        var named = target.Select<Ticket>().IgnoreQueryFilter<ISoftDelete>();
+
+        // 只跳点名的那一条，其余照贴 —— 这一条同时是"按名那一档不许静默吃掉隔离条件"的见证：
+        // Ticket 实现了 ISoftDelete，点名接口如果按一族匹配就会连这张表上的租户条件一起跳掉。
+        // 判据与"没点名"那一句共用同一把尺子：拿一只只注册了剩下那一条的 orm 对拍逐字节文本 ——
+        // 比"少了一格"强，它同时排除了"跳错条"与"多跳了一条"。
+        var onlyTenant = orm();
+
+        onlyTenant.Filters.Add<Ticket>(t => t.TenantId == 3);
+
+        Assert.Equal(onlyTenant.Select<Ticket>().ToSql(), named.ToSql());
+        Assert.Equal(onlyTenant.Select<Ticket>().Explain().ModelText, named.Explain().ModelText);
+        Checks.Has("WHERE [t0].[TenantId] = @p0", named.ToSql());
+    }
+
+    [Fact]
+    public void Naming_the_implementing_class_does_not_reach_a_filter_registered_on_the_interface()
+    {
+        var target = orm();
+
+        target.Filters.Add<ISoftDelete>(e => !e.Deleted).Add<Ticket>(t => t.TenantId == 3);
+
+        var sql = target.Select<Ticket>().IgnoreQueryFilter<Ticket>().ToSql();
+
+        // 点名点的是注册键本身：注册在接口上的那一条要点 <c>ISoftDelete</c> 才跳得掉，点名实体碰不到它。
+        // 这一条与上面那一对着写，是因为"按名"这一档两头都可能错：宽到一族就静默少掉隔离条件（上面那条），
+        // 宽到"点过任何一个名字就等于点过全部"则让一个写错的类型名清空过滤器（下面那条）—— 都不许。
+        Checks.Has("FROM [FastSqlTicket] AS [t0] WHERE NOT [t0].[Deleted] = 1", sql);
+        Checks.Absent("@p0", sql);
+    }
+
+    [Fact]
+    public void Naming_a_key_that_matches_nothing_leaves_the_text_untouched()
+    {
+        var target = orm();
+
+        target.Filters.Add<Ticket>(t => !t.Deleted);
+
+        var named = target.Select<Ticket>().IgnoreQueryFilter<Order>().ToSql();
+        var plain = target.Select<Ticket>().ToSql();
+
+        // 这一条排的是"调用过 IgnoreQueryFilter<TFilter> 这个动作本身"被当成全部关掉：清单里有一颗匹配不上的
+        // 键，与一颗都没有时必须是同一句话 —— 否则一处写错的类型名会静默清空隔离条件。
+        Assert.Equal(plain, named);
+    }
+
+    [Fact]
+    public void Stacked_named_ignores_add_up_to_the_no_argument_one()
+    {
+        var target = orm();
+
+        target.Filters.Add<ISoftDelete>(e => !e.Deleted).Add<Ticket>(t => t.TenantId == 3);
+
+        var stacked = target.Select<Ticket>().IgnoreQueryFilter<ISoftDelete>().IgnoreQueryFilter<Ticket>();
+
+        // 两次点名叠成"两条都跳"，于是与不带参数那一句逐字节相等；而"没注册过过滤器"那一句在这里
+        // 不是空 WHERE 而是整个 WHERE 一段都不出（过滤器是这条链上唯一的条件来源）。
+        Assert.Equal(target.Select<Ticket>().IgnoreQueryFilters().ToSql(), stacked.ToSql());
+        Assert.Equal(orm().Select<Ticket>().ToSql(), stacked.ToSql());
+        Checks.Absent("WHERE", stacked.ToSql());
+    }
+
+    [Fact]
+    public void The_no_argument_ignore_is_the_object_key_one_and_not_a_special_case()
+    {
+        var target = orm();
+
+        target.Filters.Add<ISoftDelete>(e => !e.Deleted).Add<Ticket>(t => t.TenantId == 3);
+
+        // "全部"递进来的是 typeof(object) 这一颗普通键（object 接得住任何注册键），所以判据只有一条：
+        // 按名那一路对 object 也成立。这一条排的是"将来有人为全部加一颗 bool 特例"把两条路分开实现。
+        Assert.Equal(
+            target.Select<Ticket>().IgnoreQueryFilters().ToSql(),
+            target.Select<Ticket>().IgnoreQueryFilter<object>().ToSql());
+    }
+
+    [Fact]
+    public void A_mandatory_filter_only_refuses_the_ignore_that_names_it()
+    {
+        var target = orm();
+
+        target.Filters.Add<ISoftDelete>(e => !e.Deleted, mandatory: true);
+        target.Filters.Add<Ticket>(t => t.TenantId == 3);
+
+        // 约束 2 拦的是"关掉一条不可忽略的过滤器"这句话。点名碰不到 mandatory 那一条时没什么可拦的，
+        // 而在这里一律抛就等于把约束写过头：册子上只要有一条 mandatory，全仓库的按名忽略都不可用。
+        var sql = target.Select<Ticket>().IgnoreQueryFilter<Ticket>().ToSql();
+
+        Checks.Has("FROM [FastSqlTicket] AS [t0] WHERE NOT [t0].[Deleted] = 1", sql);
+        Checks.Absent("@p0", sql);
+
+        // 换一颗能接住它的键点名，同一条链当场响：判据与真正跳过的那一处共用一个匹配，所以这里不存在
+        // "跳掉了却没报"的空档。
+        var failure = Checks.Raised<FastSqlException>(
+            () => target.Select<Ticket>().IgnoreQueryFilter<ISoftDelete>());
+
+        Checks.Has("注册自 ISoftDelete", failure.Message);
+    }
+
+    [Fact]
+    public void A_stacked_ignore_refuses_a_mandatory_covered_by_the_first_call()
+    {
+        var target = orm();
+
+        target.Filters.Add<ISoftDelete>(e => !e.Deleted, mandatory: true);
+
+        var chain = target.Select<Ticket>().IgnoreQueryFilter<Ticket>();
+
+        // 第二次点名递的是叠过之后的整份清单：只问新来的那一颗的话，一条链上多颗 mandatory 只有第一颗响，
+        // 而这两句在 SQL 上造成的缺口是一样的。
+        var failure = Checks.Raised<FastSqlException>(() => chain.IgnoreQueryFilter<ISoftDelete>());
+
+        Checks.Has("注册自 ISoftDelete", failure.Message);
+    }
+
     // ── 按接口注册（规格示例第一句）与它查不出来的那一半 ───────────────
 
     [Fact]

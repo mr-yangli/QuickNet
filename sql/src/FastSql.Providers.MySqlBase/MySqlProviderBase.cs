@@ -198,15 +198,27 @@ public abstract class MySqlProviderBase : IDbProvider
 
     public bool CanCreateDatabase => true;
 
+    /// <summary>这一家认的库名键。<b>实测（MySqlConnector 2.6.0）就两颗</b>：<c>db</c>、<c>DB</c>、
+    /// <c>init catalog</c>、<c>InitialCatalog</c>、<c>initial_catalog</c>、双空格写法一律按「未知选项」抛，
+    /// 只有 <c>Database</c> 与 <c>Initial Catalog</c> 能用 —— 列多出来的那颗不会错，但它是一次永远命不中的比。</summary>
+    static readonly ConnectionStringCatalog Catalog = new("Database", "Initial Catalog");
+
     /// <summary>MySQL 血统支持 <c>CREATE DATABASE IF NOT EXISTS</c>，一条语句搞定。
-    /// 连接串里的 <c>Database=</c> 就是目标库名；连库时去掉它（不指定库也能连上 MySQL 服务器）。</summary>
+    /// 目标库名从连接串读（<see cref="Catalog"/>），连库时把这些键全部摘掉（不指定库也能连上 MySQL 服务器）。
+    /// <para>曾经只读 <c>Database</c> 一颗，于是本项目的写法 <c>Initial Catalog=…</c> 在它眼里等于没库名，
+    /// 这一格走的是「串里没库名就不建库」那一岔 —— <b>静默跳过</b>，症状推迟到调用方去连那座不存在的库时才现形，
+    /// 报出来的是 <c>Unknown database</c>，而报错里没有「本应建库」这件事。</para></summary>
     public async Task EnsureDatabaseExistsAsync(string connectionString, CancellationToken ct = default)
     {
         var builder = new DbConnectionStringBuilder { ConnectionString = connectionString };
-        if (!builder.TryGetValue("Database", out var dbNameObj) || dbNameObj is not string dbName || dbName.Length == 0)
-            return;
 
-        builder.Remove("Database");
+        var dbName = Catalog.Read(builder);
+
+        if (dbName is null) return;
+
+        // 两颗键一起摘：驱动自己会同义词归一，留一颗等于把「哪一颗说了算」交给解析顺序
+        // （实测 <c>Database=AAA;Initial Catalog=BBB</c> 两颗并存时驱动不抛，取后出现的那颗）。
+        Catalog.Clear(builder);
 
         await using var connection = Connectors.CreateConnection(builder.ConnectionString);
         await connection.OpenAsync(ct).ConfigureAwait(false);

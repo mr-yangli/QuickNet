@@ -273,8 +273,8 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
 
     static UntranslatableExpressionException Navigation(Expression node, string path)
         => new(node.ToString(), typeof(IEnumerable).IsAssignableFrom(node.Type) && node.Type != typeof(string)
-            ? $"{path} 是集合导航而不是列：批量加载（IncludeMany，两次查询 + 内存缝合）在 P1（§5.7）；要现在拿到明细行请显式 join 到明细表，注意那会让主表行重复。"
-            : $"{path} 不是列 —— 它是导航属性或未映射的计算成员。谓词/投影里要用它得先显式 join（LeftJoin/InnerJoin 把它带进 FROM，§5.2）；引用自动加载（Include）在 P1。");
+            ? $"{path} 是集合导航而不是列：批量加载（IncludeMany，两次查询 + 内存缝合）见 §5.7；要现在拿到明细行请显式 join 到明细表，注意那会让主表行重复。引用导航那一档（to-one）在投影/谓词里已经会自动联表（§5.2），集合导航没有这一档，因为一条 LEFT JOIN 就把每行主表复制成明细行数那么多行 —— 页码、行数与聚合会一起改语义。"
+            : $"{path} 不是列 —— 引用导航整个当值用没有对应物（要读它的列请再往下写一格，如 {path}.某一列，那条 LEFT JOIN 库自己补，§5.2；判那条边空不空则要比较它那一侧的主键列）；未映射的计算成员（表达式体属性、[Computed] 之外的那些）则是根本取不到列。");
 
     /// <summary>列上的 CLR 派生读法 → 符号函数（§5.7 覆盖矩阵）。
     /// 键是<b>属性名</b>，与 <see cref="SymbolicKey"/> 那张"方法名"表是两套形状：表达式树里属性访问
@@ -284,10 +284,24 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
         var owner = member.Expression!;
         var kind = Nullable.GetUnderlyingType(owner.Type) ?? owner.Type;
 
-        // 穿过导航属性读成员（<c>o.Customer.City</c>）：宿主不是列，所以这既不是列读法，也不是下面那张
-        // 派生读法表里的一条。报"没有 SQL 对应形态"会让人去翻函数矩阵，而出路在 FROM 那一行。
+        // 穿过引用导航读成员（<c>o.Customer.City</c>）：宿主不是列，所以这既不是列读法，也不是下面那张
+        // 派生读法表里的一条。契约上有那条 to-one 边就把宿主补成一张表位（<c>LEFT JOIN</c> 由
+        // <see cref="NavigationJoinScout"/> 欠着，算子落地时进 FROM，§5.2），读的那一格落在这张新表上 ——
+        // 调用方既不写 <c>Include</c> 也不写 join。认不出才抛：把 <c>o.CreatedAt.Kind</c> 静默翻译成一个裸列，
+        // 产出的是"语法正确、结果错"的 SQL —— 那正是 §5.8 禁止的那一类。
         if (!IsStorable(kind))
-            throw Navigation(owner, OwnerPath(owner, scope));
+        {
+            var target = scope.NavigationTable(owner);
+
+            if (target?.Contract is { } targetContract && targetContract.ByMember.TryGetValue(member.Member.Name, out var column))
+                return new ColumnExpression(target, column);
+
+            // 宿主联上了而这一格仍认不出（导航的导航整个当值、集合导航、未映射成员）时报的是<em>整条读法</em>：
+            // 只报宿主会把"缺的是 .Manager 那一格"说成"Customer 不是列"，而 Customer 这一形刚刚才落得成。
+            throw target is null
+                ? Navigation(owner, OwnerPath(owner, scope))
+                : Navigation(member, OwnerPath(member, scope));
+        }
 
         var temporal = kind == typeof(DateTime) || kind == typeof(DateTimeOffset) || kind == typeof(DateOnly);
 
@@ -678,7 +692,7 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
 
         if (node.Arguments.Count == 2 && node.Arguments[1] is LambdaExpression predicateLambda)
         {
-            var subScope = scope.Derive(childTable, predicateLambda.Parameters[0]);
+            var subScope = scope.DeriveInner(childTable, predicateLambda.Parameters[0]);
             var visited = Visit(predicateLambda.Body, subScope);
             filter = Booleanized(predicateLambda.Body, visited);
         }

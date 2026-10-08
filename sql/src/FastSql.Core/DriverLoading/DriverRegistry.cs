@@ -13,7 +13,9 @@ namespace FastSql.DriverLoading;
 public sealed record DriverRef(string Key, string AssemblyName, string? Path, string? FactoryType);
 
 /// <summary><c>FastSqlDrivers.json</c> 的内容。手写 <see cref="JsonElement"/> 解析而不用
-/// <c>JsonSerializer</c>：后者要反射，会让这条路径在 AOT 下当场失效，而它正是 AOT 场景唯一的驱动入口。</summary>
+/// <c>JsonSerializer</c>：后者要反射，会让这条路径在 AOT 下当场失效，而它正是 AOT 场景唯一的驱动入口。
+/// 文件不在 → <see cref="Empty"/>（<b>不是错误</b>：<see cref="DriverRegistry.Factory"/> 会退到
+/// <see cref="BuiltinDrivers"/>，清单只用来覆盖名字或写 <c>path</c>）。</summary>
 public sealed class DriverManifest(IReadOnlyList<DriverRef> drivers)
 {
     public static DriverManifest Empty { get; } = new([]);
@@ -80,7 +82,8 @@ public sealed class DriverRegistry(DriverManifest manifest, string? root = null)
     }
 
     /// <summary>取驱动工厂。<paramref name="key"/> 用 <see cref="DbKind"/> 的小写名（<c>sqlserver</c>、<c>dameng</c>），
-    /// 与 <c>FastSqlDrivers.json</c> 里的 <c>key</c> 一一对应。
+    /// 与 <c>FastSqlDrivers.json</c> 里的 <c>key</c> 一一对应；<b>清单里没有这一行时退到
+    /// <see cref="BuiltinDrivers"/> 那张内建默认表</b>，所以宿主什么都不配也能只报库种与串就装配起来。
     /// 需要反射的原因有两个，都写在这一层而不下沉：清单里给的是<b>类型名</b>，以及工厂的 <c>Instance</c> 是反射取的字段。
     /// AOT 现场的干净路径是 <see cref="Register"/>：宿主自己引用驱动包，把工厂交进来，编译期仍然没有驱动引用。</summary>
     [RequiresUnreferencedCode("按清单里的程序集名与类型名解析驱动工厂，被裁剪的类型会在这里报驱动不存在。")]
@@ -98,6 +101,10 @@ public sealed class DriverRegistry(DriverManifest manifest, string? root = null)
         }
 
         var reference = manifest.Find(key);
+        var fromManifest = reference is not null;
+
+        // 清单没这一行不等于没得配：内建默认表接住「现场什么都没配」那一档（§9.5 的零配置入口）。
+        reference ??= BuiltinDrivers.Find(key);
 
         if (reference is null)
             throw Fail(key, inner: null, Hint(key));
@@ -111,7 +118,7 @@ public sealed class DriverRegistry(DriverManifest manifest, string? root = null)
         catch (Exception ex)
         {
             // 失败也缓存：否则每次执行都要重走一遍抛异常的加载路径，故障现场的日志会被同一条堆栈刷满。
-            throw Fail(key, ex, $"程序集 {reference.AssemblyName}，清单路径 {reference.Path ?? "<probing>"}");
+            throw Fail(key, ex, $"程序集 {reference.AssemblyName}，{(fromManifest ? "清单路径 " : "内建默认 ")}{reference.Path ?? "<probing>"}");
         }
 
         lock (_gate)

@@ -142,7 +142,7 @@ public sealed class SchemaSyncer
                 {
                     foreach (var statement in CreateStatements(contract, tally.NotJudged.Add))
                     {
-                        await ExecuteDdlAsync(connection, statement.Sql, ct).ConfigureAwait(false);
+                        await ExecuteDdlAsync(connection, statement, tally.Sql, ct).ConfigureAwait(false);
                         tally.Record(statement);
                     }
 
@@ -185,7 +185,7 @@ public sealed class SchemaSyncer
 
         foreach (var statement in ApplyStatements(contract, plan, tally))
         {
-            await ExecuteDdlAsync(connection, statement.Sql, ct).ConfigureAwait(false);
+            await ExecuteDdlAsync(connection, statement, tally.Sql, ct).ConfigureAwait(false);
             tally.Record(statement);
         }
     }
@@ -368,6 +368,10 @@ public sealed class SchemaSyncer
         var created = new List<string>();
         var existing = new List<string>();
 
+        // 这一趟自己的"已生效"清单：分片不走 Tally（那一份是 SyncAsync 那趟的账），而失败时要报的
+        // "前面建好了哪几张片"恰恰只有这一趟知道。
+        var sent = new List<string>();
+
         foreach (var shard in shards)
         {
             if (await _provider.Schema.ReadTableAsync(connection, shard, ct).ConfigureAwait(false) is not null)
@@ -376,9 +380,10 @@ public sealed class SchemaSyncer
                 continue;
             }
 
-            var ddl = EmitCreateTable(template.ForShardDdl(shard));
+            var statement = new Statement(EmitCreateTable(template.ForShardDdl(shard)), ChangeKind.CreateTable, shard.Name);
             created.Add(shard.Name);
-            await ExecuteDdlAsync(connection, ddl, ct).ConfigureAwait(false);
+            await ExecuteDdlAsync(connection, statement, sent, ct).ConfigureAwait(false);
+            sent.Add(statement.Sql);
         }
 
         var requested = new List<string>(shards.Count);
@@ -442,11 +447,30 @@ public sealed class SchemaSyncer
         return writer.ToSqlString();
     }
 
-    async Task ExecuteDdlAsync(DbConnection connection, string ddl, CancellationToken ct)
+    /// <summary>发出一句 DDL，<b>失败时把"哪一句"与"前面已经落库的哪几句"一起报出去</b>
+    /// （<see cref="SchemaSyncFailedException"/>）。这一格是唯一的抛出点：三个调用点都只交回
+    /// <see cref="Statement"/> 与那份已经成功的清单，所以没有一处能漏掉这个包装。</summary>
+    /// <param name="applied">这一句之前真发出去过的那些句（<c>Tally.Sql</c> 或分片那一趟的局部清单）。
+    /// 传的是活清单，异常在抛出那一刻取快照。</param>
+    async Task ExecuteDdlAsync(DbConnection connection, Statement statement, IReadOnlyList<string> applied, CancellationToken ct)
     {
         await using var command = _provider.Connectors.CreateCommand(connection);
-        command.CommandText = ddl;
-        await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        command.CommandText = statement.Sql;
+
+        try
+        {
+            await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new SchemaSyncFailedException(
+                statement.Sql,
+                statement.Name,
+                statement.Kind.ToString(),
+                applied,
+                connection.Database,
+                ex);
+        }
     }
 }
 

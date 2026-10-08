@@ -99,14 +99,26 @@ public abstract class PostgreSqlProviderBase : IDbProvider
 
     public bool CanCreateDatabase => true;
 
+    /// <summary>这一家认的库名键。按 Npgsql 文档列 <c>Database</c>/<c>dbname</c>/<c>db</c> 三颗
+    /// （与 MySQL 血统那两处不同：那一家是实测钉下来的两颗，这一家<em>没有</em>驱动可测，
+    /// 所以只列到文档写到那一格，别当成实测读数）。</summary>
+    static readonly ConnectionStringCatalog Catalog = new("Database", "dbname", "db");
+
     /// <summary>PG 系没有 <c>CREATE DATABASE IF NOT EXISTS</c>，先查 <c>pg_database</c> 再建。
     /// 连到 <c>postgres</c> 库（每台 PG 服务器都有的默认库）执行检查与建库语句。
-    /// 连接串里的 <c>Database=</c> 就是目标库名。</summary>
+    /// 目标库名从连接串按同义词读（<see cref="Catalog"/>），与 MySQL 血统那一格同一个坑：
+    /// 读不到就走「没库名、不建库」那一岔是静默的，所以候选键要一颗颗列全。</summary>
     public async Task EnsureDatabaseExistsAsync(string connectionString, CancellationToken ct = default)
     {
         var builder = new DbConnectionStringBuilder { ConnectionString = connectionString };
-        if (!builder.TryGetValue("Database", out var dbNameObj) || dbNameObj is not string dbName || dbName.Length == 0)
-            return;
+
+        var dbName = Catalog.Read(builder);
+
+        if (dbName is null) return;
+
+        // 先把候选键全摘干净再写锚点库：只覆盖 Database 一颗的话，串里会同时留着
+        // Database=postgres 与 dbname=原库，谁说了算交给驱动的解析顺序。
+        Catalog.Clear(builder);
 
         builder["Database"] = "postgres";
 

@@ -19,8 +19,9 @@ sealed class EntityModel
 
     public string? TableSchema;
 
-    /// <summary>表备注，只可能来自 <c>[Table(Comment=…)]</c>（Fluent 那一层生成期读不到，与
-    /// <c>ToTable</c> 同一取向）。null = 注解没写这一格。</summary>
+    /// <summary>表备注：来自 <c>[Table(Comment=…)]</c>，或开关 <c>FastSqlXmlDocComments</c> 开着时来自类型上的
+    /// <c>/// &lt;summary&gt;</c>（链尾兜底，注解写过就不轮到它）。Fluent 那一层生成期读不到，与
+    /// <c>ToTable</c> 同一取向。null = 注解没写这一格。</summary>
     public string? TableComment;
 
     public List<ColumnModel> Columns = [];
@@ -84,6 +85,8 @@ sealed class ColumnModel
 
     public string? StoreType;
 
+    /// <summary>列备注。开关 <c>FastSqlXmlDocComments</c> 开着时，注解那一层全没写的那一列拿它自己的
+    /// <c>/// &lt;summary&gt;</c> 兜底（折成一行、摘掉标签）；关着时与反射侧逐字同链。</summary>
     public string? Comment;
 
     /// <summary>并发列（<c>[ConcurrencyToken]</c>）。与其余各格同一口径：生成期只看得见注解，

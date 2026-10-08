@@ -111,6 +111,28 @@ public sealed record SchemaSyncResult(
 - `Executed`：Execute 模式下为 true，Script/Disabled 模式下为 false
 - `Ddl`：Script 模式下包含完整 DDL，Execute 模式下为空字符串
 
+## 同步失败时报什么
+
+Execute 档是一句一句各自发出去的（这一趟不把整批包进事务，而 MySQL 那一族本来也回滚不了 DDL），
+所以失败之后库的形状是"前 N 句成了、第 N+1 句没成"。被库拒绝时抛 `SchemaSyncFailedException`，
+消息里同时给出失败的哪一句、它改的是哪一格、以及在此之前已经生效的哪几句（清单最多逐句列 5 条，
+首行报的是全部句数，全量在 `AppliedStatements` 属性里）：
+
+```
+结构同步失败：CreateTable SYNC_BOOM 那一句被库拒绝。目标库：sync-probe-db。
+失败的句子：
+CREATE TABLE [dbo].[SYNC_BOOM] ([Id] INT IDENTITY(1,1) NOT NULL, [Name] NVARCHAR(MAX) NULL, …)
+已经生效的 1 句（DDL 不回滚，失败前发出去的都留下了）：
+  1. CREATE TABLE [dbo].[SYNC_OK] ([Id] INT IDENTITY(1,1) NOT NULL, [Name] NVARCHAR(MAX) NULL, …)
+库的回答：MySqlException: …
+```
+
+属性：`Sql`（失败那一句原文）、`Target`（表名或 `表.列`）、`ChangeKind`（`CreateTable` / `AddColumn` /
+`AlterColumn` / `ColumnComment` / `TableComment` / `CreateIndex` / `DropIndex`）、`AppliedStatements`、
+`Database`。驱动原话在 `InnerException` 里。
+
+取消（`CancellationToken` 被叫停）不算库的拒绝，仍按 `OperationCanceledException` 原样抛出。
+
 ## 环境检查
 
 Execute 模式在非 Development 环境下要求 `ForceSchemaSync=true`，否则抛 `InvalidOperationException`：

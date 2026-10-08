@@ -241,16 +241,17 @@ var orm = new FastSqlOrm(options, schemas);
 
 | 成员（行号） | 类别 | 拿到什么 |
 | --- | --- | --- |
-| `Executed` 14 | 观察 | `CommandLogEvent`（含 `ElapsedMilliseconds`、`TableNames`，以及 v0.38 第十一笔添的 `Route`——`DataSourceRoute(Cluster, Role, Reason)`，必填的一格，见 :92。所以"这一句实际走了哪座库、哪个角色、按哪一档"是订阅出来的事实，不用翻库猜，见 §3.7） |
-| `Error` 15 / `SlowQuery` 16 | 观察 | `CommandErrorEvent(Exception, string Sql, long)`、`SlowCommandEvent`；阈值 `SlowQueryThresholdMilliseconds`（默认 500，行 51） |
-| `Materialized` 17 | 观察 | `MaterializedEvent(object Entity, string EntityTypeName, int OrdinalInBatch)` |
-| `BulkDegraded` 25 | 观察 | `BulkDegradedEvent(BulkMethod Requested, BulkMethod Method, int RowCount, string Reason)`：只在**真的降级**时派发，见 §3.2 的批量高速层 |
-| `AuditValue` 34 / `ParameterBinding` 35 | 改写 | `AuditValueEvent`（`SetValue`/`WasSet`/`OperationKind`）、`ParameterBindingEvent`（`SetValue`/`ChangeType`）。**前者的发射点只有两条"手上有整行实体"的链**：`orm.Insert`/`InsertRange`（`OperationKind` = `insert`）与 `orm.UpdateRange(实体集)`（= `update`，v0.38 第十六笔）；链式 `orm.Update<T>().Set(...)`、`orm.Delete<T>()` 与 `SaveChanges` 的 update 档都不问它，那两条链的改写槽位是 `ParameterBinding`，判据与两处未接的理由见规格 §10.1 同笔记录 |
-| `CudBuilding` 41 | 改写 | `CudBuildingEvent { OperationKind, Sql, Rewritten }` |
+| `Executing` 24 | 观察 | `CommandExecutingEvent(Sql, OperationKind, TableNames)`：**执行前**的那一位。发射点 `AdoExecutor.BeforeExecute`，排在 `CommandTerminating` 之后 —— 被闸门叫停的句子不播报（顺序就裁在这一步）。手上只有文本与表名：耗时、行数、实际路由这一刻还没被决定，那三格在 `Executed` 上。要"这一句要发出去了"的现场（语句挂住时唯一还留得下的那一行日志）订它 |
+| `Executed` 25 | 观察 | `CommandLogEvent`（含 `ElapsedMilliseconds`、`TableNames`，以及 v0.38 第十一笔添的 `Route`——`DataSourceRoute(Cluster, Role, Reason)`，必填的一格，见 :112。所以"这一句实际走了哪座库、哪个角色、按哪一档"是订阅出来的事实，不用翻库猜，见 §3.7） |
+| `Error` 26 / `SlowQuery` 27 | 观察 | `CommandErrorEvent(Exception, string Sql, long)`、`SlowCommandEvent`；阈值 `SlowQueryThresholdMilliseconds`（默认 500，行 62） |
+| `Materialized` 28 | 观察 | `MaterializedEvent(object Entity, string EntityTypeName, int OrdinalInBatch)` |
+| `BulkDegraded` 36 | 观察 | `BulkDegradedEvent(BulkMethod Requested, BulkMethod Method, int RowCount, string Reason)`：只在**真的降级**时派发，见 §3.2 的批量高速层 |
+| `AuditValue` 45 / `ParameterBinding` 46 | 改写 | `AuditValueEvent`（`SetValue`/`WasSet`/`OperationKind`）、`ParameterBindingEvent`（`SetValue`/`ChangeType`）。**前者的发射点只有两条"手上有整行实体"的链**：`orm.Insert`/`InsertRange`（`OperationKind` = `insert`）与 `orm.UpdateRange(实体集)`（= `update`，v0.38 第十六笔）；链式 `orm.Update<T>().Set(...)`、`orm.Delete<T>()` 与 `SaveChanges` 的 update 档都不问它，那两条链的改写槽位是 `ParameterBinding`，判据与两处未接的理由见规格 §10.1 同笔记录 |
+| `CudBuilding` 52 | 改写 | `CudBuildingEvent { OperationKind, Sql, Rewritten }` |
 
-改写过的步骤进 `HookTrace(int Step, string HookName, HookCategory Category, string Before, string After)`，在 `Explain()` 与 `SaveChangesReport.HookReplay` 里回放。观察类钩子的异常被 `Observe(...)`（行 62）吞掉并上报，不让日志代码打挂写入。
+改写过的步骤进 `HookTrace(int Step, string HookName, HookCategory Category, string Before, string After)`，在 `Explain()` 与 `SaveChangesReport.HookReplay` 里回放。观察类钩子的异常被 `Observe(...)`（行 73）吞掉并上报，不让日志代码打挂写入。
 
-**没有的**：`QueryBuilding`、`CommandCreating` 在 `FastSqlAop` 里只是注释点名的桩（类注释自陈，无发射点）；**"观察"档今天只有 `Executed` 一颗有派发点**：`Executing`（`FastSqlAop.cs:13`）声明在场而派发点 0 处（本笔按 `src/` 全扫复核，`.Executing` 零命中），挂在它上面的回调永远不响——要"执行前"的读数请订 `CudBuilding`（文本已成形、执行之前）；`CommandLogEvent` 那颗记录本身是活的，`Executed` 交回的就是它（v0.38 第十四笔把这一格从"观察"档改判进本段，判据是盘上零派发，不是规格名单）。决策类钩子、注册式钩子、重试都没有。**"读写分离"今天从这一份名单里划掉了**，但它不是以钩子的形状进来的：它长在 §2.1 那三颗选项 + §3.7 那条路由上，AOP 侧只多了一颗 `CommandLogEvent.Route`（观察者拿读数，不是决策点——决策点做成钩子等于让日志代码决定语句发去哪座库）。`ICacheAdapter Cache`（行 49）有槽位，`WithCache(string, TimeSpan)` 有入口，仓库内没有实现，要接自己的缓存得自己写这一颗。
+**没有的**：`QueryBuilding`、`CommandCreating` 在 `FastSqlAop` 里只是注释点名的桩（类注释自陈，无发射点）；**观察档五颗都有派发点**：`Executing`（`FastSqlAop.cs:24`）在 `AdoExecutor.BeforeExecute` 播报，`Executed`/`SlowQuery` 在 `Succeeded`，`Error` 在 `Failed`，`Materialized` 在物化那一趟。`Executing` 这一格曾被记成"声明在场而不响"（v0.38 第十四笔按 `src/` 全扫复核、`.Executing` 零命中，判据是盘上零派发），今天按同一条口径改判回来：它有发射点了。它交回的是 `CommandExecutingEvent` 而不是 `CommandLogEvent`（那颗记录里的 `ElapsedMilliseconds`/`AffectedRows`/`Route` 在执行前一个都不存在，`Route` 还自陈"报的是结论不是意图"）；整句文本级的改写仍然订 `CudBuilding`，取消仍然订 `CommandTerminating`。决策类钩子、注册式钩子、重试都没有。**"读写分离"今天从这一份名单里划掉了**，但它不是以钩子的形状进来的：它长在 §2.1 那三颗选项 + §3.7 那条路由上，AOP 侧只多了一颗 `CommandLogEvent.Route`（观察者拿读数，不是决策点——决策点做成钩子等于让日志代码决定语句发去哪座库）。`ICacheAdapter Cache`（行 60）有槽位，`WithCache(string, TimeSpan)` 有入口，仓库内没有实现，要接自己的缓存得自己写这一颗。
 
 **全局过滤器**是另一只对象：`orm.Filters`（`FastSqlOrm.cs:175`）返回 `FilterRegistry`，注册口是
 
@@ -260,6 +261,20 @@ orm.Filters.Add<Customer>(c => c.TenantId == 7, mandatory: true); // 链上的 I
 ```
 
 签名 `Add<TEntity>(Expression<Func<TEntity, bool>> predicate, bool mandatory = false)`，可链式，注册期先试翻译一次（`src/FastSql.Core/Query/Filters/FilterRegistry.cs`）。**它管不到 `SaveChanges` 与批量**（谓词长在 `EntityTracker` 上，那一档到今天仍未接 —— 它等的是规格 §14 那一格那句裁决「被过滤器挡住的行算不算一次并发冲突」，v0.26 起归用户，没自决）。
+
+**读侧关掉过滤器有两句，射程不同**：
+
+```csharp
+orm.Select<Ticket>().IgnoreQueryFilters();                 // 这一条链上一条都不贴
+orm.Select<Ticket>().IgnoreQueryFilter<ISoftDelete>();    // 只跳过注册键正是 ISoftDelete 的那几条
+orm.Select<Ticket>()
+    .IgnoreQueryFilter<ISoftDelete>()
+    .IgnoreQueryFilter<Ticket>();                         // 点名可以叠着写
+```
+
+`IgnoreQueryFilter<TFilter>()` 的参数吃的就是 `Add<TFilter>` 那一颗**注册键**，判据是键的同一性而不是继承关系：注册在接口上的那一条要点名接口才跳得掉，点名实体碰不到它；反过来点名一个接口也碰不到注册在实现类上的那些条。这一档窄在这里是有理由的 —— 一族式的点名会让"我只想关软删那一条"这句话静默地少掉同一张表上的租户条件，而那正是下面那颗 `mandatory` 要拦的失败形态。要说"全部"就写不带参数那一句（`IgnoreQueryFilter<object>()` 与它同一条路、同一个结果）。
+
+`mandatory: true` 的那一条在两句里都拦得住，但只拦**被它盖到的那一次点名**：一条链上同时有「mandatory 的接口键」与「普通的实体键」时，点名实体照常通过（那一句没关掉任何不可忽略的东西），点名接口当场抛。两次点名叠在一起时，第二次会把第一次那份账一起问一遍，所以多颗 mandatory 不会只有第一颗响。写侧两条链（`IUpdate<T>` / `IDelete<T>`）今天没有对应的口子 —— 与下面那句 arity 1 的限制同源：跳过过滤器在写侧的后果比读侧更重，那一格要先把"叠了哪几条"做成能按条枚举的结构。
 
 **软删的改写入口是第三只对象：`orm.Behaviors`（`FastSqlOrm.cs:183`，v0.38 第十七笔落地）**，注册口是
 
@@ -362,9 +377,36 @@ var q = orm.Select<Order>()
 - 谓词/投影/排序：`Where`（可多条，左到右折成一个 AND 链）、`OrderBy`/`OrderByDescending`/`ThenBy`/`ThenByDescending`、`Select<TResult>`（实体、匿名、构造器 DTO 三种）
 - 分页：`Skip`/`Take`，或一次到位 `ToPagedAsync(int page, int size, PagedOptions? = null, CancellationToken)` → `PagedResult<T> { Items, Page, Size, Total, HasNext, TotalPages }`；计数控件是 `PagedOptions(CountMethod CountMethod = Auto, bool StripOrderingForCount = true, string? CacheKey = null)`，`CountMethod` 五值 `Auto`/`CountStar`/`CountOverWindow`/`SkipTotal`/`SeparateTransaction` —— 后两档里 `CountOverWindow` 与 `SeparateTransaction` 今天**直接抛**（§4.3 第 4 条那格），可点的只有前三颗
 - 联表：arity 递增的 `LeftJoin<T2>(on)` / `InnerJoin<T2>(on)`，形参按 FROM 位置解析，产出 `IQuery<T1, T2>`（再到 `IQuery<T1, T2, T3>`），其后 `Select((a, b) => ...)`
-- 导航：`Include<TProp>`、`IncludeMany<TDetail>`、`AsSplitQuery(int navigateBatchSize = 20)`
-- 其它：`As(string alias)`、`Distinct()`、`AsNoTracking()`、`IgnoreQueryFilters()`、`WithCache(string, TimeSpan)`、`WithSql(string sql, object? args = null)`（把 FROM 那一段换成你自己写的 SELECT，外面一层仍归库；见下面"表源那一格"）
+- 导航：`Include<TProp>`、`IncludeMany<TDetail>`、`AsSplitQuery(int navigateBatchSize = 20)`；**另加 v0.39 起"不点名也带"的那一档** —— 在谓词 / 投影 / 排序键里读到一条**引用**导航的**成员**，库按契约自动补 `LEFT JOIN`，不用 `Include`、也不用自己写 `LeftJoin`（下面那一格）
+- 其它：`As(string alias)`、`Distinct()`、`AsNoTracking()`、`IgnoreQueryFilters()`、`IgnoreQueryFilter<TFilter>()`（按注册键点名，可叠；见上面「全局过滤器」那一格）、`WithCache(string, TimeSpan)`、`WithSql(string sql, object? args = null)`（把 FROM 那一段换成你自己写的 SELECT，外面一层仍归库；见下面"表源那一格"）
 - 出口：`ToListAsync`/`FirstOrDefaultAsync`/`CountAsync`/`ToAsyncEnumerable(int batchSize)`，以及同步的 `ToList`/`FirstOrDefault`/`Count`；类型本身还是 `IAsyncEnumerable<T>`。计数一族（`Count`/`LongCount`/`Any` 与它们的异步对照）遇到分组、`Distinct` 或带 `Skip/Take` 的链时，会把整句包成派生表内层再数（上面那一段与下面"表源那一格"），不会照着原模型换一个 `COUNT(*)`。这一族的后四颗（`AnyAsync`/`LongCountAsync`/`Any`/`LongCount`）到 v0.38 第十九笔才真的长在 `IQuery<T>` 上，`Any` 发的仍是同一条 `COUNT(*)`，`COUNT(*) > 0` 在 CLR 侧判，`WHERE EXISTS(…)` 反形还没有入口
+
+**引用导航在谓词 / 投影 / 排序键里自动补 `LEFT JOIN`（v0.39，规格 §5.2 那条落地记录）。**
+
+```csharp
+// 跨表显示列：投影里读到 o.Customer.City，库自己把 Customer 那张表联进来
+var rows = await orm.Select<Order>()
+    .Where(o => o.Customer!.City == "上海")              // 谓词里读 → 同一张表位
+    .OrderBy(o => o.Customer!.Name)                      // 排序键里读 → 还是那一张
+    .Skip(20).Take(10)                                   // 页码数的是主表行
+    .Select(o => new { o.Id, o.Amount, City = o.Customer!.City })
+    .ToListAsync();
+
+// 发出去的（SQL Server，实测产物原样，只折了行）：
+// SELECT [t0].[Id], [t0].[Amount], [t1].[City] FROM [FastSqlOrder] AS [t0]
+//   LEFT JOIN [FastSqlCustomer] AS [t1] ON [t0].[CustomerId] = [t1].[Id]
+// WHERE [t1].[City] = @p0 ORDER BY [t1].[Name] ASC OFFSET @p1 ROWS FETCH NEXT @p2 ROWS ONLY
+```
+
+- **ON 由契约推出来，不是"属性名 + Id"那句猜测**：外键列与目标主键列都取自那条关系的登记（`[ForeignKey]` 与约定命中的都算），别名按表位自动编号。**同一条边读几次都只联一张** —— 一个 lambda 里读两次算一次，`Where` 里联上的 `[t1]` 后面 `Select`／`OrderBy` 接着读也算一次（上面那一句三处读的都是同一个 `[t1]`）；**两条不同的边各占一个表位**，`FROM` 后面的先后 = 第一次读到的先后
+- **是 `LEFT` 而不是 `INNER`**：主表的行不许因为对端没有就消失。代价是"对端为空"成了正常读数，投影出来那一列会是 `NULL`，所以 DTO 的槽位要按可空声明（外键本身不可空时，写 `o.Customer!.Name` 那个 `!` 只是为了过编译器的可空检查，运行期照样发 `LEFT JOIN`）
+- **分页在联表之后**：`OFFSET`/`FETCH` 数的是联完的主表行，而 `LEFT` 保证一条主行不会因对端缺失而少掉 —— 换成 `INNER` 的话同一页在两种数据上会给出不同的行数，而这件事在投影结果里读不出来
+- **仍然当场抛的四格**（宁可报错，不发一条看着合理的错句子）：① **集合导航**（`o.Items.Count`、`o.Items.Any(…)`）—— 一条 `LEFT JOIN` 明细会把每行主表复制成明细行数，页码、行数与聚合一起改语义，所以那一档今天没有自动联表，要的是相关子查询或 `IncludeMany`；② **整只导航当值读**（`(object)o.Customer == null`）—— 消息会说"再往下写一格"（`o.Customer!.Id == null`）；③ **显式 `LeftJoin`/`InnerJoin` 的 ON 里**读导航 —— ON 的翻译发生在右表进 FROM 之前；④ **写侧**（`Update`/`Delete`）不联表
+- **与 `Include` 的分工**：要把**整只实体**取回来（`o.Customer` 那一档、以及集合导航）仍然只有 `Include`/`IncludeMany`；这一档给的是"跨表读几列"，不往结果里塞实体
+- **相关子查询里读导航**：联表进的是**内层**那一句的 `FROM`，外层一个字不多（内层自成一个模型，账记在自己头上）
+- **`Explain()` 里读得出这条边**：它进的是模型的 `Joins`，不是编译期才补的一层，所以"这一句联了谁"在模型文本里就能看（`JOIN Left FastSqlCustomer AS t1 ON (t0.CustomerId = t1.Id)`）
+- **成本**：扁平实体（契约里一条关系都没有）连探测现场都不建，一次数组拷贝也不付；有关系的链是每查询 +8 B、每谓词 +16 B（门禁读数与归属在设计文档 §12.8 那一格 v0.39 那两段）
+- **见证**：离线册 `tests/FastSql.Tests.Dialects/NavigationAutoJoinTests.cs` **18** 颗（自动联的形状、跨算子复用、`Explain()`、分页在联表之后、子查询内层、`Guid` 外键那条边用自己的列、上面四格拒绝各一颗），基线 `golden/sqlserver/navigation-auto-join-projection.sql`，真库那一颗是集成册 `ReadPathTests.A_navigation_read_lands_a_left_join_without_being…`
 
 **分组（`GroupBy`/`Having`）走的是另一条类型链，出口只有 `Select`。**
 
@@ -468,7 +510,7 @@ await orm.Delete<Order>().Where(o => o.CreatedAt < cutoff).ExecuteAffrowsAsync()
 - **`CopyChannel` 那一档付的三条语义。** ① 不产 SQL 文本：`Explain()` 交出的永远是文本层语句，层的问题问 `ExplainBulk()`（它不连库，但那一次反射查找照旧，所以修剪后的产物上它会报"没有通道"）；② 改写类钩子 `CudBuilding` / `ParameterBinding` 在这一档不适用（`InsertEngine.cs:224` 把这句写在 `Reason` 里）；③ 回填口 `ExecuteReturnKeysAsync` / `ExecuteIdentityAsync` **永不借道**，装载通道给不了库里生成的那些列（`IInsert.cs:34-37`）。
 - **`rowsPerRoundTrip` 只压不抬**（`IInsert.cs:44-47`）。文本层它是每块行数，装载通道那一档它是"每次递交几行"，实现为切成多次递交（`InsertEngine.cs:212-213`、`:154-157`）；通道内部怎么分批是驱动的事。**原子性照文本层那一条**：内核不为这一串递交开事务，所以没有环境事务时块与块之间不原子；有事务时每一次递交都重新走 `RentAsync`，而它见着环境槽位就交回那一条被事务独占的连接与事务（`src/FastSql.Core/Execution/AdoExecutor.cs:510-516`），于是整串递交挂在同一颗事务上（真库那册的回滚用例断的就是这一格：库里没有那三行，而不是"没报错"）。**块宽的来源今天写死了口径**：默认每句参数颗数 = 预算的九成（SQL Server 恒 1 890 颗，与列数无关），而实测的"每句耗时 vs 每句颗数"**不是线性**——T-SQL 一台实例上同一批 2000 行 × 6 列扫出：每句 120 颗 151–224 ms、每句 1 890 颗 1 215–1 405 ms（八趟区间，见 `sql/docs/fastsql-vs-sqlsugar.md` §2.5）。所以"贴着预算上限"**不等于"划算的块宽"**：大批量要自己显式压 `rowsPerRoundTrip`（v0.38 第十四笔按用户裁决记下这一句，默认值与那一式都不改，裁决留给调用方；规格 §12.3 末那一格是同一条账的另一面）。
 - **通道少报了行就抛，但那一批不会撤销。** `written != report.RowCount` ⇒ `FastSqlException`「报回 4/5 行…不能假设这一批完整落库」（`InsertEngine.cs:165-168`）；拦下的是"悄悄交出一个假数"，不是回滚。
-- **降级留痕今天只有两颗。** `BulkReport.Requested/Method/Degraded/Reason` + 订阅位 `FastSqlAop.BulkDegraded`（`src/FastSql.Abstractions/Aop/FastSqlAop.cs:25`，只在真降级时派发；`Auto` 取到文本层**不算**降级）。规格里那句 `LogLevel.Warning` + OTel 标签（`docs/fastsql-orm-design.md:1487`）在这份代码里没有对象：仓库既无日志器也无 OTel。**防静默逐条的手段因此不是那句警告，而是 `FallbackPolicy.Never`**（`InsertEngine.cs:231-232`）+ CI 里订阅 `BulkDegraded` 并断言它一次都没响。
+- **降级留痕今天只有两颗。** `BulkReport.Requested/Method/Degraded/Reason` + 订阅位 `FastSqlAop.BulkDegraded`（`src/FastSql.Abstractions/Aop/FastSqlAop.cs:36`，只在真降级时派发；`Auto` 取到文本层**不算**降级）。规格里那句 `LogLevel.Warning` + OTel 标签（`docs/fastsql-orm-design.md:1487`）在这份代码里没有对象：仓库既无日志器也无 OTel。**防静默逐条的手段因此不是那句警告，而是 `FallbackPolicy.Never`**（`InsertEngine.cs:231-232`）+ CI 里订阅 `BulkDegraded` 并断言它一次都没响。
 - **反射找成员这件事踩过一次，写在这里当坑看。** 真库那支驱动的构造子收的是**具体**类型 `(SqlConnection, options, SqlTransaction)` 而不是 `(DbConnection, …, DbTransaction)`，超时属性叫 `BulkCopyTimeout` 而不是 `BulkTimeout`；按名字点错一处，`TryResolve` 就交回 null，而那个形状与"这一家没有装载类"**逐字同形**（同一条 `Reason`、同一个退层），离线册看不见。所以现在构造子按形状找（三个参数、连接与事务分别是 `DbConnection`/`DbTransaction` 的子类、中间那颗是驱动自己的 options 枚举），成员名一律由真库跑验。
 - **证不到的那一格**：`CheckConstraints | FireTriggers` 两颗开关确实是从驱动的枚举上按名字读出来再置上的（不写死位值），但夹具那张表上既没有 CHECK 约束也没有触发器，所以"装载通道与逐条在约束/触发器上语义等价"这一半今天**没有可观测的对象**。上生产前要在自家带约束的表上量一次。
 - **见证。** 离线册 `tests/FastSql.Tests.Dialects/BulkLayerTests.cs` 17 颗（通道在与不在、列被拒、`Never`、块宽只压不抬、决策与执行同数、留痕时机），driver-only 那一支靠转发替身 `CopyChannelProvider.cs` 才能在无库环境里判；真库册 `tests/FastSql.Tests.Integration/BulkPathTests.cs` 9 颗（整批落库逐列对、与 L3 写的内容等值、客户端 Guid 键进批、事务带得动且回滚由库里没有那几行背书、回填口零借道、递给通道的 payload 形状、2+2+1 三次递交行序不串、少报一行拦下、墙钟只报数不判）；可跑示例 `samples/FastSql.Sample/Program.cs` §11 在真 SQLite 上把这一格能显示的部分逐条打印出来（`ExplainBulk` 的层与 `Reason`、无通道那一家上 `CopyChannel` 的降级与一次留痕、`Never` 抛、`ExecuteAffrowsAsync` 拒、`rowsPerRoundTrip: 20` 的往返数，最后以库里读回的行数收尾）。现场一次读数：2000 行 × 7 列同一张表，`CopyChannel` 一次递交约 60-170 ms，L3 多值约 1.7-1.8 s —— 单次读数，没钉成断言。
@@ -524,6 +566,14 @@ Console.WriteLine(contract.PrimaryKey.Length);                          // 关�
 ```
 
 `ColumnContract` 上可读的还有 `MemberName`、`LengthSemantics`（`Char`/`Byte`）、`Unicode`、`MaxBytes`、`Precision`、`Scale`、`IsConcurrencyToken`、`StoreFillsValue`、`StoreTypeName`、`Comment`、`ValueFromStore`、`NullableInStore`、`FitsChars`、`FitsBytes`。`IEntitySchemaRegistry` 另外三面是 `Schema<T>()`、`Validator<T>()`、`Contract(Type)`、`ReadDelegate(Type)`；校验档位 `ValidationMode { Off, ContractOnly, DataAnnotations, Custom }`。
+
+被校验闸门整批拒时抛 `ValidationFailedException`，**那一刻语句还没生成、库里什么都没发生**，所以没有 SQL 可报，能定位的只有契约那几条尺：明细在 `Failures`（一行一条，批量时每条前缀 `[第 N 行]`），而消息摘要按「成员 + 规则」归并、项数多的排前、最多逐组列 5 条（`GroupLimit`，组数与项数报的都是全部）——一次 134 行的种子报出 656 项时，按行取前几项只会给同一列的连续几行，归并才答得出"契约哪几条太严"。只有一项时不出这份清单（抬头本就点到成员与列）。
+
+```
+3 行插入被拒绝：2 项违反库契约（ValidationMode.ContractOnly）。整批先校验后执行，一行都没写进库。
+按「成员 + 规则」归并（共 1 组）：
+  1. CustomerName / length：2 项 —— 例：[第 1 行] CustomerName 超出列 CustomerName 的 64 字符
+```
 
 DDL 发射有 SPI（`ICodeFirstDialect.EmitCreateTable` / `EmitAddColumn` / `EmitAlterColumnPrecision` / `TryEmitColumnComment` / `EmitCreateIndex`），测试里就这么直接调（`tests/FastSql.Tests.Dialects/DialectParityTests.cs:565`）：
 
@@ -708,7 +758,7 @@ DDL 按集群分组（`SchemaSyncer.cs:130` 的 `GroupByCluster`）：一次 `Sy
     - **原生 SQL 那一族只认 `main`**：`RawSql.Tag` 是 `new("raw", [])`（`src/FastSql.Core/Execution/RawSql.cs:14`），`ExecutionTag` 的 `Cluster` 因此走缺省值（`AdoExecutor.cs:22`）——一句字符串 SQL 里没有"哪座库"这一颗可给。而它**照样按缺省档落 `main` 的从库**（同一条 `Resolve`，没有为它开后门），所以配了从库之后 `orm.Ado` 的读会去从库，那是设计而不是 bug；要到 `report` 那座去，今天只有两条路：另建一颗以 `report` 为 `ConnectionString` 的 orm，或用链式（链上的集群是从契约算出来的）。
     - **没有权重、没有延迟探测、没有存活检查**：从库按声明顺序轮询（§3.7），一颗死掉的从库会被一直轮到自己超时为止。本家不假装会挑"最不老的那一台"，因为承接库侧延迟的 SPI 槽位不存在（第 2 项那十三颗未建模参数之外的同一类空档）。
     - **`FromPrimary()`／`FromReplica()` 只在读链上**（`IQuery.cs:141`/`:150`）：`IInsert`/`IUpdate`/`IDelete` 没有这两颗，因为写恒主库、没有第二档可点。
-    - **`Error` 与 `SlowQuery` 那两颗观察口手上没有 `Route`**（`FastSqlAop.cs:97`/`:99`：`CommandErrorEvent(Exception, string Sql, long)`、`SlowCommandEvent(DialectSql, long, long)`）：只有 `Executed` 带（:92）。所以"哪条连接慢了/炸了"今天读不出来——慢日志与错误日志要按库分组统计，得自己从 SQL 文本或 `TableNames` 反推，那是这一族唯一一处"路由只在成功路径上"的不对称。
+    - **`Error` 与 `SlowQuery` 那两颗观察口手上没有 `Route`**（`FastSqlAop.cs:117`/`:119`：`CommandErrorEvent(Exception, string Sql, long)`、`SlowCommandEvent(DialectSql, long, long)`）：只有 `Executed` 带（:92）。所以"哪条连接慢了/炸了"今天读不出来——慢日志与错误日志要按库分组统计，得自己从 SQL 文本或 `TableNames` 反推，那是这一族唯一一处"路由只在成功路径上"的不对称。
     - **一座集群一个 provider**：`ConnectionSources` 连 `IDbProvider` 都不持有（它的类注释自陈"同构多集群"），所以"主库 SQL Server、从库虚谷"那种异构拓扑要两颗 orm，而不是在 `ClusterConfig` 里多填一颗字段。
     - **实体声明与在册清单不在启动期对全量**：注册表是惰性的（实体第一次被 `Select`/`Set` 触及时才进册），所以 `[DataSource("report")]` 写错名字的症状是**第一次碰那张表**时抛 `集群 report 不在册（…）`，不是启动期。要启动期挡下来，今天能做的只有把每张实体碰一次（`_ = orm.Select<T>()`，示例 §13 就是这么写的）再读 `orm.Sources.ClusterNames`——而这一句挡得住名字对不上，挡不住"少声明了一座集群"（那种实体照样落在 `main` 上，静默且合法）。
     - **跨集群的一行由什么指认仍未裁**：`SaveChanges` 与事务那两格拒绝（§3.7 表里第三、四行）说的是"没有一条连接能同时管两座库"，而它的根因——会话的身份映射按主键记账、跨座的主键关系没有形状——与 §3.6 末尾分表/跟踪器互斥那一格是同一条，规格 §16.4 两处都留白。

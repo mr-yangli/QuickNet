@@ -86,6 +86,7 @@ public sealed class FastSqlOrm
 {
     ExpressionTranslator? _expressions;
     ProjectionTranslator? _projections;
+    Func<Type, int, TableRef>? _tableRefFactory;
 
     /// <summary>G2 兜底口：元数据注册表由内核反射构建（§12.7 A 的 G2 级）。
     /// 裁剪/AOT 场景请走 <see cref="FastSqlOrm(FastSqlOrmOptions, IEntitySchemaRegistry)"/>，把 G1 生成的注册表传进来。</summary>
@@ -188,7 +189,7 @@ public sealed class FastSqlOrm
     {
         [RequiresUnreferencedCode("闭包常量求值按 MemberInfo 读字段/属性。")]
         [RequiresDynamicCode("不可约子表达式的退路是 LambdaExpression.Compile()。")]
-        get => _expressions ??= new ExpressionTranslator(Provider, Schemas, NewTableRef);
+        get => _expressions ??= new ExpressionTranslator(Provider, Schemas, TableRefFactory);
     }
 
     internal ProjectionTranslator Projections
@@ -289,6 +290,12 @@ public sealed class FastSqlOrm
 
         return new TableRef(index, AliasAt(index), contract.Table, contract);
     }
+
+    /// <summary><see cref="NewTableRef"/> 的那颗委托，<b>按实例缓存一次</b>。
+    /// 递给翻译现场（<c>NavigationJoinScout</c>、<see cref="ExpressionTranslator"/>）的是方法组，
+    /// 而方法组每次转换都新建一只委托 —— 现场是「每颗 lambda 一份」的，所以那笔钱乘在读路径的算子次数上
+    /// （§12.8 第 4 行「每谓词字节」钉的就是这种每算子常数项）。缓存之后一只 Orm 只付一次。</summary>
+    internal Func<Type, int, TableRef> TableRefFactory => _tableRefFactory ??= NewTableRef;
 
     // ── 写侧入口（§5.4） ──────────────────────────────────────────────
 

@@ -465,6 +465,71 @@ public class ReadPathTests
             .ToListAsync((o, c) => new { o.Id }, ct));
     }
 
+    /// <summary>§5.2 的自动联表在真库上的读数：调用方既不点名 <c>Include</c> 也不写 join，
+    /// <c>o.Customer.City</c> 这一格由库按契约上那根 to-one 边补一条 <c>LEFT JOIN</c>。
+    /// 方言层那册钉的是句子文本，这一格钉的是<em>库真的接受这句、而且语义是 LEFT 不是 INNER</em>：
+    /// 外格为空的那一行（<see cref="Database.OrphanTag"/>）必须还在，被联侧的列读回 <c>null</c>。
+    /// 三档（投影 / 谓词 / 序）各走一遍，谓词那一档再与<em>显式写出来的</em>同一根 LeftJoin 逐行对拍 ——
+    /// 两条 API 形状、一个答案，对不上就是自动那条猜错了边。</summary>
+    [Fact]
+    public async Task A_navigation_read_lands_a_left_join_without_being_asked()
+    {
+        Database.Ready();
+
+        var ct = TestContext.Current.CancellationToken;
+
+        // 前置：哨兵 id 上确实没有客户。缺这句，"补行"会在一次种子漂移之后变成"两边都有行"的假绿（与上面那颗左联用例同一道闸门）。
+        Assert.Equal(0, await Orm.Select<Customer>().Where(c => c.Id == Database.OrphanCustomerId).CountAsync(ct));
+
+        // ① 投影档：五行按标签的订单 + 一行孤儿都在，孤儿那一行的城市是 null —— INNER 会把它整行吃掉。
+        var projected = await Orm.Select<Order>()
+            .Where(o => o.Note == Database.Tag || o.Note == Database.OrphanTag)
+            .OrderBy(o => o.Id)
+            .Select(o => new { o.Id, o.Note, City = o.Customer!.City })
+            .ToListAsync(ct);
+
+        Assert.Equal(Database.Orders.Length + 1, projected.Count);
+
+        // 补行只有孤儿那一行：按标签的那五行全都带回了城市，所以这一句同时钉住"发的是 LEFT"与"没多补一行"。
+        Assert.All(projected, r => Assert.Equal(r.Note == Database.OrphanTag, r.City is null));
+
+        // ② 谓词档与显式联表对拍：同一批行、同一个序，两句给的答案逐行相等。
+        var auto = await Orm.Select<Order>()
+            .Where(o => o.Customer!.City == "上海")
+            .OrderBy(o => o.Id)
+            .Select(o => new { o.Id, o.CustomerId })
+            .ToListAsync(ct);
+
+        var byHand = await Orm.Select<Order>()
+            .LeftJoin<Customer>((o, c) => o.CustomerId == c.Id)
+            .Where((o, c) => c.City == "上海")
+            .OrderBy((o, c) => o.Id)
+            .ToListAsync((o, c) => new { o.Id, o.CustomerId }, ct);
+
+        Assert.NotEmpty(auto);
+        Assert.Equal(byHand, auto);
+
+        // ③ 序档：序键落在被联那张表上，而分页吃的是这一条序 —— 拿"整条序的第二、三行"与"跳过一行取两行"对照，
+        // 判的是库自己排出来的那个顺序，不拿 CLR 的排序规则去比（中文按拼音还是笔画排，两家的目录各说各话）。
+        var all = await Orm.Select<Order>()
+            .Where(o => o.Note == Database.Tag)
+            .OrderBy(o => o.Customer!.City)
+            .ThenBy(o => o.Id)
+            .Select(o => new { o.Id, City = o.Customer!.City })
+            .ToListAsync(ct);
+
+        var page = await Orm.Select<Order>()
+            .Where(o => o.Note == Database.Tag)
+            .OrderBy(o => o.Customer!.City)
+            .ThenBy(o => o.Id)
+            .Skip(1).Take(2)
+            .Select(o => new { o.Id, City = o.Customer!.City })
+            .ToListAsync(ct);
+
+        Assert.Equal(Database.Orders.Length, all.Count);
+        Assert.Equal(all.Skip(1).Take(2), page);
+    }
+
     /// <summary>流式出口：一次只有一行在内存里（§12.7 E），中途 <c>break</c> 由 DisposeAsync 归还连接。
     /// 分两半跑（先 break 再全量）是为了让"提前退出把连接留在事务里"这类问题变成可复现的红。</summary>
     [Fact]

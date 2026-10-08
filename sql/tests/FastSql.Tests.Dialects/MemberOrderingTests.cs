@@ -77,7 +77,9 @@ public sealed class MemberOrderingTests
         Checks.Has("导航属性、投影列与 SQL 片段都不认",
             Checks.Raised<FastSqlException>(() => query.OrderBy("Customer")).Message);
 
-        Checks.Has("要排别的表那一侧的列请先联表",
+        // 那一档的退路是 lambda 而不是这句字符串：字符串按名字认列，而名字里没有"哪张表"这件事，
+        // §5.2 的自动联表只在 lambda 形态上才有的读（见证 NavigationAutoJoinTests）。
+        Checks.Has("请改用 lambda 形态",
             Checks.Raised<FastSqlException>(() => query.OrderBy("Customer.Name")).Message);
 
         var injected = Checks.Raised<FastSqlException>(

@@ -1,5 +1,5 @@
 {
-  "$comment": "驱动清单（§1.2 原则 3 / §9.5）。src/ 下的 provider 编译期不引用任何驱动程序集，运行期由 FastSql.Core 的 DriverRegistry 按这张表解析 DbProviderFactory。信创现场把驱动 DLL 丢进 <输出目录>/drivers/ 即可，不用改代码、不用动 csproj；path 省略时先探 drivers/<assembly>.dll，再退到默认探测路径（Microsoft.Data.SqlClient 这类公开包走后者）。",
+  "$comment": "驱动清单（§1.2 原则 3 / §9.5）。src/ 下的 provider 编译期不引用任何驱动程序集，运行期由 FastSql.Core 的 DriverRegistry 按这张表解析 DbProviderFactory。信创现场把驱动 DLL 丢进 <输出目录>/drivers/ 即可，不用改代码、不用动 csproj；path 省略时先探 drivers/<assembly>.dll，再退到默认探测路径（Microsoft.Data.SqlClient 这类公开包走后者）。本笔（v0.37 第九笔之后）起这张表的<em>内容</em>还多了一份抄本：FastSql.Core 的 BuiltinDrivers 内建默认表与这里逐行同构（key/assembly/factoryType 三列），清单因此从「不配就没有」降级成纯粹的<em>覆盖</em>手段——现场什么都不放也能只报库种与串就装配起来，而漂移由 tests/FastSql.Tests.Dialects/BuiltinDriverTests.cs 钉成构建期红。",
   "drivers": [
     {
       "key": "sqlserver",

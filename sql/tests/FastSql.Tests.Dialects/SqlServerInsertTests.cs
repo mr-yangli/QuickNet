@@ -439,6 +439,24 @@ public sealed class SqlServerInsertTests
     }
 
     [Fact]
+    public void The_batch_rejection_summary_merges_rows_that_broke_on_the_same_rule()
+    {
+        var rows = new[]
+        {
+            row(1),
+            new Order { CustomerName = new string('字', 70), CustomerId = 2, Amount = 1m, State = OrderState.Placed, CreatedAt = Moment },
+            new Order { CustomerName = new string('字', 70), CustomerId = 3, Amount = 1m, State = OrderState.Placed, CreatedAt = Moment },
+        };
+
+        var failure = Checks.Raised<ValidationFailedException>(() => orm().InsertRange(rows).ToSql());
+
+        // 写路径喂进摘要的仍是一行一条的明细（行号在这里是唯一的定位手段），折出来的是"这一列这一条尺坏了几行"。
+        Checks.Has("共 1 组", failure.Message);
+        Checks.Has("CustomerName / length：2 项", failure.Message);
+        Assert.Equal(2, failure.Failures.Count);
+    }
+
+    [Fact]
     public void Not_null_comes_from_the_contract_not_the_annotation_on_the_DataAnnotations_path()
     {
         // LegacyShipment 的契约全来自 DataAnnotations：这一条同时验「写路径吃的是同一份契约」。

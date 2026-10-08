@@ -1,5 +1,8 @@
 using System.Collections.Generic;
 using System.Linq;
+using System.Text;
+using System.Xml;
+using System.Xml.Linq;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -8,7 +11,10 @@ namespace FastSql.Generators;
 
 /// <summary>§10.2 解析链的编译期实现。<b>逐条对着 <c>ContractResolver</c> 写</b>：层优先级、每层的 note
 /// 文本、成员被跳过的条件都要一致——两侧一致性由 §13.11 的逐字段相等断言兜住，所以这里改一句话术，
-/// 那一层就会红，正是想要的接线。</summary>
+/// 那一层就会红，正是想要的接线。
+/// <b>唯一的刻意例外</b>是 <see cref="Build"/> 的 <c>xmlDocComments</c> 那一档：源码注释只有编译器看得见，
+/// 反射侧没有这份来源，所以它一旦开着，两侧对同一张表就能给出不同备注。默认关正是为了让"开它"是一次签字
+/// 而不是一次顺带。</summary>
 sealed class BuildOutcome
 {
     public EntityModel? Model;
@@ -48,7 +54,11 @@ static class EntityFactsBuilder
         "System.DateOnly", "System.TimeOnly", "System.TimeSpan",
     ];
 
-    public static BuildOutcome Build(GeneratorAttributeSyntaxContext context, bool viaFastSqlTable)
+    /// <summary><paramref name="xmlDocComments"/> 是<b>整条链上唯一一颗 G1 独有的来源</b>：源码里的
+    /// <c>/// &lt;summary&gt;</c> 只有编译器看得见，反射侧没有这一份。开着它，同一张表在两条启动路径上就能给出
+    /// 两个备注（§13.11 的 <c>comment=</c> 那一格会红），所以它默认关、且只在消费方点名后才生效——
+    /// "开它"要是一次签字，不是一次顺带。</summary>
+    public static BuildOutcome Build(GeneratorAttributeSyntaxContext context, bool viaFastSqlTable, bool xmlDocComments)
     {
         var outcome = new BuildOutcome();
         var entity = (INamedTypeSymbol)context.TargetSymbol;
@@ -88,7 +98,8 @@ static class EntityFactsBuilder
             TableName = Text(table, 0, "Name") ?? Text(dataTable, 0, "Name") ?? entity.Name,
             TableSchema = Text(table, -1, "Schema") ?? Text(dataTable, -1, "Schema"),
             // 表备注只有自研那一层有（DataAnnotations 的 [Table] 没这一格），所以这里不比对 dataTable。
-            TableComment = Text(table, -1, "Comment"),
+            // 文档注释排在最末：注解写过就轮不到它（与下面列备注同一条取向）。
+            TableComment = Text(table, -1, "Comment") ?? (xmlDocComments ? SummaryOf(entity) : null),
             Split = SplitOf(attributes),
             Source = SourceOf(attributes),
         };
@@ -119,7 +130,7 @@ static class EntityFactsBuilder
                 continue;
             }
 
-            var facts = ColumnOf(property, model, outcome, at, ref conflicts);
+            var facts = ColumnOf(property, model, outcome, at, ref conflicts, xmlDocComments);
 
             if (facts is not null)
                 model.Columns.Add(facts);
@@ -143,7 +154,8 @@ static class EntityFactsBuilder
     }
 
     /// <summary>调用点已经判过"显式排除"与"这一格是不是列的形状"，所以这里只做 §10.2 的逐层取值。</summary>
-    static ColumnModel? ColumnOf(IPropertySymbol property, EntityModel model, BuildOutcome outcome, Location entityLocation, ref bool conflicts)
+    static ColumnModel? ColumnOf(
+        IPropertySymbol property, EntityModel model, BuildOutcome outcome, Location entityLocation, ref bool conflicts, bool xmlDocComments)
     {
         var declared = property.GetAttributes();
         var column = Find(declared, FastSqlColumn);
@@ -216,7 +228,10 @@ static class EntityFactsBuilder
             Precision = Positive(Number(column, -1, "Precision")),
             Scale = Positive(Number(column, -1, "Scale")),
             StoreType = Text(column, -1, "DbTypes") ?? Text(dataColumn, -1, "TypeName"),
-            Comment = Text(column, -1, "Comment") ?? Text(Find(declared, DataDisplay), -1, "Description") ?? Text(Find(declared, DataDisplay), -1, "Name"),
+            // 备注的链与反射侧同一条（自研 [Column] > [Display(Description)] > [Display(Name)]，Fluent 那档
+            // 生成期整体上看不见），文档注释接在链尾兜底：写过显式备注就不轮到它。
+            Comment = Text(column, -1, "Comment") ?? Text(Find(declared, DataDisplay), -1, "Description") ?? Text(Find(declared, DataDisplay), -1, "Name")
+                      ?? (xmlDocComments ? SummaryOf(property) : null),
             IsString = Core(type).SpecialType == SpecialType.System_String,
             DirectArm = DirectArmOf(type),
             CanBeNull = !(type.IsValueType && !IsNullableValue(type)),
@@ -490,6 +505,104 @@ static class EntityFactsBuilder
 
     /// <summary>属性自己的位置更好定位；合成成员没有位置时退回实体。</summary>
     static Location At(ISymbol symbol, Location fallback) => symbol.Locations.FirstOrDefault() ?? fallback;
+
+    /// <summary>取那一格 <c>&lt;summary&gt;</c> 作备注（只在开关开着时被调用）。
+    /// <b>自己扫前导 trivia，不走 <see cref="ISymbol.GetDocumentationCommentXml"/></b>：那颗 API 的源码侧文档
+    /// 要由 <c>DocumentationProvider</c> 供给，而 <c>csc</c> 批编译压根没装它——实测同一段
+    /// <c>/// &lt;summary&gt;</c> 在内存编译里有值、在真实 MSBuild 编译里交回<em>空串</em>（2026-10-08 端到端）。
+    /// 空串不是"没写注释"而是"读不到"，而"注释在、备注为空、构建还全绿"正是这一档最不能有的失效形状。
+    /// <b>筛子是 kind 与前缀两把并起来，单用一把都缺一档</b>：<c>DocumentationMode</c> 由编译器那一侧决定
+    /// （<c>csc</c> 不带 <c>/doc</c> 时实测为 <c>None</c>，IDE 与内存量具为 <c>Parse</c>），同一行 <c>///</c> 在
+    /// 前者是普通 <c>SingleLineCommentTrivia</c>、原文带着 <c>///</c>，在后者是
+    /// <c>SingleLineDocumentationCommentTrivia</c>、而 <c>ToString()</c> 交回的是<em>结构</em>文本（<c>///</c>
+    /// 已经不在里面了）。实测（2026-10-08）：只按 kind 筛 → <c>None</c> 档读不到（真实构建就是这一档，
+    /// 量具全绿而字段为空）；只按前缀筛 → <c>Parse</c> 档读不到。两把并起来，G1 在 IDE 与构建里才算得出
+    /// 同一份元数据，否则编辑期看到的备注和落库的那句不是一句话。同样不要求
+    /// <c>GenerateDocumentationFile</c>（那颗只管把注释落成 <c>.xml</c> 边车，是给运行期反射读的，
+    /// 生成期用不着它）。
+    /// <b>只截 <c>&lt;summary&gt;…&lt;/summary&gt;</c> 那一段来解析</b>，不把整块注释拼成一棵树：一行
+    /// <c>//// 分节线</c> 里出现裸 <c>&lt;</c> 时，整棵树的解析会连旁边写得好好的 summary 一起判死；截段解析只让
+    /// 那一段自己承担畸形——而<b>畸形交回 null 而不是抛</b>：作者写了裸 <c>&amp;</c> 时编译器已经有 CS1570 那句，
+    /// 生成器再说一遍只是把一条警告升成一次构建失败。</summary>
+    static string? SummaryOf(ISymbol symbol)
+    {
+        var node = symbol.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax(default);
+
+        if (node is null)
+            return null;
+
+        var source = new StringBuilder();
+
+        foreach (var trivia in node.GetLeadingTrivia())
+        {
+            var text = trivia.ToString();
+
+            // 相邻两行 /// 是两条 trivia，中间那个换行不属于任何一条；这里补一个分隔，否则
+            // 「上一句」与「下一句」会粘成「上一句下一句」。补空格与补换行等价——下面的 Fold 都把
+            // 一段空白折成一个空格，而落库的备注本来就要折成一行。
+            if (text.StartsWith("///", StringComparison.Ordinal) || text.StartsWith("/**", StringComparison.Ordinal)
+                || trivia.IsKind(SyntaxKind.SingleLineDocumentationCommentTrivia)
+                || trivia.IsKind(SyntaxKind.MultiLineDocumentationCommentTrivia))
+                source.Append(text).Append(' ');
+        }
+
+        // 注释外框（/// 与 /* */ 那一圈、以及多行注释里的 HTML 包壳）不是 XML，摘掉才谈得上解析。
+        var body = source.ToString().Replace("///", "").Replace("<!--", "").Replace("-->", "")
+                         .Replace("/**", "").Replace("*/", "");
+
+        var from = body.IndexOf("<summary>", StringComparison.Ordinal);
+
+        if (from < 0)
+            return null;
+
+        var to = body.IndexOf("</summary>", from, StringComparison.Ordinal);
+
+        if (to < 0)
+            return null;
+
+        try
+        {
+            // 截的那一段必须连着关标签：只取到 </summary> 之前就是 XDocument 眼里的"标签没合上"，
+            // 一句写得好好的备注会被 XmlException 判成畸形。区间运算符在这里也用不了——本工程吐的是
+            // netstandard2.0 的生成器程序集，那套引用里没有 System.Index / System.Range（CS0518，不是缺 using）。
+            var fragment = body.Substring(from, to - from + "</summary>".Length);
+
+            return Fold(XDocument.Parse(fragment).Root!.Value);
+        }
+        catch (XmlException)
+        {
+            return null;
+        }
+    }
+    /// <summary>折成一行并去首尾空：注释按 C# 惯例是换行缩进写的，而备注要落进一条 <c>COMMENT ON</c> 的字符串
+    /// 字面量里——换行留在库里，读回比对（§9.5 的那把尺子读的是目录里的备注文本）就永远差那一格。
+    /// 全空的 <c>&lt;summary&gt; &lt;/summary&gt;</c> 与只有 <c>&lt;inheritdoc/&gt;</c> 而没有 summary 的那一种
+    /// 都交回 null = 没声明，而不是空串（"说过而说的是没有备注"是另一档，见 <c>TableInfo.Comment</c>）。</summary>
+    static string? Fold(string text)
+    {
+        var builder = new StringBuilder(text.Length);
+        var pending = false;
+
+        foreach (var ch in text)
+        {
+            if (char.IsWhiteSpace(ch))
+            {
+                // 只在已经有内容时才记"欠一个空格"：注释首行紧跟在 <c>&lt;summary&gt;</c> 之后的那段换行不该变成前导空格。
+                pending = builder.Length > 0;
+                continue;
+            }
+
+            if (pending)
+            {
+                builder.Append(' ');
+                pending = false;
+            }
+
+            builder.Append(ch);
+        }
+
+        return builder.Length == 0 ? null : builder.ToString();
+    }
 
     static BuildOutcome Blocked(BuildOutcome outcome, Location location, string reason)
     {

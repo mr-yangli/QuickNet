@@ -107,8 +107,29 @@ public interface IQuery<T> : IAsyncEnumerable<T>
     /// 它自己在 <c>QueryModel</c> 里<em>不留痕迹</em> —— 反过来说，戴过滤器那一条链的
     /// <see cref="Explain"/> 模型文本里会多出那几颗谓词（§10.7 要的正是这件事能被看见：
     /// 一条"看起来没有租户条件"的语句要在 <c>Explain()</c> 里就判得出来），而 <c>IgnoreQueryFilters()</c>
-    /// 那一条的模型文本与"这个 orm 实例从没注册过过滤器"逐字节相等。</summary>
+    /// 那一条的模型文本与"这个 orm 实例从没注册过过滤器"逐字节相等。
+    /// <b>它与 <c>IgnoreQueryFilter&lt;TFilter&gt;()</c> 差一个 <c>s</c>，那不是手误也不是漏改</b>：这一颗的字面
+    /// 照抄 EF Core 的 <c>IgnoreQueryFilters()</c>，从 EF 迁过来的人第一眼认得的就是它，所以复数留着；按名那一颗
+    /// 是本库自造的口、不对齐谁，单数读作"忽略某一条过滤器"更贴它的射程。两颗是同一件事的两种射程，不是两件事。</summary>
     IQuery<T> IgnoreQueryFilters();
+
+    /// <summary>这一条链上只跳过<em>注册键正是 <typeparamref name="TFilter"/> 的那几条</em>全局过滤器，其余照旧贴。
+    /// 参数吃的就是 <c>orm.Filters.Add&lt;TFilter&gt;(…)</c> 那一颗键（实体，或它实现的接口/基类，§10.7），
+    /// 判据是<em>键的同一性</em>而不是继承关系：注册在 <c>ISoftDelete</c> 上的那一条要点 <c>ISoftDelete</c> 才跳得掉，
+    /// 点名实体碰不到它 —— 反过来说，点名一个接口也<em>碰不到</em>注册在实现类上的那些条（比如同一张表上的租户过滤器）。
+    /// <b>这一档窄在这里是有理由的</b>：一族式的点名会让"我只想关软删那一条"这句话静默地少掉一个租户条件，
+    /// 而那正是下面那颗 <c>mandatory</c> 要拦的失败形态，拦不住的地方就不该提供口子。
+    ///
+    /// <para>它与 <see cref="IgnoreQueryFilters()"/> 是同一颗口的两种射程，<b>可以叠着写</b>
+    /// （<c>.IgnoreQueryFilter&lt;ISoftDelete&gt;().IgnoreQueryFilter&lt;ITenant&gt;()</c> 两条都跳）。
+    /// <see cref="IgnoreQueryFilters()"/> 那一句"没点名的也跳"在本方法里没有对应物：按名那一句只动点名的。
+    /// 要说"全部"就写那一句；<c>IgnoreQueryFilter&lt;object&gt;()</c> 与它同一条路、同一个结果（<see cref="object"/>
+    /// 是顶类型，那颗清单里它是唯一一颗匹配一切的键）。</para>
+    ///
+    /// <para><b>约束 2 照旧生效</b>：被点名的那一条注册时写了 <c>mandatory: true</c> 就在这里抛，
+    /// 而<em>没被点名</em>的 mandatory 不受影响（那一条本来就要贴进句子，没什么可拦的）。
+    /// 与上面那颗同样只落在 arity 1 这一档。</para></summary>
+    IQuery<T> IgnoreQueryFilter<TFilter>() where TFilter : class;
 
     IQuery<T> AsSplitQuery(int navigateBatchSize = 20);
 

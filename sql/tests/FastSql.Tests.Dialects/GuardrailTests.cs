@@ -68,13 +68,15 @@ public sealed class GuardrailTests
     }
 
     [Fact]
-    public void Navigating_a_relation_in_a_predicate_is_refused_with_a_join_suggestion()
+    public void A_reference_navigation_used_whole_as_a_value_is_refused_with_a_read_suggestion()
     {
+        // 引用导航在谓词/投影里<em>读它的列</em>那一档现在由 §5.2 的自动联表接住（见证在
+        // <see cref="NavigationAutoJoinTests"/>），这一条留的是还没接住的那一档：整根导航当一个值。
         var failure = Checks.Raised<UntranslatableExpressionException>(
-            () => orm().Select<Order>().Where(o => o.Customer!.City == "上海").ToSql());
+            () => orm().Select<Order>().Where(o => (object)o.Customer! == null).ToSql());
 
         Checks.Has("t0.Customer", failure.Message);
-        Checks.Has("显式 join", failure.Message);
+        Checks.Has("再往下写一格", failure.Message);
     }
 
     [Fact]

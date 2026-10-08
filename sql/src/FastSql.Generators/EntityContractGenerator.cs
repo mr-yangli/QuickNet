@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using System.Linq;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Diagnostics;
 
 namespace FastSql.Generators;
 
@@ -15,17 +16,35 @@ public sealed class EntityContractGenerator : IIncrementalGenerator
     const string FastSqlTable = "FastSql.Metadata.TableAttribute";
     const string DataSchemaTable = "System.ComponentModel.DataAnnotations.Schema.TableAttribute";
 
+    /// <summary>把 C# 文档注释（<c>/// &lt;summary&gt;</c>）当成备注的最低优先档，默认<b>关</b>。
+    /// 消费方开这一档要写两行：属性本身，加上 <c>&lt;CompilerVisibleProperty Include="FastSqlXmlDocComments" /&gt;</c>
+    /// ——SDK 只把 <c>@(CompilerVisibleProperty)</c> 里点名的属性折进 <c>build_property.</c> 那一份生成的编辑器配置，
+    /// 光设属性生成器读不到（这不是本生成器的兜底，是编译器的口径）。键名公开是给用例引的：
+    /// 抄一份字符串进测试，改这一处就成静默假绿。</summary>
+    public const string XmlDocCommentsOption = "build_property.FastSqlXmlDocComments";
+
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
-        var fastsql = context.SyntaxProvider.ForAttributeWithMetadataName(
-            FastSqlTable,
-            static (node, _) => node is TypeDeclarationSyntax { AttributeLists.Count: > 0 },
-            static (capture, _) => EntityFactsBuilder.Build(capture, viaFastSqlTable: true));
+        // 选项走管道而不是实例字段：生成器那一颗实例在 IDE 里跨多次编译复用，存字段会让上一次的读数
+        // 留在下一次编译上，而增量缓存按输入算、根本不会重算那一条——症状是"改了开关而产出不动"。
+        var xmlDocComments = context.AnalyzerConfigOptionsProvider
+            .Select(static (provider, _) => Read(provider.GlobalOptions, XmlDocCommentsOption));
 
-        var dataAnnotations = context.SyntaxProvider.ForAttributeWithMetadataName(
-            DataSchemaTable,
-            static (node, _) => node is TypeDeclarationSyntax { AttributeLists.Count: > 0 },
-            static (capture, _) => EntityFactsBuilder.Build(capture, viaFastSqlTable: false));
+        var fastsql = context.SyntaxProvider
+            .ForAttributeWithMetadataName(
+                FastSqlTable,
+                static (node, _) => node is TypeDeclarationSyntax { AttributeLists.Count: > 0 },
+                static (capture, _) => capture)
+            .Combine(xmlDocComments)
+            .Select(static (both, _) => EntityFactsBuilder.Build(both.Left, viaFastSqlTable: true, both.Right));
+
+        var dataAnnotations = context.SyntaxProvider
+            .ForAttributeWithMetadataName(
+                DataSchemaTable,
+                static (node, _) => node is TypeDeclarationSyntax { AttributeLists.Count: > 0 },
+                static (capture, _) => capture)
+            .Combine(xmlDocComments)
+            .Select(static (both, _) => EntityFactsBuilder.Build(both.Left, viaFastSqlTable: false, both.Right));
 
         var outcomes = fastsql.Collect().Combine(dataAnnotations.Collect())
                        .Select(static (both, _) => both.Left.Concat(both.Right).ToList());
@@ -50,6 +69,11 @@ public sealed class EntityContractGenerator : IIncrementalGenerator
                 spc.AddSource("FastSqlGeneratedMetadata.g.cs", EntityFactsWriter.RenderLookup(models));
         });
     }
+
+    /// <summary>开关读数：<b>只有写着 <c>true</c> 才算开</b>。缺键、空串、写成 <c>1</c>/<c>yes</c> 一律当关——
+    /// 这一档会把源码里的开发期注释搬进库的备注，误开的代价比误关大，所以它不接受"看起来像真"的写法。</summary>
+    static bool Read(AnalyzerConfigOptions options, string key)
+        => options.TryGetValue(key, out var value) && value is { Length: > 0 } && bool.TryParse(value, out var enabled) && enabled;
 }
 
 /// <summary>诊断。<c>messageFormat</c> 一律是 <c>{0}</c>：话术由 <see cref="EntityFactsBuilder"/> 现拼，

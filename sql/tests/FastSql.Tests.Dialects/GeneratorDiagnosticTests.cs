@@ -1,6 +1,4 @@
-using System.Collections.Immutable;
 using Microsoft.CodeAnalysis;
-using Microsoft.CodeAnalysis.CSharp;
 using FastSql;
 using FastSql.Generators;
 using FastSql.Metadata;
@@ -23,7 +21,7 @@ namespace FastSql.Tests.Dialects;
 /// 谁把 <c>EntityFactsBuilder</c> 里那句模板改一个字，仓库里不会有任何一条用例变红。</para>
 ///
 /// <para><b>手法</b>：把坏形状写成<b>源码字符串</b>，在内存里 <c>CSharpCompilation</c> 一颗一次性程序集，
-/// 用 <see cref="CSharpGeneratorDriver"/> 直接驱动 <see cref="EntityContractGenerator"/>，收它的诊断。
+/// 用 <see cref="CompileTimeProbe"/> 直接驱动 <see cref="EntityContractGenerator"/>，收它的诊断。
 /// 那些源文本不进任何一次真实构建，所以这里的类型可以是坏的；而运行期那一半用的就是本文件末尾与
 /// <c>RelationshipTests</c>/<c>MetadataEquivalenceTests</c> 里那几个真类型 —— 它们能活在本项目，
 /// 是因为这一档没挂源生成器（挂上就编译不红，那正是 <c>FastSql.Tests.Common</c> 的注释里那句"必须住在
@@ -46,7 +44,7 @@ public sealed class GeneratorDiagnosticTests
     [Fact]
     public void Two_table_attributes_naming_different_tables_red_at_compile_time_with_the_startup_words()
     {
-        var red = Assert.Single(Probe(ConflictingTableSource).Errors);
+        var red = Assert.Single(CompileTimeProbe.Probe(ConflictingTableSource).Errors);
 
         var thrown = Checks.Raised<MetadataConflictException>(() => Reflected().Contract<ConflictingTable>());
 
@@ -65,7 +63,7 @@ public sealed class GeneratorDiagnosticTests
     [Fact]
     public void A_conflicting_length_pair_reds_with_the_startup_message_verbatim()
     {
-        var red = Assert.Single(Probe(ConflictingLengthsSource).Errors);
+        var red = Assert.Single(CompileTimeProbe.Probe(ConflictingLengthsSource).Errors);
 
         var thrown = Checks.Raised<MetadataConflictException>(() => Reflected().Contract<ConflictingLengths>());
 
@@ -77,7 +75,7 @@ public sealed class GeneratorDiagnosticTests
     [Fact]
     public void Two_table_attributes_naming_the_same_table_are_not_a_conflict_on_either_side()
     {
-        var run = Probe(TwoNamesSameTableSource);
+        var run = CompileTimeProbe.Probe(TwoNamesSameTableSource);
 
         Assert.Empty(run.Diagnostics.Where(static d => d.Id == "FastSql001"));
 
@@ -90,7 +88,7 @@ public sealed class GeneratorDiagnosticTests
     [Fact]
     public void An_index_naming_an_unmapped_member_reds_with_the_startup_message_verbatim()
     {
-        var red = Assert.Single(Probe(IndexOnUnmappedMemberSource).Errors);
+        var red = Assert.Single(CompileTimeProbe.Probe(IndexOnUnmappedMemberSource).Errors);
 
         var thrown = Checks.Raised<FastSqlException>(() => Reflected().Contract<IndexOnUnmappedMember>());
 
@@ -100,13 +98,13 @@ public sealed class GeneratorDiagnosticTests
 
         // 索引那条落在实体上（消息里只有索引名，没有可落的成员），与下面 FastSql004 落在属性上
         // 是一对形状差 —— 位置也是断言的一部分，否则"说清楚了"这句没有验收。
-        Assert.Contains("class IndexOnUnmappedMember", TextAt(red), StringComparison.Ordinal);
+        Assert.Contains("class IndexOnUnmappedMember", CompileTimeProbe.TextAt(red), StringComparison.Ordinal);
     }
 
     [Fact]
     public void A_foreign_key_naming_an_unmapped_member_reds_with_the_startup_message_verbatim()
     {
-        var red = Assert.Single(Probe(BadForeignKeySource).Errors);
+        var red = Assert.Single(CompileTimeProbe.Probe(BadForeignKeySource).Errors);
 
         var thrown = Checks.Raised<FastSqlException>(() => Reflected().Contract<BadFk>());
 
@@ -114,7 +112,7 @@ public sealed class GeneratorDiagnosticTests
         Assert.Equal(thrown.Message, red.GetMessage());
 
         // 同一条判据落在更准的位置上：外键那句指回写错了的那个属性，而不是整只实体。
-        var at = TextAt(red);
+        var at = CompileTimeProbe.TextAt(red);
 
         Assert.Contains(nameof(BadFk.Partner), at, StringComparison.Ordinal);
         Assert.DoesNotContain("class BadFk", at, StringComparison.Ordinal);
@@ -125,7 +123,7 @@ public sealed class GeneratorDiagnosticTests
     [Fact]
     public void An_entity_with_a_base_class_reports_the_info_diagnostic_and_no_error()
     {
-        var run = Probe(DerivedEntitySource);
+        var run = CompileTimeProbe.Probe(DerivedEntitySource);
 
         var info = Assert.Single(run.Diagnostics, static d => d.Id == "FastSql003");
 
@@ -134,7 +132,7 @@ public sealed class GeneratorDiagnosticTests
         Assert.Contains("有基类", info.GetMessage(), StringComparison.Ordinal);
 
         // 退路要真的是退路：这一条不产出那一型的事实代码，而位置落在实体上（G2 接得住的那句说明）。
-        Assert.Contains("class ShipmentLine", TextAt(info), StringComparison.Ordinal);
+        Assert.Contains("class ShipmentLine", CompileTimeProbe.TextAt(info), StringComparison.Ordinal);
     }
 
     // ---------- 反虚证 ----------
@@ -142,7 +140,7 @@ public sealed class GeneratorDiagnosticTests
     [Fact]
     public void A_clean_entity_draws_no_diagnostic_and_does_draw_code()
     {
-        var run = Probe(CleanEntitySource);
+        var run = CompileTimeProbe.Probe(CleanEntitySource);
 
         Assert.Empty(run.Diagnostics);
 
@@ -164,46 +162,12 @@ public sealed class GeneratorDiagnosticTests
     {
         // 上面那几条的红绿全都不出「生成器压根没跑」这个解释，除非源文本本身是合法 C#。
         // 缺 using、属性名拼错、别名对不上，都会先在这里红，而不是变成一条安静的零诊断。
-        Assert.Empty(Probe(source).CsErrors);
+        Assert.Empty(CompileTimeProbe.Probe(source).CsErrors);
     }
 
     // ---------- 内存里驱动生成器 ----------
+    // 量具本体在 CompileTimeProbe（与 XmlDocCommentTests 共用一份 TPA 引用装配）。
 
-    /// <summary>一次运行的四样产出：诊断、其中 Error 级的那几条、源文本自己的 CS 错、生成的文件名。</summary>
-    sealed record Run(ImmutableArray<Diagnostic> Diagnostics, ImmutableArray<Diagnostic> Errors,
-        ImmutableArray<Diagnostic> CsErrors, ImmutableArray<string> AddedSources);
-
-    static Run Probe(string source)
-    {
-        var tree = CSharpSyntaxTree.ParseText(source, new CSharpParseOptions(LanguageVersion.Latest));
-
-        var compilation = CSharpCompilation.Create(
-            "FastSqlCompileTimeNegativeSamples",
-            [tree],
-            References,
-            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
-
-        // 先要源文本自己站得住（CS 级），否则「没有诊断」这件事没有任何含义。
-        var csErrors = compilation.GetDiagnostics()
-            .Where(static d => d.Severity == DiagnosticSeverity.Error)
-            .ToImmutableArray();
-
-        var driver = CSharpGeneratorDriver.Create(new EntityContractGenerator().AsSourceGenerator());
-
-        var result = driver.RunGenerators(compilation).GetRunResult();
-
-        var diagnostics = result.Results.SelectMany(static r => r.Diagnostics).ToImmutableArray();
-
-        return new Run(
-            diagnostics,
-            diagnostics.Where(static d => d.Severity == DiagnosticSeverity.Error).ToImmutableArray(),
-            csErrors,
-            result.GeneratedTrees.Select(static t => Path.GetFileName(t.FilePath)).ToImmutableArray());
-    }
-
-    /// <summary>诊断落点上的那段源码文本。位置对不对，只能读它自己圈住的那一段。</summary>
-    static string TextAt(Diagnostic diagnostic)
-        => diagnostic.Location.SourceTree!.GetText().GetSubText(diagnostic.Location.SourceSpan).ToString();
 
     /// <summary>消息里「的」之前那一段（「类型 'X'」/「属性 'Code'」），也就是主语槽位。
     /// 两侧的字面量在「的」前都留了一个半角空格，所以这里 TrimEnd 掉它——不裁就量不出槽位里那个名字，
@@ -213,45 +177,15 @@ public sealed class GeneratorDiagnosticTests
     /// <summary>从「的」往下的后半（连着那个「的」）：那才是两侧共用的模板本体。</summary>
     static string TailOf(string message) => message[message.IndexOf('的')..];
 
-    static readonly ImmutableArray<MetadataReference> References = BuildReferences();
-
-    static ImmutableArray<MetadataReference> BuildReferences()
-    {
-        // 这个进程加载得到什么，内存里那颗编译单元就能看见什么：TPA 是最省事也最不会漏的一份，
-        // 里面已经带着 FastSql.Abstractions（[Table] / [Index]）、FastSql.Tests.Common（Customer 这种
-        // 引用目标）与全部框架程序集。不手写名单，是因为手写的那份每次加依赖都要跟着改，而漏一条的
-        // 症状恰好是「生成器安静地不报错」—— 正是这一档最不能有的失效形状（它由那条 CS 级用例兜住）。
-        var trusted = (string?)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") ?? string.Empty;
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var builder = ImmutableArray.CreateBuilder<MetadataReference>();
-
-        foreach (var path in trusted.Split(Path.PathSeparator))
-        {
-            if (path.Length == 0 || !File.Exists(path) || !seen.Add(Path.GetFileName(path)))
-                continue;
-
-            builder.Add(MetadataReference.CreateFromFile(path));
-        }
-
-        return builder.ToImmutable();
-    }
 
     // ---------- 七份源文本：与运行期那七个真类型一一对应 ----------
     //
     // 类名必须与真类型相同（消息里带名字，「两侧字符串相等」靠这个成立），所以全部放进
     // CompileTimeSamples 命名空间 —— 简单名相同而全名不同，不会与本项目那几个真类型撞。
 
-    const string Header = """
-        using FastSql.Metadata;
-        using FastSql.TestInfra;
-        using Da = System.ComponentModel.DataAnnotations;
-        using DaSchema = System.ComponentModel.DataAnnotations.Schema;
 
-        namespace CompileTimeSamples;
 
-        """;
-
-    const string ConflictingTableSource = Header + """
+    const string ConflictingTableSource = CompileTimeProbe.Header + """
         [Table("ConflictingNames")]
         [DaSchema.Table("ConflictingNamesToo")]
         public class ConflictingTable
@@ -260,7 +194,7 @@ public sealed class GeneratorDiagnosticTests
         }
         """;
 
-    const string ConflictingLengthsSource = Header + """
+    const string ConflictingLengthsSource = CompileTimeProbe.Header + """
         [Table("ConflictingLengths")]
         public class ConflictingLengths
         {
@@ -272,7 +206,7 @@ public sealed class GeneratorDiagnosticTests
         }
         """;
 
-    const string TwoNamesSameTableSource = Header + """
+    const string TwoNamesSameTableSource = CompileTimeProbe.Header + """
         [Table("SameTableName")]
         [DaSchema.Table("SameTableName")]
         public class TwoNamesSameTable
@@ -281,7 +215,7 @@ public sealed class GeneratorDiagnosticTests
         }
         """;
 
-    const string IndexOnUnmappedMemberSource = Header + """
+    const string IndexOnUnmappedMemberSource = CompileTimeProbe.Header + """
         [Table("FastSqlUnmappedIndex")]
         [Index("IX_FastSqlUnmappedIndex_Nobody", "Nobody")]
         public class IndexOnUnmappedMember
@@ -290,7 +224,7 @@ public sealed class GeneratorDiagnosticTests
         }
         """;
 
-    const string BadForeignKeySource = Header + """
+    const string BadForeignKeySource = CompileTimeProbe.Header + """
         [Table("FastSqlBadFk")]
         public class BadFk
         {
@@ -301,7 +235,7 @@ public sealed class GeneratorDiagnosticTests
         }
         """;
 
-    const string DerivedEntitySource = Header + """
+    const string DerivedEntitySource = CompileTimeProbe.Header + """
         public class ShipmentLineBase
         {
             public int Id { get; set; }
@@ -314,7 +248,7 @@ public sealed class GeneratorDiagnosticTests
         }
         """;
 
-    const string CleanEntitySource = Header + """
+    const string CleanEntitySource = CompileTimeProbe.Header + """
         [Table("FastSqlCleanOrder")]
         public class CleanOrder
         {

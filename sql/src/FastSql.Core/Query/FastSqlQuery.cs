@@ -82,6 +82,12 @@ public class FastSqlQuery<T> : IQuery<T>, IEngineCarrier
     /// <c>db.Orders.IgnoreQueryFilters()</c> 读回来的行照样进身份映射。</summary>
     public IQuery<T> IgnoreQueryFilters() => new FastSqlQuery<T>(Engine.IgnoreFilters());
 
+    /// <summary>与不带参数那一颗走的是 <see cref="QueryEngine.IgnoreFilters(Type)"/> 同一个落点，
+    /// 只是递进去的键是 <c>typeof(TFilter)</c> 而不是 <see cref="object"/> ——
+    /// "全部"与"按名"在本层不是两条路，差别只在清单里那一颗键能被谁匹配上。</summary>
+    public IQuery<T> IgnoreQueryFilter<TFilter>() where TFilter : class
+        => new FastSqlQuery<T>(Engine.IgnoreFilters(typeof(TFilter)));
+
     public IQuery<T> WithCache(string cacheKey, TimeSpan ttl) => new FastSqlQuery<T>(Engine.Cache(cacheKey, ttl));
 
     public IQuery<T> As(string alias) => new FastSqlQuery<T>(Engine.Alias(alias));

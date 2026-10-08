@@ -33,9 +33,11 @@ public class Order
 
     public string? Note { get; set; }
 
-    /// <summary>引用导航：不是列（一条 <c>WHERE CustomerId = ...</c> 里不会平白多出一个 JOIN 的出处），
-    /// 但它<em>是一根关系边</em> —— 外键列按约定 <c>CustomerId</c> 命中 <see cref="CustomerId"/>，
-    /// 于是这一格长在契约的 <c>Relationships</c> 上而不是 <c>Columns</c> 上（§8.2 的写序读它）。</summary>
+    /// <summary>引用导航：不是<em>列</em>（建表时它不产一格），但它<em>是一根关系边</em> —— 外键列按约定
+    /// <c>CustomerId</c> 命中 <see cref="CustomerId"/>，于是这一格长在契约的 <c>Relationships</c> 上而不是
+    /// <c>Columns</c> 上（§8.2 的写序读它）。<b>v0.39 起它在读侧还多一个用法</b>：谓词/投影/序里写
+    /// <c>o.Customer.City</c>，库按这根边自己补一条 <c>LEFT JOIN</c>（§5.2 末的落地记录），整句不需要
+    /// 调用方写 join；把它<em>整个当值</em>用（<c>o.Customer == null</c>）仍然拒，见 §16.8。</summary>
     public Customer? Customer { get; set; }
 
     /// <summary>集合导航：形态上不可映射（不是列），但它<em>是一根边</em> —— 只是朝向与
