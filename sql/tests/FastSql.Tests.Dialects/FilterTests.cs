@@ -16,10 +16,12 @@ namespace FastSql.Tests.Dialects;
 /// 反过来说，这里也就<em>测不到</em>"两个 orm 共用一份册子"那种 bug —— 那条路今天走不通，
 /// 因为册子不是静态的。</para>
 ///
-/// <para><b>这一组不覆盖的东西</b>：<c>SaveChanges</c> 与批量写（§10.7 约束 1 剩下的那一半，
-/// 判据要先定"被过滤器挡住的行算不算一次并发冲突"）、<c>Behaviors.SoftDelete</c> 的软删改写
+/// <para><b>这一组不覆盖的东西</b>：<c>SaveChanges</c>（§10.7 约束 1 剩下的那一半，判据要先定
+/// "被过滤器挡住的行算不算一次并发冲突"）、<c>Behaviors.SoftDelete</c> 的软删改写
 /// （约束 3，机制在 v0.18 已就位、缺入口子）、联表链上的 <c>IgnoreQueryFilters()</c>（arity≥2 没有那个口子）。
-/// 逐条欠账写在 §10.7 的落地记录与 §14 的对应格里。</para></summary>
+/// 逐条欠账写在 §10.7 的落地记录与 §14 的对应格里。<b>批量写链今天不再是欠账</b>，但它也不长在这一组里：
+/// <c>UpdateRange</c> / <c>DeleteRange</c> 上的过滤器折叠归 <see cref="BulkWriteLayerTests"/>，
+/// 那里有一条专门钉"折叠进 WHERE"与"<c>Reason</c> 要点名命中范围变窄"。</para></summary>
 public sealed class FilterTests
 {
     static FastSqlOrm orm() => SqlServer.Orm();

@@ -56,6 +56,16 @@ public sealed class FastSqlOrmBuilder
     /// 不是一个风险档：补一列不丢数据，删一条正在被用的索引会当场拖慢查询。唯一约束即便开了也不碰。</summary>
     public bool SchemaSyncDropIndexes { get; set; }
 
+    /// <summary>每只 Scoped 实例建好之后要跑的装配（按请求装的过滤器、审计与日志钩子、行为注册）。</summary>
+    /// <remarks><b>为什么要有这一颗</b>：<see cref="FastSqlOrm.Filters"/>、<see cref="FastSqlOrm.Aop"/> 与
+    /// <see cref="FastSqlOrm.Behaviors"/> 三处都是每实例一份，而"当前登录者是哪一家企业""这一条语句的审计值从哪个用户来"
+    /// 恰恰是按请求的事实，所以它们只能在实例建好之后装 —— 在那之前没有实例可装，而
+    /// <see cref="FastSqlOrmOptions"/> 那一格只收得到启动期常量。<b>每个请求跑一次，参数就是那一只
+    /// 刚建好的实例</b>（第二个参数给的是本请求的 scope，可以从里面取当前用户那一类宿主服务）。
+    /// 注册序即执行序。<b>它是幂等的场地由调用方负责</b>：这一格不做去重，同一段装配挂两次就跑两次，
+    /// 而 <c>Behaviors</c> 上同一把键注册两次是当场抛 —— 那是刻意的，装配写重了要在启动后第一跳就响。</remarks>
+    public List<Action<IServiceProvider, FastSqlOrm>> AfterBuild { get; set; } = [];
+
     internal FastSqlOrmOptions BuildOptions(IDbProvider provider, string connectionString) => new()
     {
         Provider = provider,
@@ -166,6 +176,10 @@ public static class FastSqlServiceCollectionExtensions
         if (builder.ConnectionStringFactory is null)
             new ConnectionSources(builder.ConnectionString, builder.Replicas, builder.Clusters);
 
+        // 装配清单在登记这一刻抄一次快照：注册之后再往 AfterBuild 里添东西不影响已经登记的这一颗
+        // （MS.DI 的描述表本就是登记时的产物，留活引用只会让"什么时候装的"变成猜）。
+        var assembly = builder.AfterBuild.ToArray();
+
         services.AddSingleton(sp =>
         {
             var factory = builder.DriverFactory ?? ResolveFactory(builder.Kind);
@@ -202,7 +216,13 @@ public static class FastSqlServiceCollectionExtensions
         {
             var options = sp.GetRequiredService<FastSqlOrmOptions>();
             var schemas = sp.GetRequiredService<IEntitySchemaRegistry>();
-            return new FastSqlOrm(options, schemas);
+            var orm = new FastSqlOrm(options, schemas);
+
+            // 装配跑在建好之后、这条流上的第一条语句之前：按请求的过滤器、审计与日志钩子没有别的落点。
+            foreach (var install in assembly)
+                install(sp, orm);
+
+            return orm;
         });
 
         return services;

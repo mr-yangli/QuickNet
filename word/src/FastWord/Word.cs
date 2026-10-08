@@ -79,4 +79,61 @@ public static class Word
     /// <summary>Asynchronously reads a .docx file.</summary>
     public static Task<WordDocument> ReadAsync(string path, WordReadOptions? options = null, CancellationToken ct = default)
         => Task.Run(() => Read(path, options), ct);
+
+    // ---------------------------------------------------------------------------------------------
+    // Templates
+    // ---------------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// Fills a .docx template and writes the result to <paramref name="outputPath"/>, replacing it if it exists.
+    /// Every <c>{{Name}}</c> tag in the body, the headers and the footers takes its value from
+    /// <paramref name="value"/> (a dictionary, an ExpandoObject or any object's public properties); an
+    /// <see cref="ImagePlaceholder"/> value becomes an inline picture. Other parts are left untouched.
+    /// </summary>
+    /// <param name="outputPath">Where the filled document is written.</param>
+    /// <param name="templatePath">Template .docx path.</param>
+    /// <param name="value">Placeholder values.</param>
+    /// <param name="options">Template settings; null uses defaults.</param>
+    public static void SaveAsByTemplate(string outputPath, string templatePath, object value, TemplateOptions? options = null)
+    {
+        options ??= new TemplateOptions();
+        var directory = Path.GetDirectoryName(Path.GetFullPath(outputPath));
+        if (!string.IsNullOrEmpty(directory)) Directory.CreateDirectory(directory);
+        using var fs = new FileStream(outputPath, FileMode.Create, FileAccess.Write, FileShare.None, 1 << 16);
+        using var template = new FileStream(templatePath, FileMode.Open, FileAccess.Read, FileShare.Read, 1 << 16);
+        TemplateEngine.Render(template, fs, value, options);
+    }
+
+    /// <summary>Stream overload of <see cref="SaveAsByTemplate(string, string, object, TemplateOptions?)"/>; the template is read from a file.</summary>
+    public static void SaveAsByTemplate(Stream output, string templatePath, object value, TemplateOptions? options = null)
+    {
+        options ??= new TemplateOptions();
+        using var template = new FileStream(templatePath, FileMode.Open, FileAccess.Read, FileShare.Read, 1 << 16);
+        TemplateEngine.Render(template, output, value, options);
+    }
+
+    /// <summary>Template overload taking the template as a stream; any seekability, since it is buffered first.</summary>
+    public static void SaveAsByTemplate(Stream output, Stream template, object value, TemplateOptions? options = null)
+    {
+        options ??= new TemplateOptions();
+        TemplateEngine.Render(template, output, value, options);
+    }
+
+    /// <summary>Asynchronously fills a .docx template into a file.</summary>
+    public static Task SaveAsByTemplateAsync(string outputPath, string templatePath, object value,
+        TemplateOptions? options = null, CancellationToken ct = default)
+        => Task.Run(() => SaveAsByTemplate(outputPath, templatePath, value, options), ct);
+
+    /// <summary>Asynchronously fills a .docx template into a stream — the shape an ASP.NET response wants.</summary>
+    public static Task SaveAsByTemplateAsync(Stream output, string templatePath, object value,
+        TemplateOptions? options = null, CancellationToken ct = default)
+        => Task.Run(() => SaveAsByTemplate(output, templatePath, value, options), ct);
+
+    /// <summary>Fills a .docx template and returns the resulting package bytes.</summary>
+    public static byte[] GetAsByteArrayByTemplate(string templatePath, object value, TemplateOptions? options = null)
+    {
+        using var ms = new MemoryStream();
+        SaveAsByTemplate(ms, templatePath, value, options);
+        return ms.ToArray();
+    }
 }

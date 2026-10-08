@@ -2,6 +2,8 @@ using FastSql.Core.Schema;
 using FastSql.Metadata;
 using FastSql.Providers;
 using FastSql.Providers.Gbase8s;
+using FastSql.Providers.MySqlBase;
+using FastSql.Providers.PostgreSqlBase;
 using FastSql.Providers.SqlServer;
 using FastSql.Providers.Sqlite;
 using FastSql.Schema;
@@ -48,8 +50,24 @@ public sealed class StructureSyncTests
     static readonly IDbProvider Sql = SqlServer.Provider(SqlServer.NoDriverFactory.Instance);
     static readonly ISchemaReader Reader = new SqlServerSchemaReader();
 
+    // PG 家那一档的两位被告：本家的判据（归一尺）与发射（两句 DDL）。provider 走 TestInfra 那颗组装根、
+    // 工厂给 NoDriverFactory——离线这一册一句都不该连库，碰了就该红在这里。
+    static readonly IDbProvider Pg = PostgreSql.Provider(SqlServer.NoDriverFactory.Instance);
+    static readonly ISchemaReader PgReader = new PostgreSqlSchemaReader();
+
+    // MySQL 家那一档的两位被告，同一对位。字段名取 <c>My</c> 是为了与 <c>Pg</c> 对称而<em>不</em>叫
+    // <c>MySql</c>：类里放一颗和类型同名的字段会把 <c>MySql.Provider(…)</c> 那句组装遮掉。
+    static readonly IDbProvider My = MySql.Provider(SqlServer.NoDriverFactory.Instance);
+    static readonly ISchemaReader MyReader = new MySqlSchemaReader();
+
     static EntityContract Contract<T>() where T : class
         => new EntitySchemaRegistry(new ContractResolver(Sql)).Contract<T>();
+
+    static EntityContract PgContract<T>() where T : class
+        => new EntitySchemaRegistry(new ContractResolver(Pg)).Contract<T>();
+
+    static EntityContract MyContract<T>() where T : class
+        => new EntitySchemaRegistry(new ContractResolver(My)).Contract<T>();
 
     // ── 归一：现形状读回来必须算"没变化" ────────────────────────────────
 
@@ -299,13 +317,278 @@ public sealed class StructureSyncTests
         Assert.Empty(plan.DropIndexes);
     }
 
-    // ── 判不了：六家今天的样子 ────────────────────────────────────────
+    // ── PG 家：五档从"判不了"换成有读数 ───────────────────────────────
+
+    /// <summary>本家自这一笔起是<em>第二家</em>五档全读的库（第一家是上面那批用例用的 T-SQL）。
+    /// 这一格钉的不是 diff 判据——判据与发射都是同一套 Core，与家无关——而是<em>本家那份归一</em>：
+    /// 目录交回的字形（小写、<c>varchar(32)</c> 而不是 <c>VARCHAR(32)</c>、时刻的位数在
+    /// <c>datetime_precision</c> 那一格）必须折成契约发射的那一个词，折不动就逐列假红，
+    /// 折过头了（比如把 <c>numeric</c> 与 <c>numeric(18,4)</c> 也折成同一型）就是"改了标度永远同步不上"。
+    /// <b>五档一份都不进清单</b>是这一格的正面断言：这一家现在主键、形状、备注、索引、表备注全都读得回来。</summary>
+    [Fact]
+    public void The_pg_family_with_a_full_catalog_reading_reports_nothing_not_judged()
+    {
+        var contract = PgContract<Shape>();
+        var plan = StructureDiff.Build(contract, PgStore(contract.Table), PgReader, IdentifierPolicy.PostgreSQL);
+
+        Assert.True(plan.IsEmpty);
+        Assert.Empty(plan.NotJudged);
+        Assert.Empty(plan.Refused);
+    }
+
+    /// <summary>本家目录与发射形之间真正的落差只有三颗：大小写、<c>varchar</c> 那颗简称、
+    /// 时刻位数藏在哪一格。<c>int4</c> 那一行是这一族的别名位（<c>pg_type</c> 交 <c>int4</c> 而
+    /// <c>information_schema</c> 交 <c>integer</c>，这一族各家今天报的是哪一颗没有一台活库能证），
+    /// 折进来是为了下一家叶子的目录换了字形时不必再改判据。</summary>
+    [Theory]
+    [InlineData("varchar(32)", "VARCHAR(32)")]
+    [InlineData("text", "TEXT")]
+    [InlineData("integer", "INTEGER")]
+    [InlineData("int4", "INTEGER")]
+    [InlineData("numeric(18,4)", "NUMERIC(18,4)")]
+    [InlineData("boolean", "BOOLEAN")]
+    [InlineData("timestamp(3)", "TIMESTAMP(3)")]
+    [InlineData("timestamptz(3)", "TIMESTAMPTZ(3)")]
+    [InlineData("time(3)", "TIME(3)")]
+    [InlineData("double precision", "DOUBLE PRECISION")]
+    [InlineData("char(1)", "CHAR(1)")]
+    public void The_pg_catalog_spelling_and_emitted_spelling_are_the_same_shape(string fromCatalog, string emitted)
+        => Assert.True(PgReader.ColumnShapeMatches(Declared(emitted), Col("C", fromCatalog)));
+
+    /// <summary>反面三行：归一尺不能把<em>真有差</em>的两形折成同一形。裸 <c>numeric</c> 与
+    /// <c>numeric(18,4)</c> 在库里确实是两种约束（前者不检位数），<c>timestamp(6)</c> 与
+    /// <c>timestamp(3)</c> 是两位小数秒的差——放走任何一条，用户点名的"改了小数长度"就同步不上。</summary>
+    [Theory]
+    [InlineData("numeric", "NUMERIC(18,4)")]
+    [InlineData("timestamp(6)", "TIMESTAMP(3)")]
+    [InlineData("varchar(64)", "VARCHAR(32)")]
+    public void The_pg_fold_keeps_a_real_difference_apart(string fromCatalog, string emitted)
+        => Assert.False(PgReader.ColumnShapeMatches(Declared(emitted), Col("C", fromCatalog)));
+
+    /// <summary>本家那份读数摆歪一颗标度：改的那一列进 <c>AlterColumns</c> 而不是进"要人工"，
+    /// 而它同时进备注清单——这一条与 T-SQL 那一家同一判据，写在这里是证<em>本家的归一没有把
+    /// "标度差"折成"没差"</em>。</summary>
+    [Fact]
+    public void A_pg_scale_change_is_an_alter_too()
+    {
+        var contract = PgContract<Shape>();
+        var store = PgStore(contract.Table, amount: "numeric(18,2)");
+
+        var plan = StructureDiff.Build(contract, store, PgReader, IdentifierPolicy.PostgreSQL);
+
+        Assert.Equal(["Amount"], plan.AlterColumns.Select(c => c.ColumnName));
+        Assert.Empty(plan.NotJudged);
+    }
+
+    /// <summary>本家的表备注是一句原生 <c>COMMENT ON TABLE</c>：与 T-SQL 那一大段"有则改、无则加"相反，
+    /// 这一家没有<em>属性</em>这一层，备注是目录里的一颗字段，所以一句就幂等。整句写成等值断言，
+    /// 是因为模式名那一颗（<c>public</c> 而不是 <c>dbo</c>）只有逐字比才看得见。</summary>
+    [Fact]
+    public void The_PG_table_comment_statement_is_a_single_COMMENT_ON_TABLE()
+    {
+        var sql = Statement(w => Assert.True(Pg.CodeFirst.TryEmitTableComment(w, PgContract<Shape>().Table, "形状表"))).ToString();
+
+        Assert.Equal("""COMMENT ON TABLE "public"."FASTSQL_SHAPE" IS '形状表'""", sql);
+    }
+
+    /// <summary>本家的删索引<em>没有</em> <c>ON 表名</c>那一截，而索引名带着模式：这一家的索引是目录里的
+    /// 独立对象，不是表的一个成员。这一句与 T-SQL 那一形逐字比，是因为"顺手把 <c>ON</c> 抄过来"
+    /// 是本家最容易写错的那一笔，而它在文本层看不出问题、只在执行时响。</summary>
+    [Fact]
+    public void The_PG_drop_index_statement_names_the_index_and_no_table()
+    {
+        var sql = Statement(w => Assert.True(
+            Pg.CodeFirst.TryEmitDropIndex(w, PgContract<Shape>().Table, new SchemaIndex("IX_extra_on_amount", false, ["Amount"])))).ToString();
+
+        Assert.Equal("DROP INDEX \"public\".\"IX_extra_on_amount\"", sql);
+    }
+
+    /// <summary>本家的开档删索引走的是同一个计划层：库里多出的那一条在开关开时进删除清单，
+    /// 而唯一约束那条不进——本家的 <c>DROP INDEX</c> 同样删不动约束（它的支撑索引与约束同名，
+    /// 删它要 <c>ALTER TABLE … DROP CONSTRAINT</c>）。这一格钉的是"读侧那颗 <c>IsConstraint</c>
+    /// 在本家也交得回来"，判据本身在 Core 只有一份。</summary>
+    [Fact]
+    public void A_pg_unique_constraint_is_still_manual_with_the_switch_on()
+    {
+        var contract = PgContract<Shape>();
+        var store = PgStore(contract.Table, indexes: [
+            new SchemaIndex("IX_FASTSQL_SHAPE_Title", false, ["Title"]),
+            new SchemaIndex("UQ_shape_amount", true, ["Amount"]) { IsConstraint = true },
+            new SchemaIndex("IX_extra_on_quantity", false, ["Quantity"]),
+        ]);
+
+        var plan = StructureDiff.Build(contract, store, PgReader, IdentifierPolicy.PostgreSQL, dropIndexes: true);
+
+        Assert.Equal(["IX_extra_on_quantity"], plan.DropIndexes.Select(i => i.Name));
+        Assert.Single(plan.Refused, r => r.Contains("UQ_shape_amount", StringComparison.Ordinal) && r.Contains("约束", StringComparison.Ordinal));
+    }
+
+    // ── MySQL 家：五档从"判不了"换成有读数 ────────────────────────────
+
+    /// <summary>本家自这一笔起是<em>第三家</em>五档全读的库（前两家是上面那两批用例用的 T-SQL 与 PG）。
+    /// 钉法与 PG 那一格同一套，但本家多一处只有它有的东西：<b>整数族那一条摘宽度</b>。契约侧的布尔发
+    /// <c>TINYINT(1)</c>，而目录的 <c>data_type</c> 交回 <c>tinyint</c>（整数的显示宽度在 8.0.17 起已废弃、
+    /// 目录里从来不含它），不摘那一颗括号就是"每一趟都在布尔列上发一句 <c>MODIFY COLUMN</c>、
+    /// 而永远配不平"——这是五家里只有这一家会撞上的形状。反面那几行钉的是同一把尺子<em>不能</em>折过头。</summary>
+    [Fact]
+    public void The_mysql_family_with_a_full_catalog_reading_reports_nothing_not_judged()
+    {
+        var contract = MyContract<Shape>();
+        var plan = StructureDiff.Build(contract, MyStore(contract.Table), MyReader, IdentifierPolicy.MySql);
+
+        Assert.True(plan.IsEmpty);
+        Assert.Empty(plan.NotJudged);
+        Assert.Empty(plan.Refused);
+    }
+
+    /// <summary>本家目录与发射形之间的落差有三颗：大小写、整数族的显示宽度、同义词
+    /// （<c>integer</c>/<c>numeric</c>/<c>real</c>/<c>bool</c> 都是手工建表时人写得出来而目录不那么报的名字）。
+    /// <c>INT(11)</c> 那一行是 5.7 时代留下的形状——<b>它出现在<em>契约</em>侧而库里读回 <c>int</c></b>，
+    /// 不折就每一趟改一次那一列而永远配不平。时刻的位数在这一家同样不在型名里（在
+    /// <c>datetime_precision</c>），与 PG 家同一处境、同一个折法。</summary>
+    [Theory]
+    [InlineData("varchar(32)", "VARCHAR(32)")]
+    [InlineData("text", "TEXT")]
+    [InlineData("int", "INT")]
+    [InlineData("integer", "INT")]
+    [InlineData("int", "INT(11)")]
+    [InlineData("smallint", "SMALLINT")]
+    [InlineData("bigint", "BIGINT")]
+    [InlineData("tinyint", "TINYINT(1)")]
+    [InlineData("tinyint", "BOOL")]
+    [InlineData("decimal(18,4)", "DECIMAL(18,4)")]
+    [InlineData("decimal(18,4)", "NUMERIC(18,4)")]
+    [InlineData("datetime(3)", "DATETIME(3)")]
+    [InlineData("time(3)", "TIME(3)")]
+    [InlineData("double", "DOUBLE")]
+    [InlineData("double", "REAL")]
+    [InlineData("char(36)", "CHAR(36)")]
+    public void The_mysql_catalog_spelling_and_emitted_spelling_are_the_same_shape(string fromCatalog, string emitted)
+        => Assert.True(MyReader.ColumnShapeMatches(Declared(emitted), Col("C", fromCatalog)));
+
+    /// <summary>非正数的声明宽度在收尾那一点折成"未声明"，六家发射侧因此拿不到负数。
+    /// 这一格在 MySQL 上的形状是 <c>VARCHAR(-1)</c>——过不了语法关，一整趟结构同步以一句
+    /// <c>MySqlException</c> 收尾（真库上撞过的那一种）；反射档更糟，<c>StringLengthAttribute</c>
+    /// 的构造函数自己就拒负数，同一条注解在两条路上一条发非法 DDL、一条连契约都建不出来。
+    /// 正面第三行钉的是折算<em>不能</em>过头：给了 32 就还是 <c>VARCHAR(32)</c>。</summary>
+    [Theory]
+    [InlineData(-1, "TEXT")]
+    [InlineData(0, "TEXT")]
+    [InlineData(32, "VARCHAR(32)")]
+    public void A_non_positive_declared_width_is_no_width_at_all(int declared, string emitted)
+    {
+        var column = new ColumnFacts
+        {
+            MemberName = "Images",
+            ClrType = typeof(string),
+            ColumnName = "Images",
+            ColumnNameLayer = MetadataLayer.Convention,
+            ColumnNameNote = "约定：属性名",
+            MaxChars = declared,
+            LengthNote = $"[StringLength({declared})]",
+            IsNullable = true,
+            NullableNote = "C# 可空 ⇒ 可空列",
+            IsPrimary = false,
+        }.ToProvisional(new TableInfo(null, "FASTSQL_SHAPE"));
+
+        Assert.Equal(declared > 0 ? declared : (int?)null, column.MaxChars);
+        Assert.Equal(emitted, MySqlTypes.Instance.GetStoreType(column));
+    }
+
+    /// <summary>反面六行：摘宽度那一手不能顺手把<em>语义</em>也摘掉。标度（两位小数秒与四位小数是两种约束）、
+    /// 裸 <c>decimal</c> 与带位数的 <c>decimal(18,4)</c>（库里默认 <c>DECIMAL(10,0)</c>，与契约那份 18,4
+    /// 是两个约束）、<c>varchar</c> 的宽度、整数族彼此（<c>int</c> 换 <c>bigint</c> 是真换型）——
+    /// 放走任何一条，用户点名的"改了小数长度"就在这一家同步不上。
+    /// <b>最后一行是长文本那一族的</b>：<c>tinytext/text/mediumtext/longtext</c> 四档在这一家是<em>四个型</em>
+    /// 而不是排版（它们的上限差四个数量级），所以 <c>Normalize</c> 不在这里动手。库里手工建出一列
+    /// <c>LONGTEXT</c> 而契约写的是无长度 <c>string</c>（本家发 <c>TEXT</c>）时，这一趟会把它进
+    /// <c>AlterColumns</c>，而那句 <c>MODIFY COLUMN … TEXT</c> 撞上装不进 64 KB 的旧数据时会红在库而不是
+    /// 红在这一趟的判据里（厂商文档口径：严格模式报"数据过长"；这一颗本家今天没量过）。判据这一侧要的只是
+    /// "四档不折成一档"。</summary>
+    [Theory]
+    [InlineData("decimal(18,2)", "DECIMAL(18,4)")]
+    [InlineData("decimal(10,0)", "DECIMAL(18,4)")]
+    [InlineData("datetime(0)", "DATETIME(3)")]
+    [InlineData("varchar(64)", "VARCHAR(32)")]
+    [InlineData("int", "BIGINT")]
+    [InlineData("longtext", "TEXT")]
+    public void The_mysql_fold_keeps_a_real_difference_apart(string fromCatalog, string emitted)
+        => Assert.False(MyReader.ColumnShapeMatches(Declared(emitted), Col("C", fromCatalog)));
+
+    /// <summary>本家那份读数摆歪一颗标度：改的那一列进 <c>AlterColumns</c> 而不是进"要人工"，
+    /// 而它同时进备注清单——因为本家改精度走 <c>MODIFY COLUMN</c> 那一句整列重写，而重写会连备注一起换，
+    /// 所以备注必须跟着回补（同 T-SQL 与 PG 那两家的同一条判据，写在这里是证<em>本家的归一
+    /// 没有把"标度差"折成"没差"</em>）。</summary>
+    [Fact]
+    public void A_mysql_scale_change_is_an_alter_too()
+    {
+        var contract = MyContract<Shape>();
+        var store = MyStore(contract.Table, amount: "decimal(18,2)");
+
+        var plan = StructureDiff.Build(contract, store, MyReader, IdentifierPolicy.MySql);
+
+        Assert.Equal(["Amount"], plan.AlterColumns.Select(c => c.ColumnName));
+        Assert.Empty(plan.NotJudged);
+    }
+
+    /// <summary>表备注在这一家是一句<em>表选项</em>，不是 <c>COMMENT ON</c>（那一句本家没有），
+    /// 也不吃列侧那一套"重写整列"的代价。清备注走<b>空串</b>而不是 <c>NULL</c>：这一家
+    /// <c>COMMENT = ''</c> 写的就是"没有备注"，而目录里那一颗读回来的也是空串
+    /// （<c>MySqlSchemaReader.TableCommentSql</c>），发射与读数在这一格因此是闭合的。</summary>
+    [Fact]
+    public void The_mysql_table_comment_statement_is_a_table_option()
+    {
+        var table = MyContract<Shape>().Table;
+
+        Assert.Equal("ALTER TABLE `FASTSQL_SHAPE` COMMENT = '形状表'",
+            Statement(w => Assert.True(My.CodeFirst.TryEmitTableComment(w, table, "形状表"))).ToString());
+        Assert.Equal("ALTER TABLE `FASTSQL_SHAPE` COMMENT = ''",
+            Statement(w => Assert.True(My.CodeFirst.TryEmitTableComment(w, table, null))).ToString());
+    }
+
+    /// <summary>本家的删索引是 <c>… ON 表名</c>：PG 那一形（只吃带模式的索引名、<em>没有</em> <c>ON</c>）
+    /// 在这里是语法错，而表名这一颗在本家不带模式限定（契约没写模式时 <c>EmitTable</c> 什么都不写，
+    /// 那句"表在连接串选中的那个库里"）。整句等值断言钉的就是这两处——它们都在文本层看得见，
+    /// 而写反了只在库上响。</summary>
+    [Fact]
+    public void The_mysql_drop_index_statement_names_the_index_and_its_table()
+    {
+        var sql = Statement(w => Assert.True(
+            My.CodeFirst.TryEmitDropIndex(w, MyContract<Shape>().Table, new SchemaIndex("IX_extra_on_amount", false, ["Amount"])))).ToString();
+
+        Assert.Equal("DROP INDEX `IX_extra_on_amount` ON `FASTSQL_SHAPE`", sql);
+    }
+
+    /// <summary>库里多出的那条<em>外键支撑索引</em>开了删索引那一档也不删：本家对它的 <c>DROP INDEX</c>
+    /// 当场报 <c>Cannot drop index …: needed in a foreign key constraint</c>，而删那一半走的是
+    /// <c>ALTER TABLE … DROP FOREIGN KEY</c>（约束名与索引名在这一家是同一个词）。
+    /// 这一格钉的是本家 reader 交回的那颗 <c>IsConstraint</c> 真被 Core 用上——判据本身只有一份。</summary>
+    [Fact]
+    public void A_mysql_foreign_key_support_index_is_still_manual_with_the_switch_on()
+    {
+        var contract = MyContract<Shape>();
+        var store = MyStore(contract.Table, indexes: [
+            new SchemaIndex("IX_FASTSQL_SHAPE_Title", false, ["Title"]),
+            new SchemaIndex("FK_FASTSQL_SHAPE_Order", true, ["Amount"]) { IsConstraint = true },
+            new SchemaIndex("IX_extra_on_quantity", false, ["Quantity"]),
+        ]);
+
+        var plan = StructureDiff.Build(contract, store, MyReader, IdentifierPolicy.MySql, dropIndexes: true);
+
+        Assert.Equal(["IX_extra_on_quantity"], plan.DropIndexes.Select(i => i.Name));
+        Assert.Single(plan.Refused, r => r.Contains("FK_FASTSQL_SHAPE_Order", StringComparison.Ordinal) && r.Contains("约束", StringComparison.Ordinal));
+    }
+
+    // ── 判不了：四家今天的样子 ────────────────────────────────────────
 
     /// <summary>读不回来的那些档进"判不了"清单并指名，<b>既不响也不假装同步过</b>（§12.2）。
-    /// 带默认值的 SPI 位让六家一个字节不必改，代价是它们在列级这一档上今天只有这一份报告：
+    /// 带默认值的 SPI 位让没接的各家一个字节不必改，代价是它们在列级这一档上今天只有这一份报告：
     /// 主键、列形状、列备注、索引清单、表备注五档一次报齐，而动作清单是空的。
     /// <b>可空性不在这一格</b>——它是唯一家家都读得回来的事实，所以这份夹具必须把它摆对，
-    /// 摆歪了就是"在一家判不了形状库上发了一句 ALTER"。</summary>
+    /// 摆歪了就是"在一家判不了形状库上发了一句 ALTER"。
+    /// <b>本用例的被告是 <c>Sqlite</c> 那份 reader</b>：PG 家与 MySQL 家自这两笔起五档全有读数，
+    /// 它们的那两份报告在上面两格（<see cref="The_pg_family_with_a_full_catalog_reading_reports_nothing_not_judged"/>
+    /// 与 <see cref="The_mysql_family_with_a_full_catalog_reading_reports_nothing_not_judged"/>）。</summary>
     [Fact]
     public void A_family_that_cannot_read_reports_not_judged()
     {
@@ -443,6 +726,47 @@ public sealed class StructureSyncTests
 
         return drop is null ? store : [.. store.Where(c => c.Name != drop)];
     }
+
+    /// <summary>本家那份读数：型名按 <c>information_schema</c> 交回的<em>简称</em>写（reader 自己在
+    /// <c>StoreType</c> 那一颗里把 <c>character varying</c> 折成 <c>varchar(n)</c>），时刻的位数写在型名的
+    /// 括号里（<c>timestamp(3)</c>，同一个 <c>datetime_precision</c> 折的），主键与自增两格由本家读得回来。
+    /// 这份夹具是<em>照 reader 的产出手写的</em>，不是照厂商文档：它红了就是 reader 与它自己的判据分岔。
+    /// <b>每一列都显式写 <c>IsPrimaryKey</c></b>：那一格留空是 <c>null</c>，而 null 在 diff 里说的是
+    /// "这一家读不回来"——少写一列就整档主键判不了，正面断言当场变红。</summary>
+    static SchemaTable PgStore(TableInfo table, string? amount = null, List<SchemaIndex>? indexes = null)
+        => new(table, [
+            new SchemaColumn("Id", "integer", null, null, false, 1) { Comment = string.Empty, IsIdentity = true, IsPrimaryKey = true },
+            new SchemaColumn("Title", "varchar(32)", 32, null, true, 2) { Comment = "标题", IsPrimaryKey = false },
+            new SchemaColumn("Amount", amount ?? "numeric(18,4)", null, null, false, 3) { Comment = string.Empty, IsPrimaryKey = false, Scale = 4 },
+            new SchemaColumn("Price", "numeric(10,2)", null, null, false, 4) { Comment = string.Empty, IsPrimaryKey = false, Scale = 2 },
+            new SchemaColumn("CreatedAt", "timestamp(3)", null, null, false, 5) { Comment = string.Empty, IsPrimaryKey = false, Scale = 3 },
+            new SchemaColumn("Quantity", "integer", null, null, false, 6) { Comment = string.Empty, IsPrimaryKey = false },
+        ])
+        {
+            Comment = "形状表",
+            Indexes = indexes ?? [new SchemaIndex("IX_FASTSQL_SHAPE_Title", false, ["Title"])],
+        };
+
+    /// <summary>本家那份读数：型名按 <c>information_schema.columns.data_type</c> 交回的那一形写
+    /// （小写、<em>整数族不带显示宽度</em>），字符宽度与时刻位数由 <c>MySqlSchemaReader.StoreType</c>
+    /// 从 <c>character_maximum_length</c> 与 <c>datetime_precision</c> 拼回型名里，备注两格是<b>空串</b>
+    /// （这一家没有"没写过 = NULL"那一档），而 <c>MaxBytes</c> 那一格自这一笔起交回的是<em>字节</em>：
+    /// <c>varchar(32)</c> 在 <c>utf8mb4</c> 下是 128 而不是 32 —— 那颗 128 钉的就是本笔改对的旧伤
+    /// （从前注释写字节、代码读字符，见 <c>MySqlSchemaReader.ColumnsSql</c> 那段）。
+    /// 与 PG 那份夹具同一条纪律：<b>照 reader 的产出手写</b>，它红了就是 reader 与它自己的判据分岔。</summary>
+    static SchemaTable MyStore(TableInfo table, string? amount = null, List<SchemaIndex>? indexes = null)
+        => new(table, [
+            new SchemaColumn("Id", "int", null, null, false, 1) { Comment = string.Empty, IsIdentity = true, IsPrimaryKey = true },
+            new SchemaColumn("Title", "varchar(32)", 32, 128, true, 2) { Comment = "标题", IsPrimaryKey = false },
+            new SchemaColumn("Amount", amount ?? "decimal(18,4)", null, null, false, 3) { Comment = string.Empty, IsPrimaryKey = false, Scale = 4 },
+            new SchemaColumn("Price", "decimal(10,2)", null, null, false, 4) { Comment = string.Empty, IsPrimaryKey = false, Scale = 2 },
+            new SchemaColumn("CreatedAt", "datetime(3)", null, null, false, 5) { Comment = string.Empty, IsPrimaryKey = false, Scale = 3 },
+            new SchemaColumn("Quantity", "int", null, null, false, 6) { Comment = string.Empty, IsPrimaryKey = false },
+        ])
+        {
+            Comment = "形状表",
+            Indexes = indexes ?? [new SchemaIndex("IX_FASTSQL_SHAPE_Title", false, ["Title"])],
+        };
 
     static StructurePlan Diff(IReadOnlyList<SchemaColumn> columns, string? comment = "形状表", List<SchemaIndex>? indexes = null, bool dropIndexes = false)
     {

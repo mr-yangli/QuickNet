@@ -160,6 +160,12 @@ public sealed class Gbase8sProvider : IDbProvider
 
     /// <summary>没有批量策略（类注释倒数第二条）。这一格与 <c>OracleProviderBase</c> 同一档而不同因：
     /// 那一族的兜底是"驱动有数组绑定而这一族没有"，这一家是"读到过名字而没读到可报的颗数"。</summary>
+    /// <remarks><b>【本笔表态】</b>批量阶梯铺开时这一家两档都不接，理由与清单上它那一颗键同一处境：
+    /// <b>L1</b> —— 这一族文档面读到过装载一族的<em>名字</em>（Informix 的 ESO 接口那一支），读到的是 C 接口
+    /// 而不是托管 API，托管那面连一颗可反射的类型名都没有，而程序集本身从未解析成功过；
+    /// <b>Merged</b> —— 默认 false，本家连一句能内联的字面量文法都没在活库上验过。
+    /// 重开条件排在"改回厂商程序集名"那一步之后：那颗键到场的第一件事仍是按厂商读数改名，
+    /// 批量这一档要等的是改名之后的第二次到场。</remarks>
     public IBulkStrategy? Bulk => null;
 
     /// <summary>GBase 8s（Informix 血统）的建库要走 <c>ontape</c> / <c>dbaccess</c> 等管理工具，

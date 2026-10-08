@@ -41,6 +41,10 @@ public abstract class PostgreSqlProviderBase : IDbProvider
         Connectors = new PostgreSqlConnectorFactory(driverFactory);
         CodeFirst = new PostgreSqlCodeFirst(_types);
         _dialect = new PostgreSqlDialect(kind, _types, _keys, _values, _expressions);
+
+        // 与 SqlServerProvider / MySqlProviderBase 同一条接线：装载类（导入器）不在工厂的抽象面上，
+        // 只能从同一支驱动程序集里按类型名与形状找；构造期仍然一次反射都没有（见 PostgreSqlBulk 的抬头）。
+        Bulk = new PostgreSqlBulk(driverFactory);
     }
 
     public DbKind Kind { get; }
@@ -48,13 +52,19 @@ public abstract class PostgreSqlProviderBase : IDbProvider
     /// <summary>子类要改的是<b>加</b>或<b>减</b>这一档，而不是另起一份 —— 另起一份就等于把 §4 那条继承链作废。</summary>
     public virtual DbCapabilities Capabilities => FamilyCapabilities;
 
-    /// <summary>这一档的位掩码本体。声明给子类，也声明给 §13.5 那本出处台账（它按 provider 数"未实测"的位）。</summary>
+    /// <summary>这一档的位掩码本体。声明给子类，也声明给 §13.5 那本出处台账（它按 provider 数"未实测"的位）。
+    /// <b>【本笔加了一颗 <c>Bulk_Copy</c>】</b>判据与 MySQL 家那颗逐字同一条："代码今天真的走到" ——
+    /// 通道接线在 <see cref="PostgreSqlBulk.ResolveCopyChannel"/>，反射装配这一格今天还没有集成册读数
+    /// （活 PG 实例在场而 L1 路径未跑过，测试册补跑前按"已接线、未见证"读）。这颗加在<b>族档</b>上、
+    /// 六颗 PG 血统的键一起领，而各叶子现场的驱动程序集里到底有没有导入器，是 <c>TryResolve</c> 的当场答案
+    /// 不是掩码的承诺 —— 与"同一位的分叉库共用一份掩码"那条旧纪律不打架（那句话说的是文本分岔，
+    /// 这一颗根本不走文本）。</summary>
     protected static DbCapabilities FamilyCapabilities =>
         DbCapabilities.Paging_LimitOffset | DbCapabilities.Returning | DbCapabilities.Upsert_OnConflict |
         DbCapabilities.Cte | DbCapabilities.WindowFunctions | DbCapabilities.Count_Over_Window |
         DbCapabilities.Boolean_Type | DbCapabilities.Guid_Raw16 | DbCapabilities.Schemas | DbCapabilities.Json_Type |
         DbCapabilities.CaseSensitive_Identifiers | DbCapabilities.Comment_On_Column |
-        DbCapabilities.Alter_Column_Precision | DbCapabilities.TempTable;
+        DbCapabilities.Alter_Column_Precision | DbCapabilities.TempTable | DbCapabilities.Bulk_Copy;
 
     public IConnectorFactory Connectors { get; }
 
@@ -76,9 +86,16 @@ public abstract class PostgreSqlProviderBase : IDbProvider
 
     public IChangeGuard ChangeGuard { get; } = new PostgreSqlChangeGuard();
 
-    /// <summary>只有预算、没有高速通道：这一家的高速层是 <c>CopyFrom</c>（驱动专有类型，要反射），P2 才接。
-    /// 预算本身从第一天就要生效，否则分块公式会按 T-SQL 的 2100 去切一条这一家收得下的语句。</summary>
-    public IBulkStrategy? Bulk { get; } = new PostgreSqlBulk();
+    /// <summary><b>【本笔改判 —— 原文照抄在前，改判在后】</b>原文：「只有预算、没有高速通道：这一家的高速层是
+    /// <c>CopyFrom</c>（驱动专有类型，要反射），P2 才接。」今天接上了：交的形状是 <c>BeginBinaryImportAsync</c>
+    /// 的二进制 COPY 逐行推入面（反射绑定，与另两家同一惰性纪律），<see cref="DbCapabilities.Bulk_Copy"/>
+    /// 那颗位跟着进本档族掩码。两颗必须分开读：<b>位说的是这份代码走到了，叶子现场装的那支驱动里有没有
+    /// 装载类由 <c>TryResolve</c> 当场答</b> —— PG 血统五颗键共填 Npgsql 一颗 assembly 而借臂的叶子各装各的
+    /// （§9.1 那几行的前件），fork 里没有导入器时整家退 L3，那一种现场这颗位报的是"代码可达而这一支驱动没有"，
+    /// 与 SqlServer 那一家被裁剪驱动同一档处境（<c>ResolveCopyChannel</c> 抬头那句行为级的税，本家多一个真实读者）。
+    /// 预算本身从第一天就要生效，否则分块公式会按 T-SQL 的 2100 去切一条这一家收得下的语句 —— L1 不吃预算，
+    /// 那一格管的是退回文本层之后。</summary>
+    public IBulkStrategy? Bulk { get; }
 
     public bool CanCreateDatabase => true;
 

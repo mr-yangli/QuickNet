@@ -89,10 +89,13 @@ public sealed class OpenGaussDialectTests
     }
 
     [Fact]
-    public void The_capability_mask_is_inherited_verbatim_14_bits_not_one_less_not_one_more()
+    public void The_capability_mask_is_inherited_verbatim_15_bits_not_one_less_not_one_more()
     {
         // 三段链的掩码半：leaf == 邻家叶子 == 血统。金仓那 14 位里躺着 7 位 VendorDoc 乐观声明，
         // 本家今天一位都不翻案也不删减——那七位的收敛是 §4 的账，不是这颗叶子顺手能结的。
+        // 第 15 位是本笔挂上去的 Bulk_Copy，而它挂在血统基类的 FamilyCapabilities 上，所以叶子一颗都不必覆写；
+        // 它量的不是文本而是 <c>PostgreSqlBulk.ResolveCopyChannel</c> 那颗反射口（"这台驱动里有没有导入器"当场可答，
+        // "接了以后收不收"本族一台活库都没有）——所以它在 §13.5 落"仅厂商文档"那一档，与 7 位 OfflineText 不同档。
         Assert.Equal(KingbaseLeaf.Capabilities, Provider.Capabilities);
         Assert.Equal(Family.Capabilities, Provider.Capabilities);
 
@@ -101,7 +104,7 @@ public sealed class OpenGaussDialectTests
             DbCapabilities.Cte | DbCapabilities.WindowFunctions | DbCapabilities.Count_Over_Window |
             DbCapabilities.Boolean_Type | DbCapabilities.Guid_Raw16 | DbCapabilities.Schemas | DbCapabilities.Json_Type |
             DbCapabilities.CaseSensitive_Identifiers | DbCapabilities.Comment_On_Column |
-            DbCapabilities.Alter_Column_Precision | DbCapabilities.TempTable,
+            DbCapabilities.Alter_Column_Precision | DbCapabilities.TempTable | DbCapabilities.Bulk_Copy,
             Provider.Capabilities);
 
         // 两颗"这一族刻意不声明"在本家同样不翻案：MultiStatement 被 §9.4 点名（扩展协议里一次塞多条

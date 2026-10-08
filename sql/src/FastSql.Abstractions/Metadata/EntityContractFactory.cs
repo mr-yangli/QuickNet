@@ -51,6 +51,14 @@ public sealed record ColumnFacts
 
     /// <summary>补上「provider 才知道的事实」之前的那一半：量纲与 Unicode 用中性默认值，
     /// 由 <see cref="ITypeMap.ApplyStorageDefaults"/> 覆写（§10.4「量纲由库决定，不由注解决定」）。</summary>
+    /// <remarks><b>非正数的宽度在这里折成"未声明"</b>：<c>[StringLength(-1)]</c> 这一类声明想说的是
+    /// "不给上限"，而负数一路走到发射侧就是 <c>VARCHAR(-1)</c> 那句过不了语法关的 DDL。
+    /// BCL 那一侧不替我们收：<c>StringLengthAttribute</c> 的构造函数照收 -1（.NET 10.0.12 量过 ——
+    /// <c>new StringLengthAttribute(-1)</c> 不抛且 <c>MaximumLength == -1</c>，反射取该属性上的实例
+    /// 也原样交回），它只在有人真调用 <c>IsValid</c> 时才响一句 <c>InvalidOperationException</c>
+    /// "The maximum length must be a nonnegative integer"。也就是说建契约这一路一路绿灯，直到发射 DDL
+    /// 或首次校验才现形 —— 两条路（源码生成与反射）在这里同形，所以收口只能收在这一个点上：
+    /// 六家发射侧与校验侧因此都拿不到负数。</remarks>
     public ColumnContract ToProvisional(TableInfo table) => new()
     {
         MemberName = MemberName,
@@ -62,13 +70,15 @@ public sealed record ColumnFacts
         IsPrimary = IsPrimary,
         IsIdentity = false,
         IsConcurrencyToken = IsConcurrencyToken,
-        MaxChars = MaxChars,
+        MaxChars = MaxChars > 0 ? MaxChars : null,
         MaxBytes = null,
         Precision = Precision,
         Scale = Scale,
         StoreTypeName = StoreTypeName,
         Comment = Comment,
-        Origin = new OriginTrace(ColumnNameLayer, $"{table.Name}.{ColumnName} ← {ColumnNameNote}; 长度 ← {LengthNote}; 可空 ← {NullableNote}"
+        Origin = new OriginTrace(ColumnNameLayer, $"{table.Name}.{ColumnName} ← {ColumnNameNote}; 长度 ← {LengthNote}"
+            + (MaxChars is { } declared && declared <= 0 ? "（非正数 ⇒ 按未声明宽度处理）" : string.Empty)
+            + $"; 可空 ← {NullableNote}"
             + (IsConcurrencyToken ? $"; 并发 ← {ConcurrencyNote}" : string.Empty)),
     };
 }

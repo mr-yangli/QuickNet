@@ -2,6 +2,7 @@ using System.Data;
 using System.Data.Common;
 using System.Diagnostics.CodeAnalysis;
 using FastSql.Aop;
+using FastSql.Behaviors;
 using FastSql.Execution;
 using FastSql.Metadata;
 using FastSql.Metadata.Fluent;
@@ -111,6 +112,7 @@ public sealed class FastSqlOrm
         Compiler = new QueryCompiler(Provider);
         Ado = new AdoExecutor(Provider, Sources, options.Aop, options.CommandTimeoutSeconds);
         Filters = new FilterRegistry(this);
+        Behaviors = new BehaviorRegistry(this);
     }
 
     /// <summary>§4 一行注册的 DI 侧：已知工厂、只要一行组装根。工厂由调用方递进来（宿主自己的容器、
@@ -171,6 +173,14 @@ public sealed class FastSqlOrm
     /// <b>今天它管不到 <c>SaveChanges</c> 与批量</b>：那两条路上的 <c>WHERE</c> 长在 <c>EntityTracker</c> 上，
     /// 欠账与判据在 §10.7 的 v0.26 落地记录、§14 的 P1 余项那一格。</summary>
     public FilterRegistry Filters { get; }
+
+    /// <summary>库里预置的写侧行为（§10.7 约束 3 的入口子，今天只有 <c>SoftDelete</c> 一件）。
+    /// <b>它与 <see cref="Filters"/> 是两只对象、各管一半</b>：这一份把 <c>DELETE</c> 换成「置位那一格」的
+    /// <c>UPDATE</c>，<see cref="Filters"/> 把已置位的行从读侧与写侧的 <c>WHERE</c> 里筛掉 —— 只装其中一只的项目
+    /// 要么删得动而读得见，要么读得干净而删的还是行本身。三处删除出口（<see cref="Delete{T}"/>、
+    /// <see cref="DeleteRange{T}"/>、<c>SaveChanges</c> 里被摘掉的行）都读这一份，判据与分工写在
+    /// <see cref="BehaviorRegistry"/> 的类型注释里。</summary>
+    public BehaviorRegistry Behaviors { get; }
 
     /// <summary>lambda → AST 的归约器。按需构造：只有真正走到链式翻译的调用方才为它付 AOT 代价（§5.10）。
     /// 标注只能落在 <c>get</c> 上 —— <c>RequiresUnreferencedCode</c> 的目标是方法，属性本身不是合法目标（CS0592）。</summary>
@@ -315,14 +325,40 @@ public sealed class FastSqlOrm
     public IUpdate<T> Update<T>() where T : class => new UpdateEngine<T>(this);
 
     /// <summary>DELETE 链（§6 示例里那句 <c>orm.Delete&lt;Cart&gt;().Where(...)</c>）。
-    /// <b>这一句改的是行本身还是 <c>deleted</c> 那一格，取决于有没有人订阅 <c>CudBuilding</c></b>：
-    /// §10.7 约束 3 那个改写点（<see cref="StatementEmitter.ApplyCud"/>）v0.18 就接上了，而库里预置的
-    /// <c>Behaviors.SoftDelete</c> 那一口子子还没有，所以今天<em>没人订阅时</em>它是物理删除 ——
-    /// <c>Explain().Reason</c> 每次按<em>最终文本</em>自陈落在哪一支，不靠注册状态猜。
+    /// <b>这一句改的是行本身还是 <c>deleted</c> 那一格，取决于这张表上有没有在册的软删行为</b>：
+    /// <see cref="Behaviors"/> 上注册过 <c>SoftDelete</c> 的实体，这一句在构建时就换成"置位 + 记时间"的 UPDATE
+    /// （§10.7 约束 3，v0.38 第十七笔；改形状那一步在 <see cref="StatementEmitter.EmitDelete"/> 之前，
+    /// 而文本仍走 <see cref="StatementEmitter.ApplyCud"/> 与 <see cref="StatementEmitter.ApplyBinding"/>，
+    /// 所以日志与审计看到的永远是真正发出去的那一句）。没注册的实体仍发物理 DELETE，
+    /// 而调用方自己那颗 <c>CudBuilding</c> 订阅者仍能在文本层再改一次 —— 三种情形 <c>Explain().Reason</c>
+    /// 各说一句，按<em>最终</em>状态自陈，不靠注册状态猜。
     /// <see cref="Filters"/> 上在册的过滤器会叠进这一句的 <c>WHERE</c>（§10.7 约束 1 的写侧那一半）。</summary>
     [RequiresUnreferencedCode("Where 的 lambda 归约走闭包常量求值。")]
     [RequiresDynamicCode("不可约子表达式的退路是编译表达式树。")]
     public IDelete<T> Delete<T>() where T : class => new DeleteEngine<T>(this);
+
+    /// <summary>批量整行更新（§12.1 写侧扩展）：每行把除主键、库里给值的列与并发列以外的全部列写进
+    /// <c>SET</c>，主键进 <c>WHERE</c>；Merged 档把多条 UPDATE 并成一条命令文本一次递交，只有声明了
+    /// <see cref="Providers.IBulkStrategy.SupportsMergedStatements"/> 的家可达，其余家 Auto 落逐条。
+    /// <b>入口零反射税</b>（列来自契约、值来自编译好的委托，一个表达式树都不建），与 <see cref="InsertRange{T}"/> 同档。
+    /// 它不与 <c>SaveChanges</c> 合流：那条要跟踪器的脏列判定，这一条的契约就是"整行交出去"。</summary>
+    public IUpdateBulk<T> UpdateRange<T>(IEnumerable<T> rows) where T : class
+    {
+        ArgumentNullException.ThrowIfNull(rows);
+
+        // 立刻物化，理由与 InsertRange 逐字相同：看到的那份数据与发出去的那份必须是同一份。
+        return new UpdateBulkEngine<T>(this, rows as T[] ?? [.. rows]);
+    }
+
+    /// <summary>批量按主键删（§12.1 写侧扩展）：Merged 档一句 <c>WHERE 键 IN (…)</c> 是<b>单条语句</b>，
+    /// 不欠多语句能力，所以这一条在所有 provider 上 Auto 都直接取 Merged；复合主键当场拒并指路。
+    /// 入口同 <see cref="UpdateRange{T}"/>：零反射税。</summary>
+    public IDeleteBulk<T> DeleteRange<T>(IEnumerable<T> rows) where T : class
+    {
+        ArgumentNullException.ThrowIfNull(rows);
+
+        return new DeleteBulkEngine<T>(this, rows as T[] ?? [.. rows]);
+    }
 
     // ── 事务（§6 (1)(2)(3)） ──────────────────────────────────────────
     /// <summary>形态 (1)：开一条事务、把它放进当前执行流的环境槽位，之后<b>本实例</b>的每一条语句

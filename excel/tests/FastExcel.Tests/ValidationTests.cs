@@ -83,4 +83,27 @@ public class ValidationTests : IDisposable
         Assert.Equal(3, result.Data.Count); // all rows present, invalid ones partially populated
         Assert.True(result.HasErrors);
     }
+
+    // [ExcelColumn] without Required=true must not hide the DataAnnotations [Required] contract.
+    [Fact]
+    public void DataAnnotations_Required_Reports_Missing_Template_Column()
+    {
+        var rows = new List<IDictionary<string, object?>>
+        {
+            new Dictionary<string, object?> { ["姓名"] = "张三", ["部门"] = "A" },
+        };
+        var path = TempPath("no_id.xlsx");
+        Excel.SaveAs(path, rows);
+
+        var result = Excel.Import<Employee>(path);
+        Assert.Single(result.TemplateErrors);
+        Assert.Contains(result.TemplateErrors, e => e.Contains("工号"));
+
+        var complete = TempPath("with_id.xlsx");
+        Excel.SaveAs(complete, new List<IDictionary<string, object?>>
+        {
+            new Dictionary<string, object?> { ["工号"] = 1, ["姓名"] = "张三", ["部门"] = "A" },
+        });
+        Assert.Empty(Excel.Import<Employee>(complete).TemplateErrors);
+    }
 }

@@ -190,6 +190,6 @@ public sealed class FastSqlTransaction : IFastSqlTransaction
         // 会话级连接复用（§8.4）：事务可能复用了 DbContext 绑的连接，
         // 那种情况下连接不归事务管——它还在 AsyncLocal 里，后续语句继续复用。
         if (_ownsConnection)
-            _connection.Dispose();
+            ConnectionRelease.Release(_connection);
     }
 }

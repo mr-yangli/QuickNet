@@ -255,6 +255,83 @@ public class ReadPathTests
         Assert.Equal(Database.Orders.Length, await query.CountAsync(TestContext.Current.CancellationToken));
     }
 
+    /// <summary>按<em>成员名</em>排序（v0.38 第二十笔）在真库上的读数。分工与 §13.1 那条界线一致：
+    /// 离线册 <c>MemberOrderingTests</c> 钉的是"发出去的是哪一颗列、认不出的一律响"，这一头钉的三件
+    /// 只有库能答的事——<b>行真的按那一列排了</b>、<b>它排在分页那一句里库认</b>、
+    /// 以及<b>它落进的是同一串序</b>（最后那条是本笔与上一族的交点：<c>Count</c> 会把序剥掉，
+    /// 而剥的正是这一颗口写进去的那一份 <c>Ordering</c>；写进另一份列表的话，这里收到的不是 0 红就是 T-SQL 的语法错）。</summary>
+    [Fact]
+    public async Task Ordering_by_member_name_sorts_rows_the_database_itself_returns()
+    {
+        Database.Ready();
+
+        var ct = TestContext.Current.CancellationToken;
+        var seeded = Database.Orders.Length;
+
+        // 单调性的载体是 <c>Id</c>，不是 <c>Amount</c> —— 这一格换型换得有原因：sqlite 那一家的定点列
+        // 落的是 <c>TEXT</c> 载体（<c>SqliteTypes.cs:248</c>，落 TEXT 的理由写在那一份第三条上），
+        // 于是库按字典序给行。第一版用金额判单调性，在 sqlite 上当场红出 <c>12.3456</c> 排在 <c>100</c> 之前
+        // （<c>obj/logs/v38-20-sqlite-read-1.log</c>）—— 红的是"载体决定序"这一格，不是本笔那颗口。
+        // 比较表达式那一侧 v0.37 已在入口修过（<c>SqliteDialect.cs:109</c>），<c>ORDER BY</c> 这一侧没有对应物，
+        // 缺口按本笔记 §14；这里先把单调性交给一颗三家都是数值型的列，免得一条真缺口被读成"排序没接上"。
+        var byName = await Tagged().OrderBy("Id", descending: true).ToListAsync(ct);
+        var byLambda = await Tagged().OrderByDescending(o => o.Id).ToListAsync(ct);
+
+        Assert.Equal(byLambda.Select(o => o.Id), byName.Select(o => o.Id));
+
+        // 单调性单独判一次：只比"两种写法一致"的话，一处共用的错发射会一起错。
+        for (var i = 1; i < byName.Count; i++)
+            Assert.True(byName[i].Id < byName[i - 1].Id,
+                $"第 {i} 行比上一行号大：{byName[i].Id} > {byName[i - 1].Id}");
+
+        // 大小写那一档（HTTP 查询串上过来的就是这一形）在真库上读到的是同一个行序。
+        Assert.Equal(byName.Select(o => o.Id), (await Tagged().OrderBy("id", descending: true).ToListAsync(ct)).Select(o => o.Id));
+
+        // 金额那一族只判"两种写法给同一串行"：sqlite 上那一串是字典序（上面那段），而两种写法共用同一处发射，
+        // 所以这个对照不受载体影响，恰好也钉住了"名字认出来的那颗列 == lambda 打出来的那颗列"。
+        Assert.Equal(
+            (await Tagged().OrderByDescending(o => o.Amount).ToListAsync(ct)).Select(o => o.Id),
+            (await Tagged().OrderBy("Amount", descending: true).ToListAsync(ct)).Select(o => o.Id));
+
+        // 两颗键：第二颗接在 ThenBy 上，而它要排在第一颗<em>之后</em>、不是顶掉它。造形让两形可分：
+        // 第一颗是唯一的 <c>Id</c> ⇒ 行序就是 Id 升序，而顶掉的话库里给的是金额那一串。
+        // （文本那一半在离线册：那里钉的是 <c>ORDER BY</c> 里有两颗、顺序 = 调用序。）
+        var twoKeys = await Tagged().OrderBy("Id").ThenBy("Amount", descending: true).ToListAsync(ct);
+        var ascending = await Tagged().OrderBy(o => o.Id).ToListAsync(ct);
+
+        Assert.Equal(ascending.Select(o => o.Id), twoKeys.Select(o => o.Id));
+
+        // 分页那一句：T-SQL 与 PG 血统都要 ORDER BY 才认 OFFSET..FETCH，所以这一格量的是"名字认出来之后
+        // 序落进了分页要的那一串"，而不只是"多读了两行"。
+        // <b>首页不付那条 count</b>（§5.12 的 Q4：首页只判有无下一页，所以 <c>Total</c> 恒为 null ——
+        // 本笔第一版把它当成 5 来断，在 mysql 上当场红，那一句红的是我对分页的假设而不是排序）。
+        var page = await Tagged().OrderBy("CreatedAt", descending: true).ToPagedAsync(1, 2, null, ct);
+
+        Assert.Null(page.Total);
+        Assert.True(page.HasNext);
+        Assert.Equal(2, page.Items.Count);
+        Assert.True(page.Items[0].CreatedAt > page.Items[1].CreatedAt,
+            $"这一页没按 CreatedAt 降序：{page.Items[0].CreatedAt} 在 {page.Items[1].CreatedAt} 之前");
+
+        // 第二页起才付总数：那颗 count 与这一串序同在，所以它同时是本笔那颗口的剥序见证（下面第 5 判的另一半）。
+        var later = await Tagged().OrderBy("CreatedAt", descending: true).ToPagedAsync(2, 2, null, ct);
+
+        Assert.Equal(seeded, later.Total);
+
+        // 交点：这一颗口写进去的序，聚合出口剥掉的也正是它。
+        var ordered = Tagged().OrderBy("CreatedAt", descending: true);
+
+        Assert.Contains("ORDER BY", ordered.ToSql(), StringComparison.Ordinal);
+        Assert.Equal(seeded, await ordered.CountAsync(ct));
+        Assert.Equal(seeded, await ordered.LongCountAsync(ct));
+
+        // 认不出的名字在真库上也是响，而不是"返回一条没排序的查询"——排序键写错的页面上只看得出顺序不对，
+        // 所以它必须响在这里，而不是安静地少一个 ORDER BY。
+        var failure = await Assert.ThrowsAsync<FastSqlException>(async () => await Tagged().OrderBy("CreatedA").ToListAsync(ct));
+
+        Assert.Contains("FastSqlOrder 没有名为 CreatedA 的列", failure.Message, StringComparison.Ordinal);
+    }
+
     /// <summary>第八笔那一档的语义面在真库上的见证：<b>空集上的聚合交回的是 NULL 行，而不是"没有行"</b>，
     /// 而 NULL 在这一档是合法答案 ⇒ 交回请求型的 <c>default</c>，不是抛。
     ///
@@ -278,6 +355,46 @@ public class ReadPathTests
         Assert.Equal(0m, await none.SumAsync(o => o.Amount, ct));
         Assert.Equal(0m, await none.AverageAsync(o => o.Amount, ct));
         Assert.Equal(0, await none.MaxAsync(o => o.CustomerId, ct));
+    }
+
+    /// <summary>存在性与 <c>long</c> 计数在真库上判对两边（v0.38 第十九笔）。方言册那一头只能钉
+    /// "打到了取连接那一层"，这一头钉的是句子真的对：<c>Any</c> 发的是 <c>COUNT(*) &gt; 0</c>，
+    /// 所以它的红会落在"有行答 false"或"空集答 true"，而不是"文本不好看"。带页那一档判的是
+    /// <em>那一页</em>有没有 —— 与 <c>Count</c> 同一条派生表咽喉，两颗新口在这里不该分岔。</summary>
+    [Fact]
+    public async Task Any_and_LongCount_answer_on_the_same_rows_the_count_family_reads()
+    {
+        Database.Ready();
+
+        var ct = TestContext.Current.CancellationToken;
+        var seeded = Database.Orders.Length;
+
+        Assert.True(await Tagged().AnyAsync(ct));
+        Assert.Equal(seeded, await Tagged().LongCountAsync(ct));
+
+        // 空集那一侧：COUNT(*) 是 0，所以 Any 必须答 false —— 这一句排除的是"恒真"那种接法。
+        var none = Orm.Select<Order>().Where(o => o.Id == int.MinValue);
+
+        Assert.False(await none.AnyAsync(ct));
+        Assert.Equal(0L, await none.LongCountAsync(ct));
+
+        // 带页：偏移越过全部种子行，问的是这一页有没有，不是整表。
+        var beyond = Tagged().OrderBy(o => o.Id).Skip(seeded).Take(1);
+
+        Assert.Equal(0, await beyond.CountAsync(ct));
+        Assert.False(await beyond.AnyAsync(ct));
+
+        // §13.1 第 9 项那句"开出口那天这条断言原样套用"今天套用：同一条带序链上两颗新出口都得剥掉序，
+        // 否则在 T-SQL 与 PG 血统上是运行期语法错，而不是"文本不好看"。先断言链自己有序，再问出口。
+        var ordered = Tagged().OrderByDescending(o => o.CreatedAt);
+
+        Assert.Contains("ORDER BY", ordered.ToSql(), StringComparison.Ordinal);
+        Assert.True(await ordered.AnyAsync(ct));
+        Assert.Equal(seeded, await ordered.LongCountAsync(ct));
+
+        // 同步口与异步口是同一条路：值一致，不是各发各的句子。
+        Assert.True(Tagged().Any());
+        Assert.Equal((long) seeded, Tagged().LongCount());
     }
 
     [Fact]

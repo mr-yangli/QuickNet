@@ -410,24 +410,33 @@ sealed class DeleteEngine<T> : IDelete<T> where T : class
             Where = where,
         };
 
+        // §10.7 约束 3 的入口子（v0.38 第十七笔）：这张表上在册的软删规则把上面那一棵 DELETE 换成
+        // 一句"置位 + 记时间"的 UPDATE，而 WHERE 逐字不动 —— 软删不改命中范围，改的是命中之后的动作。
+        // 规则为空时下面这一句就是"没有这件事"，物理删除那条路径与本版之前逐字同形（同一次 EstimateLength 的入参）。
         // 参数位在这里数不出来（它们全在谓词里，一颗还是几百颗要到发射时才知道），所以估 0：
         // 估少只多翻一次 StringBuilder 的倍，不改文本（§12.7 E 的同一笔账）。
-        var writer = StatementEmitter.Writer(_orm.Provider.Dialect,
-            StatementEmitter.EstimateLength(0, _contract.Table.Name.Length + _table.Alias.Length * 3 + 128));
-        _orm.Provider.Dialect.Emit(in ast, writer);
+        var soft = (_orm.Behaviors.HasAny ? _orm.Behaviors.RuleFor(typeof(T)) : null)
+            ?.Rewrite(_contract, _table, where);
 
-        var emitted = new DialectSql(writer.ToSqlString(), writer.Parameters);
+        var emitted = StatementEmitter.EmitDelete(
+            _orm.Provider.Dialect, ast, soft, _contract.Table.Name.Length + _table.Alias.Length * 3 + 128);
+
         var sql = StatementEmitter.ApplyBinding(_orm, StatementEmitter.ApplyCud(_orm, emitted, "delete", traces, ref step), traces, ref step);
 
-        // §10.7 的软删改写点（CudBuilding）现在真的会改文本了，所以"物理删除"这句话<em>只在没人改写时成立</em>。
-        // 分岔按文本判而不是按订阅判：钩子可以只读不写，也可以改出另一条 DELETE，那句话都得跟着实际那一支说。
-        // 写在 Reason 的第一句里，是因为开了软删的项目读到这里必须知道这一段描述还准不准。
-        // v0.26 起这一句少了一半出处：全局过滤器已经会叠进上面的 WHERE，所以"这一句什么都没帮你加"不再成立，
-        // 而软删那一半仍然没人做（orm.Behaviors.SoftDelete 还没有），于是那一句改口成点名那一口子。
-        var reason = $"DELETE FROM {table.Name}：" + (sql.Text == emitted.Text
-                ? "物理删除，行不在了（§10.7 的软删要靠 CudBuilding 订阅者把这一句改写成 UPDATE，而 orm.Behaviors.SoftDelete 那一格还没有落地，所以本库自己不会做这个改写；库里那一行归你了）。"
+        // 三分岔：软删在册时说的是"置位"（这才是真正发出去的那一句），否则按最终文本判"物理删除"还是
+        // "已被 CudBuilding 改写"。分岔按文本与规则判而不按订阅判：钩子可以只读不写，也可以改出另一条
+        // DELETE，那句话都得跟着实际那一支说。写在 Reason 的第一句里，是因为开了软删的项目读到这里
+        // 必须知道这一段描述还准不准。
+        // v0.26 起这一句少了一半出处：全局过滤器已经会叠进上面的 WHERE，所以"这一句什么都没帮你加"不再成立。
+        var reason = soft is null
+            ? $"DELETE FROM {table.Name}：" + (sql.Text == emitted.Text
+                ? "物理删除，行不在了（本库自己不做这个改写：orm.Behaviors.SoftDelete 在册时这一句会被换成 UPDATE 置位，没在册时它就发 DELETE；要自己改写整句文本，订一颗 CudBuilding）。"
                 : "这一句已被 CudBuilding 改写，最终执行的是 Sql 而不是这一格描述的东西（改了几步、每步前后文本见 HookReplay）。")
-            + (injected > 0
+            : $"{table.Name} 的删除已由本库的 Behaviors.SoftDelete 改写成 UPDATE：SET {string.Join("、", soft.Sets.Select(s => s.Column.ColumnName))}" +
+              $"（§10.7 约束 3）。执行的是 Sql 那一格，行还在库里而置位那一格已经写了 true —— 命中 0 行说的是「谓词没圈到行」，" +
+              "不是「行已经不在了」，所以这一句不会把「已被删过」报成并发冲突（那一档的判据要先有人裁，见 §14 的 P1 余项）。";
+
+        reason += (injected > 0
                 ? $" WHERE 里叠着 {injected} 条全局过滤器（§10.7 的 orm.Filters），它们由内核加、不出现在这条链的调用里 —— 命中范围比 .Where(...) 那几句窄。"
                 : string.Empty)
             + $"参数 {sql.Parameters.Count} 颗。";

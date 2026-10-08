@@ -105,7 +105,7 @@
 
 内核不做 `Type.GetType(string)`、不按名字反射装配 provider：**provider 由调用方构造并交进 `FastSqlOrmOptions.Provider`**（`tests/FastSql.Tests.Common/SqlServer.cs` 的类注释把这件事叫"组装根本该做的事"）。运行期唯一带反射的入口是清单解析，而那一步是手解 JSON + 读 `Instance` 字段，不在热路径上。
 
-代价也写清楚了：`FastSqlOrm` 的单参构造器（`src/FastSql.Core/Orchestration/FastSqlOrm.cs:78`）标了 `[RequiresUnreferencedCode]`/`[RequiresDynamicCode]`，因为它顺带建 G2 反射注册表；干净口是 `FastSqlOrm(FastSqlOrmOptions, IEntitySchemaRegistry)`（同文件 `:84`），**构造期零反射**。`Select<T>()`（`:185`）今天整条读路径仍带同一串标注 —— 那是入口税，G1 预翻译落地之前摘不掉（设计意图，不是已交付）。
+代价也写清楚了：`FastSqlOrm` 的单参构造器（`src/FastSql.Core/Orchestration/FastSqlOrm.cs:94`）标了 `[RequiresUnreferencedCode]`/`[RequiresDynamicCode]`，因为它顺带建 G2 反射注册表；干净口是 `FastSqlOrm(FastSqlOrmOptions, IEntitySchemaRegistry)`（同文件 `:84`），**构造期零反射**。`Select<T>()`（`:185`）今天整条读路径仍带同一串标注 —— 那是入口税，G1 预翻译落地之前摘不掉（设计意图，不是已交付）。
 
 ### 1.8 一行注册：`FastSqlOrm.Create(DbKind, ...)`
 
@@ -235,31 +235,69 @@ var orm = new FastSqlOrm(options, schemas);
 
 所以：不要按位选路，也不要因为某位是 0 就断定"这家做不到"。它说的是"本仓库今天为这颗位拿得出手的证据在哪一档"。
 
-### 2.5 钩子、日志与全局过滤器
+### 2.5 钩子、日志、全局过滤器与行为改写
 
 `FastSqlAop`（`src/FastSql.Abstractions/Aop/FastSqlAop.cs`）不是事件总线，是一组可空委托字段，订阅就是赋值（`aop.CudBuilding = e => ...;`、`aop.CudBuilding += ...;`，见 `tests/FastSql.Tests.Dialects/SqlServerCudBuildingTests.cs`）：
 
 | 成员（行号） | 类别 | 拿到什么 |
 | --- | --- | --- |
-| `Executed` 14 | 观察 | `CommandLogEvent`（含 `ElapsedMilliseconds`、`TableNames`，以及 v0.38 第十一笔添的 `Route`——`DataSourceRoute(Cluster, Role, Reason)`，必填的一格，见 :86。所以"这一句实际走了哪座库、哪个角色、按哪一档"是订阅出来的事实，不用翻库猜，见 §3.7） |
-| `Error` 15 / `SlowQuery` 16 | 观察 | `CommandErrorEvent(Exception, string Sql, long)`、`SlowCommandEvent`；阈值 `SlowQueryThresholdMilliseconds`（默认 500，行 45） |
+| `Executed` 14 | 观察 | `CommandLogEvent`（含 `ElapsedMilliseconds`、`TableNames`，以及 v0.38 第十一笔添的 `Route`——`DataSourceRoute(Cluster, Role, Reason)`，必填的一格，见 :92。所以"这一句实际走了哪座库、哪个角色、按哪一档"是订阅出来的事实，不用翻库猜，见 §3.7） |
+| `Error` 15 / `SlowQuery` 16 | 观察 | `CommandErrorEvent(Exception, string Sql, long)`、`SlowCommandEvent`；阈值 `SlowQueryThresholdMilliseconds`（默认 500，行 51） |
 | `Materialized` 17 | 观察 | `MaterializedEvent(object Entity, string EntityTypeName, int OrdinalInBatch)` |
 | `BulkDegraded` 25 | 观察 | `BulkDegradedEvent(BulkMethod Requested, BulkMethod Method, int RowCount, string Reason)`：只在**真的降级**时派发，见 §3.2 的批量高速层 |
-| `AuditValue` 28 / `ParameterBinding` 29 | 改写 | `AuditValueEvent`（`SetValue`/`WasSet`）、`ParameterBindingEvent`（`SetValue`/`ChangeType`） |
-| `CudBuilding` 35 | 改写 | `CudBuildingEvent { OperationKind, Sql, Rewritten }` |
+| `AuditValue` 34 / `ParameterBinding` 35 | 改写 | `AuditValueEvent`（`SetValue`/`WasSet`/`OperationKind`）、`ParameterBindingEvent`（`SetValue`/`ChangeType`）。**前者的发射点只有两条"手上有整行实体"的链**：`orm.Insert`/`InsertRange`（`OperationKind` = `insert`）与 `orm.UpdateRange(实体集)`（= `update`，v0.38 第十六笔）；链式 `orm.Update<T>().Set(...)`、`orm.Delete<T>()` 与 `SaveChanges` 的 update 档都不问它，那两条链的改写槽位是 `ParameterBinding`，判据与两处未接的理由见规格 §10.1 同笔记录 |
+| `CudBuilding` 41 | 改写 | `CudBuildingEvent { OperationKind, Sql, Rewritten }` |
 
-改写过的步骤进 `HookTrace(int Step, string HookName, HookCategory Category, string Before, string After)`，在 `Explain()` 与 `SaveChangesReport.HookReplay` 里回放。观察类钩子的异常被 `Observe(...)`（行 56）吞掉并上报，不让日志代码打挂写入。
+改写过的步骤进 `HookTrace(int Step, string HookName, HookCategory Category, string Before, string After)`，在 `Explain()` 与 `SaveChangesReport.HookReplay` 里回放。观察类钩子的异常被 `Observe(...)`（行 62）吞掉并上报，不让日志代码打挂写入。
 
-**没有的**：`QueryBuilding`、`CommandCreating` 在 `FastSqlAop` 里只是注释点名的桩（类注释自陈，无发射点）；**"观察"档今天只有 `Executed` 一颗有派发点**：`Executing`（`FastSqlAop.cs:13`）声明在场而派发点 0 处（本笔按 `src/` 全扫复核，`.Executing` 零命中），挂在它上面的回调永远不响——要"执行前"的读数请订 `CudBuilding`（文本已成形、执行之前）；`CommandLogEvent` 那颗记录本身是活的，`Executed` 交回的就是它（v0.38 第十四笔把这一格从"观察"档改判进本段，判据是盘上零派发，不是规格名单）。决策类钩子、注册式钩子、重试都没有。**"读写分离"今天从这一份名单里划掉了**，但它不是以钩子的形状进来的：它长在 §2.1 那三颗选项 + §3.7 那条路由上，AOP 侧只多了一颗 `CommandLogEvent.Route`（观察者拿读数，不是决策点——决策点做成钩子等于让日志代码决定语句发去哪座库）。`ICacheAdapter Cache`（行 29）有槽位，`WithCache(string, TimeSpan)` 有入口，仓库内没有实现，要接自己的缓存得自己写这一颗。
+**没有的**：`QueryBuilding`、`CommandCreating` 在 `FastSqlAop` 里只是注释点名的桩（类注释自陈，无发射点）；**"观察"档今天只有 `Executed` 一颗有派发点**：`Executing`（`FastSqlAop.cs:13`）声明在场而派发点 0 处（本笔按 `src/` 全扫复核，`.Executing` 零命中），挂在它上面的回调永远不响——要"执行前"的读数请订 `CudBuilding`（文本已成形、执行之前）；`CommandLogEvent` 那颗记录本身是活的，`Executed` 交回的就是它（v0.38 第十四笔把这一格从"观察"档改判进本段，判据是盘上零派发，不是规格名单）。决策类钩子、注册式钩子、重试都没有。**"读写分离"今天从这一份名单里划掉了**，但它不是以钩子的形状进来的：它长在 §2.1 那三颗选项 + §3.7 那条路由上，AOP 侧只多了一颗 `CommandLogEvent.Route`（观察者拿读数，不是决策点——决策点做成钩子等于让日志代码决定语句发去哪座库）。`ICacheAdapter Cache`（行 49）有槽位，`WithCache(string, TimeSpan)` 有入口，仓库内没有实现，要接自己的缓存得自己写这一颗。
 
-**全局过滤器**是另一只对象：`orm.Filters`（`FastSqlOrm.cs:158`）返回 `FilterRegistry`，注册口是
+**全局过滤器**是另一只对象：`orm.Filters`（`FastSqlOrm.cs:175`）返回 `FilterRegistry`，注册口是
 
 ```csharp
 orm.Filters.Add<Ticket>(t => !t.Deleted);                  // 读、Update、Delete 三条链都带
 orm.Filters.Add<Customer>(c => c.TenantId == 7, mandatory: true); // 链上的 IgnoreQueryFilters() 压不住
 ```
 
-签名 `Add<TEntity>(Expression<Func<TEntity, bool>> predicate, bool mandatory = false)`，可链式，注册期先试翻译一次（`src/FastSql.Core/Query/Filters/FilterRegistry.cs`）。**它管不到 `SaveChanges` 与批量**（谓词长在 `EntityTracker` 上），软删的改写入口 `orm.Behaviors.SoftDelete` **今天不存在**，`FastSqlOrm` 没有 `Behaviors` 成员 —— 所以 `Delete` 到今天还是物理删除，那句自陈在 `src/FastSql.Core/Write/UpdateEngine.cs:315`。
+签名 `Add<TEntity>(Expression<Func<TEntity, bool>> predicate, bool mandatory = false)`，可链式，注册期先试翻译一次（`src/FastSql.Core/Query/Filters/FilterRegistry.cs`）。**它管不到 `SaveChanges` 与批量**（谓词长在 `EntityTracker` 上，那一档到今天仍未接 —— 它等的是规格 §14 那一格那句裁决「被过滤器挡住的行算不算一次并发冲突」，v0.26 起归用户，没自决）。
+
+**软删的改写入口是第三只对象：`orm.Behaviors`（`FastSqlOrm.cs:183`，v0.38 第十七笔落地）**，注册口是
+
+```csharp
+orm.Behaviors.SoftDelete<Ticket>(t => t.Deleted, t => t.DeletedAt);             // 置位 + 记时间，缺省本地时钟
+orm.Behaviors.SoftDelete<Order>(o => o.Deleted, clock: () => DateTime.UtcNow);  // 要 UTC 就自己给一颗
+```
+
+签名 `SoftDelete<TEntity>(Expression<Func<TEntity, bool>> deleted, Expression<Func<TEntity, DateTime?>>? at = null, Func<DateTime>? clock = null)`（`src/FastSql.Core/Behaviors/BehaviorRegistry.cs`），回返 `this` 所以可链式，册子一只 orm 实例一份。注册之后，**三处删除出口**都不再发 `DELETE`：链式 `orm.Delete<T>()`、批量 `orm.DeleteRange(rows)`、以及 `SaveChanges` 里被摘掉的那些行。三家一起接不是因为写了三遍，而是因为「这张表是软删表」是一条按实体成立的事实 —— 只接一家就会留下"同一张表走 A 留住行、走 B 丢行"那个洞。**它与 `orm.Filters` 是两只对象、各管一半**：行为管"`Delete` 落库里是哪一句"，过滤器管"读到的集合里有没有已删的行"；只注册行为，`orm.Delete<Ticket>()` 置了位而没人替读侧筛掉那几行，只注册过滤器，读侧筛得掉而那一格永远不会有人置位。
+
+读这一档要知道的六件事：
+
+- **改的是形状，不是范围**：`WHERE` 一个字都不动（全局过滤器照旧叠在同一条 `WHERE` 上，排在调用方条件之后），所以命中范围在改写前后是同一个。`Explain()` 里 `DeletePlan.Ast` 仍是被要求的那棵 `DELETE`（说的是"调用方要的是删除"），`Sql` 才是发出去的那句 `UPDATE`（说的是"库里执行的是置位"）—— 两句都真，读错任一句都会误判。`Reason` 按最终文本分岔并点名 `SET` 里那两列；`SaveChanges` 那份报告的 `Operations[].Columns` 在软删时交出的也是那两列，没注册时仍是空。
+- **标记列必须是 `bool`**：那一格写进去的值恒为 `true`，所以 `0/1` 整数标记与 `"Y"/"N"` 字符标记不是这一档（没有第二档值可给）。要那种写法就自己 `orm.Update<T>().Set(o => o.标记, 值).Where(...)`，或者订一颗 `CudBuilding` 做文本改写。
+- **`deleted` 与 `at` 要的是成员的读法**（`t => t.Deleted`），不是谓词也不是表达式：`t => !t.Deleted`、`t => t.A.B`、`t => t.DeletedAt!.Value` 都在注册期拒 —— 这一档回答的是"置位哪一列、时间记在哪一列"这两件事。
+- **失败点分两档**：具体类键在 `SoftDelete(...)` 那一句就把两列各量一遍（缺列、自增列「不接受写」、并发列「只比较不书写」，与 `UPDATE` 链同一把尺子）；**接口与抽象基类键**（`SoftDelete<ISoftDelete>(e => e.Deleted)` 一次注册覆盖所有实现类）注册期量不出来 —— 它没有列契约，只有第一次真贴上某张表时才响，而消息会同时点名"谁的注册"与"哪张表缺这一列"。
+- **同一把键注册两次当场拒**（键就是 `SoftDelete<T>` 的那个 `T`；两张册子对同一张表各说一种写法时，谁赢没有任何依据）。**接口键与具体类键的重叠不在这一格**：那种情况按注册序取第一条匹配得上的（与过滤器的"注册序折叠"同一条纪律）。册子挂在实例上，要换写法就换一只 orm 实例或把两处合成一处。
+- **时钟在构建语句时读，一次构建一颗**：注册期一次都不读（冻在它上面等于后面所有删除记同一个时刻）；链式一条链一颗（所以 `ToSql()` 预览两次不会多读一次，预览的那句就是要发出去的那句），一次 `DeleteRange` 整批一颗（切成几句都是同一时刻），一次 `SaveChanges` 一颗。缺省 `DateTime.Now` —— 本库不替你决定本地还是 UTC。
+
+**这一档没有的三件事，别读成有**：① 软删只写那两列，第三格「谁删的」没有槽位（要连操作人一起置位，目前只能自己 fetch→`Set` 三列→写回，而那条退路不是原子的）；② 分表实体注册软删按构造打在你 `SplitTable(…)` 点名的那一片上（链式那条闸门见 §3.6），但这一格今天没有用例；③ **开了软删也不会让过滤器管到 `SaveChanges` 与批量** —— 那是上一段那句裁决的事。见证：离线 `tests/FastSql.Tests.Dialects/SoftDeleteTests.cs` 19 颗 + 一份基线 `golden/sqlserver/soft-delete-update.sql`，真库 `tests/FastSql.Tests.Integration/SoftDeletePathTests.cs` 6 颗（SQL Server 与 MySQL 两家各一场），可跑示例 `samples/FastSql.Sample/Program.cs` §15 在真 SQLite 上把链式与批量两处出口逐条打印（含"同一条谓词连跑两次各 1 行"、"批量两行同一颗时刻"、"只注册行为时读侧 4 行都看得见、补上过滤器才 1 行而库里仍是 4 行"）。
+
+**这三只对象都挂在实例上，所以 DI 里它们只有一个落点：`builder.AfterBuild`**（v0.38 第十八笔）。`AddFastSqlOrm` 交回的是 Scoped 的 `FastSqlOrm`，而"当前登录者属于哪一家企业""这一条流要不要打 SQL"恰恰是按请求的事实：注册期那只 builder 手上没有 `IServiceProvider`，实例建好之后宿主又拿不到"还没被用过"的那个时机（谁先解析谁先用，晚一步装的过滤器会漏掉前面那几句）。所以库给的是装配清单，不是让宿主自己盖一层 Scoped 注册去猜内核怎么装配：
+
+```csharp
+builder.Services.AddFastSqlOrm(DbKind.SqlServer, connectionString, b =>
+{
+    b.AfterBuild.Add((sp, orm) =>                       // 按登记顺序跑，每个作用域一次
+    {
+        var tenant = sp.GetRequiredService<ICurrentTenant>();   // 拿的是本请求的服务
+
+        orm.Filters.Add<Ticket>(t => t.TenantId == tenant.Id, mandatory: true);
+        orm.Behaviors.SoftDelete<Ticket>(t => t.Deleted, t => t.DeletedAt);
+        orm.Aop.Executed = e => logger.LogInformation("{Sql}", e.Sql);   // 订阅就是赋值，Aop 每请求一份
+    });
+});
+```
+
+四句口径，每句都有用例（`tests/FastSql.Tests.Dialects/DiAssemblyTests.cs` 7 颗）：① **每个作用域解析跑一次**，同一个作用域里再取一次不重跑；② **跑的就是交回给调用方的那一只实例**，不是另建一只再装配；③ **清单是 `AddFastSqlOrm` 那一刻的快照**，返回之后再往同一个 `List` 里添的那些不生效；④ **不查重** —— 同一颗钩子登记两遍就跑两遍，跑到第二遍若撞上 `Behaviors` 那句「同一把键注册两次当场拒」，抛在这次解析上（异常原样透出，`GetRequiredService` 不包一层）。今天它是同步 `Action`，没有 async 落点：装配里要异步初始化（先从远端取租户配置那一类）得宿主自己决定怎么同步等，本库不在解析路径上代开 `await`。**分界在哪**：本来就是启动期常量的那几格（`Replicas` ∶ `Clusters` ∶ `Model` ∶ `PagingOrdering` ∶ `SchemaSync`）照旧在 builder 上直给，走 `AfterBuild` 的只有"要问当前请求才知道"的那三格。
 
 ### 2.6 事务：三形态
 
@@ -326,7 +364,7 @@ var q = orm.Select<Order>()
 - 联表：arity 递增的 `LeftJoin<T2>(on)` / `InnerJoin<T2>(on)`，形参按 FROM 位置解析，产出 `IQuery<T1, T2>`（再到 `IQuery<T1, T2, T3>`），其后 `Select((a, b) => ...)`
 - 导航：`Include<TProp>`、`IncludeMany<TDetail>`、`AsSplitQuery(int navigateBatchSize = 20)`
 - 其它：`As(string alias)`、`Distinct()`、`AsNoTracking()`、`IgnoreQueryFilters()`、`WithCache(string, TimeSpan)`、`WithSql(string sql, object? args = null)`（把 FROM 那一段换成你自己写的 SELECT，外面一层仍归库；见下面"表源那一格"）
-- 出口：`ToListAsync`/`FirstOrDefaultAsync`/`CountAsync`/`ToAsyncEnumerable(int batchSize)`，以及同步的 `ToList`/`FirstOrDefault`/`Count`；类型本身还是 `IAsyncEnumerable<T>`。计数一族（`CountAsync`/`LongCountAsync`/`AnyAsync`）遇到分组、`Distinct` 或带 `Skip/Take` 的链时，会把整句包成派生表内层再数（上面那一段与下面"表源那一格"），不会照着原模型换一个 `COUNT(*)`
+- 出口：`ToListAsync`/`FirstOrDefaultAsync`/`CountAsync`/`ToAsyncEnumerable(int batchSize)`，以及同步的 `ToList`/`FirstOrDefault`/`Count`；类型本身还是 `IAsyncEnumerable<T>`。计数一族（`Count`/`LongCount`/`Any` 与它们的异步对照）遇到分组、`Distinct` 或带 `Skip/Take` 的链时，会把整句包成派生表内层再数（上面那一段与下面"表源那一格"），不会照着原模型换一个 `COUNT(*)`。这一族的后四颗（`AnyAsync`/`LongCountAsync`/`Any`/`LongCount`）到 v0.38 第十九笔才真的长在 `IQuery<T>` 上，`Any` 发的仍是同一条 `COUNT(*)`，`COUNT(*) > 0` 在 CLR 侧判，`WHERE EXISTS(…)` 反形还没有入口
 
 **分组（`GroupBy`/`Having`）走的是另一条类型链，出口只有 `Select`。**
 
@@ -346,7 +384,7 @@ var top = await orm.Select<Order>()
 - 复合键：`GroupBy(o => new { o.OrderId, o.Sku })`，读法只能是 `g.Key.OrderId` 这样**到成员**的一层；`g.Key` 整体（那个匿名对象）在库里没有对应物，当场抛而不是静默取第一颗列
 - **不需要 `ONLY_FULL_GROUP_BY` 风格的校验开关**（规格 §5.3 原稿那颗）：lambda 形参的类型是 BCL `IGrouping<TKey, TElement>`，实体成员不在它上面，所以"组里选非键列"根本编译不过去。同理 `Having` 写在 `GroupBy` 之前也写不出来
 - 联表之后的分组**没有入口**：`GroupBy` 只长在 `IQuery<T>` 单表那一份契约上，`IQuery<T1, T2>` 上没有，所以那是编译期过不去而不是运行期报错。分组与联表要合用（`SELECT … FROM a JOIN b … GROUP BY a.x`）今天没有对应物
-- **分组之后的计数走派生表**（§5.12 那一格已接）：`CountAsync`/`LongCountAsync`/`AnyAsync` 与 `ToPagedAsync` 的总数会把整份分组原样包进内层 —— `SELECT COUNT(*) FROM (SELECT … GROUP BY …) AS [t0]`，而内层没有分页时顺手剥掉 `ORDER BY`（T-SQL 与 PG 血统都拒绝"带序而无页"的派生表，count 又不关心序）。**这一档只接 COUNT 一族**：外层要引用内层的某一列（`SUM(t0.Total)`）就得先有派生行的列契约，那一步今天没有形状，所以分组之后再 `SumAsync`/`MaxAsync`/`MinAsync`/`AverageAsync` 仍然当场抛，消息点名的就是缺的那一格
+- **分组之后的计数走派生表**（§5.12 那一格已接）：`CountAsync`/`LongCountAsync`/`AnyAsync` 与 `ToPagedAsync` 的总数会把整份分组原样包进内层 —— `SELECT COUNT(*) FROM (SELECT … GROUP BY …) AS [t0]`，而内层没有分页时顺手剥掉 `ORDER BY`（T-SQL 与 PG 血统都拒绝"带序而无页"的派生表，count 又不关心序）。`Any`/`LongCount` 这两颗同步口与它们的异步对照到 v0.38 第十九笔才一起长在接口上，发出去的还是同一颗 `COUNT(*)`。**这一档只接 COUNT 一族**：外层要引用内层的某一列（`SUM(t0.Total)`）就得先有派生行的列契约，那一步今天没有形状，所以分组之后再 `SumAsync`/`MaxAsync`/`MinAsync`/`AverageAsync` 仍然当场抛，消息点名的就是缺的那一格
 - 同一个咽喉管着另外两种形状：`Distinct()` 之后的计数数的是**去重后的行**，带 `Skip/Take` 的链上 `CountAsync` 数的是**那一页**（与 LINQ 的 `Skip(…).Take(…).Count()` 同一语义）。`ToPagedAsync` 的总数不是这一格 —— 它先把偏移与上界摘掉再数，得的是跨页总数
 - 今天会**当场抛**（宁可报错，不发一条看起来合理的错句子）：组内去重计数 `g.CountDistinct(…)` 与带条件的计数 `g.Count(o => …)`（`COUNT(DISTINCT x)` 与 `FILTER` 各家不同）；无序分页时 `PagingOrderingPolicy.AutoOrderPrimaryKey` 那颗补序兜底（主键不在分组键里，补出来不合法）；分组链上 `Any`/`First` 这类没有 `GROUP BY` 对应物的方法
 - 见证：离线册 `tests/FastSql.Tests.Dialects/GroupByTests.cs` 19 颗（版式四判 + 三家引号 + 分组与集合导航相关子查询的分工 + 上面每一格报错），派生表那一段 `DerivedTableTests.cs` 16 颗（三形文本 + 各家分页搬进内层 + 别名同时改名 + 非 COUNT 一族的报错），可跑示例 `samples/FastSql.Sample/Program.cs` §8（单键五聚合、`Having`、复合键进 DTO、排序取前 N 组、`Explain()` 的模型文本）与 §10（分组总数、分组分页、`Distinct` 计数、带页计数在真 SQLite 上）
@@ -416,6 +454,8 @@ await orm.Update<Order>().Set(o => o.Note, "只改备注").Where(o => o.Id == 7)
 await orm.Delete<Order>().Where(o => o.CreatedAt < cutoff).ExecuteAffrowsAsync();
 ```
 
+`Delete` 发的是物理 `DELETE`，除非那一个实体在 `orm.Behaviors.SoftDelete` 上注册过软删（§2.5）——注册过则这一句在构建时换成"置位 + 记时间"的 `UPDATE`，`Explain()` 的 `Sql` 与日志里看到的都是那句 `UPDATE`，而 `DeletePlan.Ast` 仍是你要求的 `DELETE`。
+
 `IInsert<T>` 的出口：`ExecuteAffrowsAsync`、`ExecuteIdentityAsync` → `Task<long>`、`ExecuteReturnKeysAsync` → `Task<List<T>>`、`ExecuteBulkAsync` → `Task<BulkReport>`（层由下面那句 `WithBulk` 请求）；诊断口 `Explain()` → `InsertPlan`、`ExplainKeys()`、`ExplainBulk()` → `BulkReport`。旋钮 `WithBulk(BulkMethod, FallbackPolicy, rowsPerRoundTrip)` 今天只在这条链上。
 
 **分块是看得境的事实，不是玄学。** `InsertPlan { Chunks, RowCount, ColumnsPerRow, RowsPerStatement, ParameterBudget, Reason, HookReplay }`，`Chunks` 是 `InsertChunk(FirstRow, RowCount, Ast, Sql)`。预算来自 `IBulkStrategy.ParameterBudget`：SQL Server `2100`（`src/FastSql.Providers.SqlServer/SqlServerBulk.cs:29`）、PG 系 `32767`（`PostgreSqlBulk.cs:13`）、MySQL 系 `65535`（`MySqlBulk.cs:41`）；**Oracle 系、虚谷、GBase 8s 三家的 `Bulk` 是 null**（`OracleProviderBase.cs:142`、`XuguProvider.cs:149`、`Gbase8sProvider.cs:163`），于是落到共用层那颗保守值 `StatementEmitter.ConservativeParameterBudget = 100`（`src/FastSql.Core/Write/StatementEmitter.cs:21`）。同一批 600 行 × 7 列：达梦切 50 块（每块 12 行），金仓一块，T-SQL 三块，MySQL 一块；（块数从来都由 `StatementEmitter.RowsPerStatement` 那一式当场算，不是注释里写死的数：500 行 × 30 列在 SQL Server 上是 8 块、每块 65 行，29 × 65 = 1 885 压在预算内——v0.38 第十四笔把 `SqlServerBulk.cs:9` 那颗注释里旧的"5 块"改到这个形状，用法册与规格都不另立数。）`tests/FastSql.Tests.Dialects/DamengDialectTests.cs:626` 那格钉的就是这组数。`plan.Reason` 会自陈"参数预算 100"与"跨块不是原子的"—— 跨块不原子意味着批量插入没有事务保证，这是要自己补的。
@@ -463,7 +503,7 @@ var report = await db.SaveChangesAsync();
 ```
 
 - 入口：`Set<T>()`（按类型缓存）、`Add`/`AddRange`/`Attach`/`Update`/`Remove`/`RemoveRange`/`Entry`/`InsertRaw`，`orm.CreateDbContext<TContext>()` 存在但走 `Activator`，AOT 场景建议自己 `new`
-- `orm.CreateSharedContext<TContext>()`（v0.37 第八笔，`FastSqlOrm.cs:223`）：**同一条 async 执行流上取到的一直是同一只会话**，用于不做 DI 注册也要跨方法传的场景（控制台、后台服务）。三条边界要用之前先知道：① 共享范围是**一条流**，不是进程也不是线程，槽位挂在 orm 实例上，所以两只 `FastSqlOrm` 在同一条流里各拿各的会话；`await` 之后的子任务里建的那只**不会回到父帧**（父帧之后自己取，取到的是另一只）；② 反过来，父帧先建、之后扇出的并发分支拿到的是**同一只**，而 `ChangeTracker` 不是线程安全的（今天没有闸门，要并发就各自开流或各自 `CreateDbContext`）；③ 会话没有 `Dispose`，"结束"就是让那条流出作用域，或者按 `ChangeTracker.Clear()` 清账。八条判据见 `tests/FastSql.Tests.Dialects/SharedContextTests.cs`，口径见设计文档 §7 末
+- `orm.CreateSharedContext<TContext>()`（v0.37 第八笔，`FastSqlOrm.cs:256`）：**同一条 async 执行流上取到的一直是同一只会话**，用于不做 DI 注册也要跨方法传的场景（控制台、后台服务）。三条边界要用之前先知道：① 共享范围是**一条流**，不是进程也不是线程，槽位挂在 orm 实例上，所以两只 `FastSqlOrm` 在同一条流里各拿各的会话；`await` 之后的子任务里建的那只**不会回到父帧**（父帧之后自己取，取到的是另一只）；② 反过来，父帧先建、之后扇出的并发分支拿到的是**同一只**，而 `ChangeTracker` 不是线程安全的（今天没有闸门，要并发就各自开流或各自 `CreateDbContext`）；③ 会话没有 `Dispose`，"结束"就是让那条流出作用域，或者按 `ChangeTracker.Clear()` 清账。八条判据见 `tests/FastSql.Tests.Dialects/SharedContextTests.cs`，口径见设计文档 §7 末
 - `DbSet<T>` 直接继承查询链（`FastSql.Core/Orchestration/DbSet.cs`）并实现 `ITrackedSet<T>`：`Local`（`LocalView<T> : IReadOnlyList<T>`，有 `Entries` 与 `Find(params object?[])`）、`Load<TProp>(navigation)` —— **后者今天抛 `FastSqlException`**（导航补载没接线）
 - `ChangeTracker`：`Count`、`HasChanges`、`Entries()`、`Entries<T>()`、`DetectChanges()`、`Clear()`；状态是 `EntityState { Detached, Added, Unmodified, Modified, Deleted }`；点名某列用 `Entry(entity).Property(nameof(X)).IsModified = true`，`AutoDetectChangesEnabled` 可关
 - 只写脏列：UPDATE 的 SET 里只有 `ModifiedMembers`；没有主键的实体**拒绝跟踪并指路**（`Attach(new AuditRow{...})` 会抛）
@@ -603,7 +643,7 @@ services.AddFastSqlOrm(DbKind.SqlServer, primary, builder =>
 });
 ```
 
-- `ClusterConfig(string Name, string Primary, IReadOnlyList<string>? Replicas = null)`（`FastSqlOrm.cs:65`）：**一个名字、一颗主库、若干从库**。加一座库就是往清单里添一条，没有 `UseReplicaOn()` 那一族方法。
+- `ClusterConfig(string Name, string Primary, IReadOnlyList<string>? Replicas = null)`（`FastSqlOrm.cs:81`）：**一个名字、一颗主库、若干从库**。加一座库就是往清单里添一条，没有 `UseReplicaOn()` 那一族方法。
 - 启动期四判据（`ConnectionSources.cs:41` 起）：具名集群里不许出现 `main`（那座由 `ConnectionString` 占着，:55）；`Primary` 空的整条不许静默留着一座没主的库（:58）；从库清单里的空串/空白**不许静默少一颗**（症状是"轮询少一台"，那种账要到容量出问题时才看得见，:95 那颗 `Sanitize`）；实体侧名字空或全空白当场抛。
 - **按请求解析连接串的那颗工厂与 `Replicas`/`Clusters` 不能同时在场**：注册期就抛（`FastSqlServiceCollectionExtensions.cs:149`），因为从库与具名集群是启动期常量，而工厂每请求换一次 `main` 的主库串——混用会让一座集群的主库与从库属于不同租户。要多租户各配一座从库，为每一座另建一颗 orm。
 
@@ -630,7 +670,7 @@ services.AddFastSqlOrm(DbKind.SqlServer, primary, builder =>
 
 DDL 按集群分组（`SchemaSyncer.cs:130` 的 `GroupByCluster`）：一次 `SyncStructureAsync` 落在几座库上、每座建哪几张，是分组的结果而不是调用方的 arrange。`_provider.CanCreateDatabase` 为真时**每座**先各自 `EnsureDatabaseExistsAsync`（:103；分片那一口 :182），脚本模式则在多于一座集群时每段加一行 `-- 集群 main：下面这几句要落在这座集群的主库上`（:72 那颗 `segmented`），因为那段文本是给 DBA 的、他要的正是"这一段贴到哪座库"。`SkippedSplitTemplates`（:287）的口径不变：整库同步遇到分表模板是跳过并记名，不是建一张带花括号的表，也不是把它路由到别处。
 
-`orm.Sources`（`FastSqlOrm.cs:148`，公开）读得出在册清单：`ClusterNames`（按 Ordinal 排过）、`Knows(cluster)`、`ReplicaCount(cluster)`、`PrimaryConnectionString(cluster)`。这是**声明侧**的读数；"库里现有哪些库"仍然反查不了（§4.3 第 10 项）。观察侧那一颗是 `CommandLogEvent.Route`（§2.5），所以"这一句实际走了哪座库、哪个角色、按哪一档"是订阅出来的事实——示例 §13 的每一行读数都这么来。
+`orm.Sources`（`FastSqlOrm.cs:165`，公开）读得出在册清单：`ClusterNames`（按 Ordinal 排过）、`Knows(cluster)`、`ReplicaCount(cluster)`、`PrimaryConnectionString(cluster)`。这是**声明侧**的读数；"库里现有哪些库"仍然反查不了（§4.3 第 9 项）。观察侧那一颗是 `CommandLogEvent.Route`（§2.5），所以"这一句实际走了哪座库、哪个角色、按哪一档"是订阅出来的事实——示例 §13 的每一行读数都这么来。
 
 **这一档现在证到了哪里**：离线 50 颗（`DataSourceTests` 33 个成员，其中三颗 `Theory` 带 20 行——决策表逐档、名字与在册清单、两侧元数据同形、上面那五格拒绝（离线钉判据、活库钉库里的内容）、DDL 分段、"点角色不改变一个字节的 SQL"）；活库 9 颗（`DataSourcePathTests`）——读写分离那 5 颗**只在 SQLite 上**（两颗文件库当主/从，从库"有表而没行"就是那份替身的落后），分库那 4 颗在两族上跑（SQL Server 是同实例两座真库 `FastSqlClusterA`/`FastSqlClusterB`，由本仓库自己的 `CanCreateDatabase` 建出来；SQLite 是两颗文件）。裁判一律走 raw 连接问库里的内容与表的归属，**从不走被测的那条路由**。示例 §13 可重跑（三座库一次建表 → 写落主库缺省读落从库 → `FromPrimary`/`FromReplica` 两读 → 会话内写后读 → 没配从库那座 → 三条拒绝 → 脚本分段）。**不证的三格写白**：复制延迟（没有承接它的 SPI 槽位，所以"从库旧着"是构造出来的替身而不是量出来的）；权重与健康检查（没有实现）；跨厂商的多集群（一个 ORM 实例一颗 provider，`ConnectionSources` 连 provider 都不持有——异构要两颗 orm，见 §4.3 第 10 项）。
 
@@ -662,13 +702,13 @@ DDL 按集群分组（`SchemaSyncer.cs:130` 的 `GroupByCluster`）：一次 `Sy
 
 8. **派生行没有列契约**：派生表的规划入口今天在了（`QueryModel.DerivedFrom` → AST 的 `SourceDerived`，用法见 §3.1 那一段），COUNT 一族发得出 `SELECT COUNT(*) FROM (SELECT … GROUP BY …) AS [t0]`，规格 §5.12 的"总数与页一致性"随之走完。缺的是另一半：外层要引用内层的某一列（分组之后再 `SUM(t0.Total)`），就得先给派生行造一份列契约 —— 派生行的列名与类型今天只活在内层那份投影计划里，没有可引用的形状，所以非 COUNT 的一族仍当场抛。那一格的替代口有两个：`WithSql`（内层自己写、外层仍按契约选列）与 §3.1 的原生 SQL 逃生舱（整句自己写）。
 
-9. **分表与分库都只有正查、没有反查**（§3.6 "库不猜"与 §3.7 "启动期给全清单"共同的另一面）：`SplitTables(范围)` 算的是"这次要问哪几张片"，而全仓库没有一颗 API 问库"这个模式里现有哪些片"；同理，`orm.Sources.ClusterNames`（`FastSqlOrm.cs:148`）读得出**声明侧**的在册清单，读不出"这座实例上现有哪些库"。所以没选片时只能抛，不能"干脆扫全片"——现存几片只有库知道；同理一座集群的从库清单要在启动期给全。跨片两阶段合并（各片取回再在内存里合）同样既不实现也未裁，所以 §3.6 那三格拒绝今天没有替代口，只有 `CountMethod.SkipTotal` 那一档绕得开。**这一格落地之前的另一半说法已经作废**：`AdoExecutor` 过去在构造时把连接串存成字段（一个实例一条串），现在那一格换成了 `ConnectionSources`（按集群名查表，`AdoExecutor.cs:85` 那颗构造器收的是它而不是字符串），所以"一个实例一条串"不再是跨库的堵点——§3.7 就是它落地之后的形状。
+9. **分表与分库都只有正查、没有反查**（§3.6 "库不猜"与 §3.7 "启动期给全清单"共同的另一面）：`SplitTables(范围)` 算的是"这次要问哪几张片"，而全仓库没有一颗 API 问库"这个模式里现有哪些片"；同理，`orm.Sources.ClusterNames`（`FastSqlOrm.cs:165`）读得出**声明侧**的在册清单，读不出"这座实例上现有哪些库"。所以没选片时只能抛，不能"干脆扫全片"——现存几片只有库知道；同理一座集群的从库清单要在启动期给全。跨片两阶段合并（各片取回再在内存里合）同样既不实现也未裁，所以 §3.6 那三格拒绝今天没有替代口，只有 `CountMethod.SkipTotal` 那一档绕得开。**这一格落地之前的另一半说法已经作废**：`AdoExecutor` 过去在构造时把连接串存成字段（一个实例一条串），现在那一格换成了 `ConnectionSources`（按集群名查表，`AdoExecutor.cs:85` 那颗构造器收的是它而不是字符串），所以"一个实例一条串"不再是跨库的堵点——§3.7 就是它落地之后的形状。
 
 10. **集群这一族今天没有的七格**（都在 `src/` 里可读，写在这里而不是等使用者撞）：
     - **原生 SQL 那一族只认 `main`**：`RawSql.Tag` 是 `new("raw", [])`（`src/FastSql.Core/Execution/RawSql.cs:14`），`ExecutionTag` 的 `Cluster` 因此走缺省值（`AdoExecutor.cs:22`）——一句字符串 SQL 里没有"哪座库"这一颗可给。而它**照样按缺省档落 `main` 的从库**（同一条 `Resolve`，没有为它开后门），所以配了从库之后 `orm.Ado` 的读会去从库，那是设计而不是 bug；要到 `report` 那座去，今天只有两条路：另建一颗以 `report` 为 `ConnectionString` 的 orm，或用链式（链上的集群是从契约算出来的）。
     - **没有权重、没有延迟探测、没有存活检查**：从库按声明顺序轮询（§3.7），一颗死掉的从库会被一直轮到自己超时为止。本家不假装会挑"最不老的那一台"，因为承接库侧延迟的 SPI 槽位不存在（第 2 项那十三颗未建模参数之外的同一类空档）。
     - **`FromPrimary()`／`FromReplica()` 只在读链上**（`IQuery.cs:141`/`:150`）：`IInsert`/`IUpdate`/`IDelete` 没有这两颗，因为写恒主库、没有第二档可点。
-    - **`Error` 与 `SlowQuery` 那两颗观察口手上没有 `Route`**（`FastSqlAop.cs:91`/`:93`：`CommandErrorEvent(Exception, string Sql, long)`、`SlowCommandEvent(DialectSql, long, long)`）：只有 `Executed` 带（:86）。所以"哪条连接慢了/炸了"今天读不出来——慢日志与错误日志要按库分组统计，得自己从 SQL 文本或 `TableNames` 反推，那是这一族唯一一处"路由只在成功路径上"的不对称。
+    - **`Error` 与 `SlowQuery` 那两颗观察口手上没有 `Route`**（`FastSqlAop.cs:97`/`:99`：`CommandErrorEvent(Exception, string Sql, long)`、`SlowCommandEvent(DialectSql, long, long)`）：只有 `Executed` 带（:92）。所以"哪条连接慢了/炸了"今天读不出来——慢日志与错误日志要按库分组统计，得自己从 SQL 文本或 `TableNames` 反推，那是这一族唯一一处"路由只在成功路径上"的不对称。
     - **一座集群一个 provider**：`ConnectionSources` 连 `IDbProvider` 都不持有（它的类注释自陈"同构多集群"），所以"主库 SQL Server、从库虚谷"那种异构拓扑要两颗 orm，而不是在 `ClusterConfig` 里多填一颗字段。
     - **实体声明与在册清单不在启动期对全量**：注册表是惰性的（实体第一次被 `Select`/`Set` 触及时才进册），所以 `[DataSource("report")]` 写错名字的症状是**第一次碰那张表**时抛 `集群 report 不在册（…）`，不是启动期。要启动期挡下来，今天能做的只有把每张实体碰一次（`_ = orm.Select<T>()`，示例 §13 就是这么写的）再读 `orm.Sources.ClusterNames`——而这一句挡得住名字对不上，挡不住"少声明了一座集群"（那种实体照样落在 `main` 上，静默且合法）。
     - **跨集群的一行由什么指认仍未裁**：`SaveChanges` 与事务那两格拒绝（§3.7 表里第三、四行）说的是"没有一条连接能同时管两座库"，而它的根因——会话的身份映射按主键记账、跨座的主键关系没有形状——与 §3.6 末尾分表/跟踪器互斥那一格是同一条，规格 §16.4 两处都留白。
@@ -683,7 +723,7 @@ DDL 按集群分组（`SchemaSyncer.cs:130` 的 `GroupByCluster`）：一次 `Sy
 | 单独 `OFFSET` 要哨兵 | 只有 `Skip` 时 MySQL 补 `18446744073709551615`、虚谷补 `2147483647`，两颗同形不同义；照别家文本抄会溢出或截断 | `golden/mysql/paging-skip-only.sql`、`golden/xugu/paging-skip-only.sql`；`src/FastSql.Providers.Xugu/FastSql.Providers.Xugu.csproj` 的 Description |
 | 自增键与 `IDENTITY` 措辞 | Oracle 血统内部都分裂：达梦写 ` IDENTITY(1,1)` 而血统基类写 ` GENERATED BY DEFAULT AS IDENTITY`；跨家要键回填要先按 §3.2 那张表确认那一档开不开 | `src/FastSql.Providers.Dameng/DamengCodeFirst.cs` 的 `IdentityClause` 覆写（`DamengProvider.cs:61` 挂点）；`src/FastSql.Providers.OracleBase/OracleCodeFirst.cs:87` |
 
-另外三条日常会撞：软删没有入口（`Delete` 是物理删除，`UpdateEngine.cs:315`）；`orm.Update(entity)`（按实体整行写回）没有，链式只有 `Set`，`DbContext.Update<T>(T)` 做的是"标成 Modified"；`DbSet.Load` 与 `Include` 的缝合还没接线，导航补载会直接抛。
+另外三条日常会撞：软删不是默认行为，要在 `orm.Behaviors.SoftDelete` 上按实体注册（§2.5，v0.38 第十七笔；没注册的那一家 `Delete` 就是物理删除，那句自陈在 `UpdateEngine.cs:433`）；`orm.Update(entity)`（按实体整行写回）没有，链式只有 `Set`，`DbContext.Update<T>(T)` 做的是"标成 Modified"；`DbSet.Load` 与 `Include` 的缝合还没接线，导航补载会直接抛。
 
 ## 5. provider 总表
 

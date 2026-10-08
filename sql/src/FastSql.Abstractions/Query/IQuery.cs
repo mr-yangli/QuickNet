@@ -81,6 +81,19 @@ public interface IQuery<T> : IAsyncEnumerable<T>
 
     IOrderedQuery<T> OrderByDescending<TKey>(Expression<Func<T, TKey>> key);
 
+    /// <summary>按<b>成员名</b>排序 —— 给"排序键是运行期才知道的一个字符串"的调用方（页面表头点了哪一列、
+    /// 导出任务挑的排序字段）。<b>它不是 <c>ORDER BY</c> 片段的入口</b>：那颗字符串只拿去<em>认列</em>
+    /// （先属性名、再列名、最后大小写不敏感的唯一命中），认出来发的是契约里那一颗列加方言引号，
+    /// 认不出当场抛。<b>没有"原样拼进去"的退路，所以这一格不需要黑名单</b>：黑名单会漏，而这一条路上
+    /// "用户文本进 SQL"这件事没有对应的代码路径 —— 从外部来的排序键写错时症状是<em>页面顺序不对</em>，
+    /// 没人会为此报修，所以它只能响，不能猜。
+    /// 方向由 <paramref name="descending"/> 给，不写在字符串里：把 <c>"Name desc"</c> 拆成"名字 + 方向"
+    /// 是调用方的口径，库不猜哪种方言的写法。多列排序在 <see cref="IOrderedQuery{T}"/> 上接
+    /// <see cref="IOrderedQuery{T}.ThenBy(string, bool)"/>。<b>只落在 arity 1 这一档</b>，
+    /// 与 <see cref="IgnoreQueryFilters"/>/<see cref="WithSql"/> 同一处已记名的缺口：联表链上
+    /// "一个名字属于哪张表"要先有别名规则，那是另一格。</summary>
+    IOrderedQuery<T> OrderBy(string memberName, bool descending = false);
+
     IQuery<T> Where(Expression<Func<T, bool>> predicate);
 
     IQuery<T> AsNoTracking();
@@ -176,6 +189,19 @@ public interface IQuery<T> : IAsyncEnumerable<T>
 
     Task<int> CountAsync(CancellationToken ct = default);
 
+    /// <summary>存在性出口，计数一族的第三颗。<b>今天发的是 <c>COUNT(*) &gt; 0</c></b>，语义对但没到最优：
+    /// <c>WHERE EXISTS(…)</c> 的反形要改投影计划，记在 P1 而不是不说 —— 因为"大表上 <c>Any</c> 慢"是可预期的成本，
+    /// 而"<c>Any</c> 返回错结果"不是。<b>它与 <see cref="CountAsync"/> 走同一条咽喉</b>，所以分组、
+    /// <c>Distinct</c>、带 <c>Skip/Take</c> 的链上判的是同一批行；那条链带页时"有没有"问的是
+    /// <em>那一页</em>有没有，不是整表（与 <c>Skip(…).Take(…).Any()</c> 同一语义）。</summary>
+    Task<bool> AnyAsync(CancellationToken ct = default);
+
+    /// <summary>计数一族的第四颗，与 <see cref="CountAsync"/> 同一个咽喉、同一档派生表口径。
+    /// <b>它不改变发出去的句子</b>：库里那一列本来就是整数，所以这一颗与 <c>Count</c> 发同一句
+    /// <c>COUNT(*)</c>，换的只是读回来的 CLR 形状（<see cref="long"/>）。存在的理由只有这一条 ——
+    /// 行数过了 <c>int</c> 的范围时，<see cref="CountAsync"/> 那一颗读不回来。</summary>
+    Task<long> LongCountAsync(CancellationToken ct = default);
+
     Task<PagedResult<T>> ToPagedAsync(int page, int size, PagedOptions? options = null, CancellationToken ct = default);
 
     IAsyncEnumerable<T> ToAsyncEnumerable(int batchSize);
@@ -185,6 +211,13 @@ public interface IQuery<T> : IAsyncEnumerable<T>
     T? FirstOrDefault();
 
     int Count();
+
+    /// <summary><see cref="AnyAsync"/> 的同步口，与 <see cref="Count"/> 同一档 <c>sync-over-async</c>
+    /// （异步可用时优先 <c>AnyAsync</c>）。</summary>
+    bool Any();
+
+    /// <summary><see cref="LongCountAsync"/> 的同步口，同一档 <c>sync-over-async</c>。</summary>
+    long LongCount();
 
     /// <summary>判断子查询结果集是否包含指定值。在表达式树内翻译为 <c>target IN (SELECT ...)</c>；
     /// 在表达式树外（运行期直接调用）退化为 <c>FirstOrDefault</c> 判空。</summary>
@@ -227,6 +260,11 @@ public interface IOrderedQuery<T> : IQuery<T>
     IOrderedQuery<T> ThenBy<TKey>(Expression<Func<T, TKey>> key);
 
     IOrderedQuery<T> ThenByDescending<TKey>(Expression<Func<T, TKey>> key);
+
+    /// <summary>字符串形态的第二颗，与 <see cref="IQuery{T}.OrderBy(string, bool)"/> 共用同一处认列
+    /// （同一份三档、同一处抛），差别只在它是<em>追加</em>到已有的序后面。列序 = 调用序，
+    /// 这一点与 lambda 那一条同一个口径。</summary>
+    IOrderedQuery<T> ThenBy(string memberName, bool descending = false);
 }
 
 /// <summary>分组链（§5.3 的 <c>ISelectGrouping&lt;TKey,TValue&gt;</c>，草案名在此落地）。

@@ -131,12 +131,16 @@ public sealed class PostgreSqlDialectTests
     }
 
     [Fact]
-    public void The_capability_mask_is_inherited_verbatim_14_bits_not_one_less_not_one_more()
+    public void The_capability_mask_is_inherited_verbatim_15_bits_not_one_less_not_one_more()
     {
         // 七路链的掩码半：leaf == 金仓叶 == 两颗分叉叶 == 瀚高叶 == 8c 叶 == 血统。金仓那 14 位里躺着 7 位 VendorDoc
         // 乐观声明，本家今天一位都不翻案也不删减——那七位的收敛是 §4 的账，不是这颗叶子顺手能结的。
         // 本册是这一本账第一次由<em>本尊</em>来交复件：前五颗派生叶的每一位出处都是"派生家的厂商文档 + 未实测"，
         // 而本尊这一本量的仍是同一件事——"未实测"不许因为它就是标准而被翻掉。
+        // 第 15 位是本笔挂上去的 Bulk_Copy，它在本家比另五颗多一档读数：<em>驱动侧</em>的形状（那颗导入器与它的
+        // 四个方法）今天在一颗一次性探针里对着厂商真包量过签名，而仓库自己的驱动解析路径一次都没跑过（下面
+        // MultiStatement 那一段照旧成立）；至于"这一句 COPY 那台库收不收"仍然一个字节都没试过——
+        // 所以本家在台账里落"仅厂商文档"那一档，落档的理由换成了"活库侧没证"而不是"驱动侧不知道有什么"。
         Assert.Equal(KingbaseLeaf.Capabilities, Provider.Capabilities);
         Assert.Equal(OpenGaussLeaf.Capabilities, Provider.Capabilities);
         Assert.Equal(GaussDbLeaf.Capabilities, Provider.Capabilities);
@@ -149,7 +153,7 @@ public sealed class PostgreSqlDialectTests
             DbCapabilities.Cte | DbCapabilities.WindowFunctions | DbCapabilities.Count_Over_Window |
             DbCapabilities.Boolean_Type | DbCapabilities.Guid_Raw16 | DbCapabilities.Schemas | DbCapabilities.Json_Type |
             DbCapabilities.CaseSensitive_Identifiers | DbCapabilities.Comment_On_Column |
-            DbCapabilities.Alter_Column_Precision | DbCapabilities.TempTable,
+            DbCapabilities.Alter_Column_Precision | DbCapabilities.TempTable | DbCapabilities.Bulk_Copy,
             Provider.Capabilities);
 
         // 两颗"这一族刻意不声明"在本家同样不翻案：MultiStatement 被 §9.4 点名（扩展协议里一次塞多条不合法），

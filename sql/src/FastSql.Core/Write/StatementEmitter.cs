@@ -32,10 +32,33 @@ static class StatementEmitter
     public static SqlWriter Writer(ISqlDialect dialect, int capacity)
         => new(new StringBuilder(capacity), [], dialect.ParameterPrefix);
 
+    /// <summary>删除那一档的发射：<b>发 <c>DELETE</c> 还是发软删改写出来的 <c>UPDATE</c>，在这一颗里分岔，
+    /// 三家（链式 <c>Delete</c>、批量 <c>DeleteRange</c>、跟踪器的摘行）共用这一份</b>。
+    /// 分岔放在发射之前而不是之后，是 <c>Behaviors.SoftDelete</c> 那条改判的落点（§10.7 约束 3）：
+    /// 形状在 AST 上换，文本仍由方言那一份 <c>Emit</c> 出，所以本家 UPDATE 的语法、参数前缀与参数登记顺序
+    /// 一处都不必重算，而 <see cref="ApplyCud"/> 与 <see cref="ApplyBinding"/> 拿到的已是改写后的那一句。
+    /// <c>soft</c> 为 null 时与这一格落地之前逐字同形（同一个 <see cref="EstimateLength"/> 的入参、同一个 writer、
+    /// 同一棵 AST），物理删除那条路径不为此多付一分钱。<paramref name="parameters"/> 是调用方对"这一句几颗参数"
+    /// 的<em>预容量估算</em>（§12.7 E 那笔账），软删那一支另外按 SET 的列数加进去，因为它每列多发一颗参数。</summary>
+    public static DialectSql EmitDelete(ISqlDialect dialect, DeleteStatement delete, UpdateStatement? soft, int identifierChars, int parameters = 0)
+    {
+        var writer = Writer(dialect,
+            EstimateLength(parameters + (soft?.Sets.Count ?? 0), identifierChars + (soft?.Sets.Sum(s => s.Column.ColumnName.Length) ?? 0)));
+
+        if (soft is { } update)
+            dialect.Emit(in update, writer);
+        else
+            dialect.Emit(in delete, writer);
+
+        return new DialectSql(writer.ToSqlString(), writer.Parameters);
+    }
+
     /// <summary><c>CudBuilding</c> 的发射点（§10.1 那一格里欠到 v0.18 的那个假槽位就此结清）：
     /// 写侧三条链与跟踪器的两个发射口都走这里，位置在<b>AST 已经变成文本之后、<see cref="ApplyBinding"/> 之前</b> ——
-    /// 这一个钩子改的是整句文本（软删改写、影子表、全局注释），要看到完整句子才有得改；
-    /// 而参数级改写必须在它之后，否则前一个钩子新加的参数没人过钩子。</summary>
+    /// 这一个钩子改的是整句文本（影子表、全局注释、调用方自己的整句改写），要看到完整句子才有得改；
+    /// 而参数级改写必须在它之后，否则前一个钩子新加的参数没人过钩子。
+    /// <b>库里那颗预置的软删不在这里</b>：它在 <see cref="EmitDelete"/> 之前换的是 AST（§10.7 约束 3 的改判），
+    /// 所以走到这一格的文本已经是改写后的那一句 —— 订阅者若在其上再改一次，回放里两条痕迹都会在册。</summary>
     /// <remarks><b>"按注册顺序串联，后一个能看到前一个的结果"是靠逐个派发实现的</b>：
     /// 一次 <c>Action</c> 多播调用会把<em>同一个</em>事件对象递给每一个订阅者，各自写 <c>Rewritten</c> 就成了
     /// 最后一个人赢，而前一个人改出来的文本第二个人根本没看见。所以这里展开调用列表，每人一份事件、

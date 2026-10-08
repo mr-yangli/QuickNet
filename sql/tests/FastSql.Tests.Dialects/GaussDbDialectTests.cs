@@ -99,10 +99,12 @@ public sealed class GaussDbDialectTests
     }
 
     [Fact]
-    public void The_capability_mask_is_inherited_verbatim_14_bits_not_one_less_not_one_more()
+    public void The_capability_mask_is_inherited_verbatim_15_bits_not_one_less_not_one_more()
     {
         // 四段链的掩码半：leaf == 邻家分叉叶 == 金仓叶 == 血统。金仓那 14 位里躺着 7 位 VendorDoc 乐观声明，
         // 本家今天一位都不翻案也不删减——那七位的收敛是 §4 的账，不是这颗叶子顺手能结的。
+        // 第 15 位是本笔挂上去的 Bulk_Copy，同一条形状在本家还要多压一层前一问（"这台库与 openGauss 是不是
+        // 同一套文本假设"之前先问"这台库的驱动里有没有导入器"），而两颗都是 TryResolve 与活库的事、不是掩码的事。
         Assert.Equal(OpenGaussLeaf.Capabilities, Provider.Capabilities);
         Assert.Equal(KingbaseLeaf.Capabilities, Provider.Capabilities);
         Assert.Equal(Family.Capabilities, Provider.Capabilities);
@@ -112,7 +114,7 @@ public sealed class GaussDbDialectTests
             DbCapabilities.Cte | DbCapabilities.WindowFunctions | DbCapabilities.Count_Over_Window |
             DbCapabilities.Boolean_Type | DbCapabilities.Guid_Raw16 | DbCapabilities.Schemas | DbCapabilities.Json_Type |
             DbCapabilities.CaseSensitive_Identifiers | DbCapabilities.Comment_On_Column |
-            DbCapabilities.Alter_Column_Precision | DbCapabilities.TempTable,
+            DbCapabilities.Alter_Column_Precision | DbCapabilities.TempTable | DbCapabilities.Bulk_Copy,
             Provider.Capabilities);
 
         // 两颗"这一族刻意不声明"在本家同样不翻案：MultiStatement 被 §9.4 点名（扩展协议里一次塞多条

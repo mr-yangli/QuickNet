@@ -115,7 +115,10 @@ public class DbContext(FastSqlOrm orm) : IAsyncDisposable, IDisposable
         return entity;
     }
 
-    /// <summary>标为删除（物理删除：§10.7 的软删改写点没接线）。<b>被标过的实例仍留在会话里</b>，
+    /// <summary>标为删除。<b>发出去的是 <c>DELETE</c> 还是置位的 <c>UPDATE</c>，由这张表上有没有注册
+    /// <c>orm.Behaviors.SoftDelete</c> 决定</b>（§10.7 约束 3 的那入口子；会话这一档与两条链式出口同一册子、同一条规则，
+    /// 所以"这张表是不是软删表"不会因为你走 <c>Remove</c> 还是走 <c>orm.Delete&lt;T&gt;()</c> 而给出两种答案）。
+    /// <b>被标过的实例仍留在会话里</b>，
     /// 直到那一句 <c>DELETE</c> 真的执行完 —— 否则 <see cref="SaveChanges"/> 之后就没有任何东西能生成那条语句了。</summary>
     public T Remove<T>(T entity) where T : class
     {
@@ -258,7 +261,7 @@ public class DbContext(FastSqlOrm orm) : IAsyncDisposable, IDisposable
         foreach (var connection in _sessionConnections)
         {
             AdoExecutor.UnbindSessionConnection(connection);
-            await connection.DisposeAsync().ConfigureAwait(false);
+            await ConnectionRelease.ReleaseAsync(connection).ConfigureAwait(false);
         }
 
         _sessionConnections.Clear();
@@ -274,7 +277,7 @@ public class DbContext(FastSqlOrm orm) : IAsyncDisposable, IDisposable
         foreach (var connection in _sessionConnections)
         {
             AdoExecutor.UnbindSessionConnection(connection);
-            connection.Dispose();
+            ConnectionRelease.Release(connection);
         }
 
         _sessionConnections.Clear();

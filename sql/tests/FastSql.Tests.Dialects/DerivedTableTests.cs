@@ -98,6 +98,41 @@ public sealed class DerivedTableTests
         Checks.Has("CreateConnection", failure.Message);
     }
 
+    // ── 计数一族的两颗新公共口（v0.38 第十九笔）────────────────────────
+
+    [Fact]
+    public void The_two_new_exits_of_the_count_family_reach_the_driver_on_the_same_throat()
+    {
+        // <c>AnyAsync</c>/<c>LongCountAsync</c> 在引擎里早就有（AggregateAsync 的 countLike 那一档），
+        // 缺的一直只是 <c>IQuery</c> 上那两颗口。接上之后走的是同一条咽喉，所以这两颗钉的是
+        // "新口没有另起一条路"：规划与编译全过，停在第 5 层没有驱动。
+        // <b>文本判据在这里落不了</b>：它们是出口不是链，<c>ToSql()</c> 拿不到"执行期那一条句子"，
+        // 所以"发出去的是 COUNT(*)"那一句由集成册在真库上判（ReadPathTests）。
+        var any = Checks.Raised<DriverNotAvailableException>(
+            () => Grouped(orm()).AnyAsync(TestContext.Current.CancellationToken).GetAwaiter().GetResult());
+
+        Checks.Has("CreateConnection", any.Message);
+
+        var longCount = Checks.Raised<DriverNotAvailableException>(
+            () => Grouped(orm()).LongCountAsync(TestContext.Current.CancellationToken).GetAwaiter().GetResult());
+
+        Checks.Has("CreateConnection", longCount.Message);
+    }
+
+    [Fact]
+    public void The_synchronous_half_of_those_two_exits_unwraps_instead_of_hiding_the_layer()
+    {
+        // 同步口走的是同一个 Blocking（GetAwaiter().GetResult()），所以异常本体原样透出来 ——
+        // 判成 DriverNotAvailable 而不是 TargetInvocationException/AggregateException 那一类包装壳。
+        var any = Checks.Raised<DriverNotAvailableException>(() => Grouped(orm()).Any());
+
+        Checks.Has("CreateConnection", any.Message);
+
+        var longCount = Checks.Raised<DriverNotAvailableException>(() => Grouped(orm()).LongCount());
+
+        Checks.Has("CreateConnection", longCount.Message);
+    }
+
     // ── 还没接住的那一档 ──────────────────────────────────────────────
 
     [Fact]

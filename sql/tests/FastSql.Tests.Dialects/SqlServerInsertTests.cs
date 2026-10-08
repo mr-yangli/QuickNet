@@ -270,6 +270,27 @@ public sealed class SqlServerInsertTests
     }
 
     [Fact]
+    public void A_client_supplied_key_is_offered_to_the_value_hook_while_an_identity_is_not()
+    {
+        var seen = new List<string>();
+        var aop = new FastSqlAop();
+
+        aop.AuditValue = e => seen.Add(e.Column.MemberName);
+
+        // 判据是「这一列是不是被书写出去的列」，不是「是不是主键」：客户端主键（Guid、雪花号那一派）在
+        // 插入这一侧就是写出去的列，而"补号"那道钩子必须碰得到它——真库实测（192.168.0.228 / MySQL 8.4.8）
+        // 在这颗列上报出 insert/Id，与这里同一份顺序。自增主键的值归库给，问了也没有落点，所以不问。
+        ormWith(aop).Insert(new SessionToken { Id = Guid.NewGuid(), Value = "abc", ExpiresAt = Moment }).ToSql();
+
+        Assert.Equal(["Id", "Value", "ExpiresAt"], seen);
+
+        seen.Clear();
+        ormWith(aop).Insert(row(1)).ToSql();
+
+        Assert.DoesNotContain("Id", seen);
+    }
+
+    [Fact]
     public void A_filled_value_writes_through_to_the_entity_the_parameter_and_the_replay()
     {
         var stamp = new DateTime(2026, 9, 21, 1, 2, 3, 456);

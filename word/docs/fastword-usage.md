@@ -1,6 +1,6 @@
 # FastWord 使用说明
 
-> 面向使用者的一份操作文档：怎么集成、怎么用、生成的 .docx 长什么样、读回来的形状是什么。FastWord 导出与读取双向都有（`Word.SaveAs` / `Word.Read`），列模型/数据源契约与 FastExcel **同构但完全独立**（互不引用），输入契约的一般形态见 `../../excel/docs/fastexcel-usage.md` §2，本库自己的特性名看 §1 与 §5。
+> 面向使用者的一份操作文档：怎么集成、怎么用、生成的 .docx 长什么样、读回来的形状是什么。FastWord 导出与读取双向都有（`Word.SaveAs` / `Word.Read`），另外能在**不改版式**的前提下填别人排好的模板（`Word.SaveAsByTemplate`，§2.5），列模型/数据源契约与 FastExcel **同构但完全独立**（互不引用），输入契约的一般形态见 `../../excel/docs/fastexcel-usage.md` §2，本库自己的特性名看 §1 与 §5。
 >
 > 本文里出现的每一个 API 名字、每一个默认值都在工作树的 `word/src/FastWord/` 下读到过真实定义。
 
@@ -11,8 +11,10 @@
 真实状态（三句，句句可核）：
 
 1. **写读双向，形状对称**。写：`Word` 静态类四颗导出方法（`SaveAs`/`SaveAsAsync`/`GetAsByteArray`）+ 三颗读取方法（`Read(path)`/`Read(Stream)`/`ReadAsync`），内部分别是 `Internal/DocxWriter.cs` 与 `Internal/DocxReader.cs`。写手先用本库 `Internal/SheetBuilder.cs` 归一数据源（与 FastExcel 同名同形、各自独立的实现），然后**逐行**把 `<w:tr>` 序列化进 `word/document.xml` —— 内存 O(列数)，与行数无关。读手用 `XmlReader` 顺着 `word/document.xml` 走，每个块自己吃掉子树，产出一个块模型（段落 + 表格）。
-2. **零依赖**。`FastWord.csproj` 既没有 `ProjectReference` 也没有 `PackageReference`——纯 BCL（`System.IO.Compression` + `System.Xml`）。中文能正常显示是因为它写的是 WordprocessingML（文本 + `w:eastAsia` 字体声明），排版交给打开它的 Word/WPS，不涉字体嵌入（那是 FastPdf 的活）。
-3. **验证证据**：`word/tests/FastWord.Tests` 14 个单测 = 5 导出（docx 结构 round-trip / 多表 / 字典源 / `[Word*]` 特性驱动列模型）+ 9 读取（**写→读原样往返**、`Query()` 字典形状、标题与 `Heading1` 样式名、空分隔段开关、`\t`/`\n`/列表标记/域代码跳过、单元格内嵌套表压平、空表头与重名表头去重、非 docx 字节报可读错、不可寻址流缓冲）。此外用本机 Word 16 COM 现造了一份真 .docx（中文标题 + 项目符号 + 软回车 + `&`/`<` + 3×3 表 + 多行格）读回来核对，见 §3.5。
+2. **第三方排好的模板也能填**（`SaveAsByTemplate` 一族六颗入口，`Internal/TemplateEngine.cs`）。它**不重建**包，而是在原 zip 上只改写 `word/document.xml` 与页眉页脚那几颗部件，`{{标签}}` 换成值、`ImagePlaceholder` 换成内联图，其余部件（`styles.xml`/`settings.xml`/`theme`/`fontTable`/`docProps`…）**逐字节照抄**——手工排版的法律文书不会因为换引擎而跳版式。详见 §2.5。
+3. **零依赖**。`FastWord.csproj` 既没有 `ProjectReference` 也没有 `PackageReference`——纯 BCL（`System.IO.Compression` + `System.Xml` + `System.Xml.Linq`）。中文能正常显示是因为它写的是 WordprocessingML（文本 + `w:eastAsia` 字体声明），排版交给打开它的 Word/WPS，不涉字体嵌入（那是 FastPdf 的活）。模板渲染器也一样：图片尺寸靠自己的魔数嗅探（PNG IHDR / GIF LSD / BMP DIB / JPEG SOFn 走表），不引 System.Drawing 或 SkiaSharp。
+4. **验证证据**：`word/tests/FastWord.Tests` 21 个单测 = 5 导出（docx 结构 round-trip / 多表 / 字典源 / `[Word*]` 特性驱动列模型）+ 10 读取（**写→读原样往返**、`Query()` 字典形状、标题与 `Heading1` 样式名、空分隔段开关、`\t`/`\n`/列表标记/域代码跳过、单元格内嵌套表压平、空表头与重名表头去重、非 docx 字节报可读错、不可寻址流缓冲）+ 6 模板（断在 run 里的标签缝合 + 未知标签留原样 / POCO 源 / 页脚图片 DrawingML / 已有 media 与 rId 的避让 / 不给尺寸时用图片原生尺寸 / 路径重载落盘往返）。此外拿一份**真实在用的法律文书模板**（24.5 KB、三个页眉三个页脚、标签被 Word 自己拆成 `{{` + `SituationNotify` + `}}` 三段 run）跑过 50 项验收：正文 16 颗标签 + 页脚 4 处签名图 + 4 个 `{{Date}}`，产物用 `DocumentFormat.OpenXml` 3.5.1 反向打开、按 `r:embed` 关系图取回的字节与签名原图逐颗对齐，可见文本与老引擎 MiniWord 0.9.1 的产物完全一致。见 §2.5 末段。
+5. 另外用本机 Word 16 COM 现造了一份真 .docx（中文标题 + 项目符号 + 软回车 + `&`/`<` + 3×3 表 + 多行格）读回来核对读取模型，见 §3.5。
 
 ## 1. 怎么集成
 
@@ -90,6 +92,58 @@ var rows = doc.Tables.First().Query();          // 与 FastExcel 同形状：IDi
 
 读不动的包只有一种异常：缺 `PK` 头、缺 `word/document.xml`、zip 半截（central directory 坏）、`document.xml` 的 XML 不完整，全部收敛成 `InvalidDataException`，消息是人能读的一句英文（真实原因在 `InnerException`）——调用方 catch 这一个类型就够，不必认识 `ZipArchiveException`/`XmlException`。
 
+### 2.5 模板渲染入口（`SaveAsByTemplate`）
+
+给一份**别人排好的 .docx**（正文里写 `{{姓名}}`、`{{日期}}`、签字位写 `{{签名}}`）填值出稿，不动版式：
+
+| 方法 | 签名要点 |
+| --- | --- |
+| `Word.SaveAsByTemplate(string outputPath, string templatePath, object value, TemplateOptions? = null)` | 磁盘进 / 磁盘出；输出父目录自动建，已存在则覆盖 |
+| `Word.SaveAsByTemplate(Stream output, string templatePath, object value, TemplateOptions? = null)` | 模板来自文件，产物写进流 |
+| `Word.SaveAsByTemplate(Stream output, Stream template, object value, TemplateOptions? = null)` | 模板也是流；**可不可寻址都行**（内部先整段缓冲，zip 需要回读中央目录） |
+| `Word.SaveAsByTemplateAsync(string outputPath, string templatePath, object value, TemplateOptions? = null, CancellationToken = default)` | `Task.Run` 包同步版 |
+| `Word.SaveAsByTemplateAsync(Stream output, string templatePath, object value, TemplateOptions? = null, CancellationToken = default)` | ASP.NET 下发 Word 要的就是这颗 |
+| `Word.GetAsByteArrayByTemplate(string templatePath, object value, TemplateOptions? = null)` | 内存产物 |
+
+`value` 三选一：`IDictionary<string, object>`（含 `ExpandoObject`）、任意非泛型 `IDictionary`、或任何对象的 **public 实例属性**（POCO 直接扔进来即可，键名 = 属性名）。
+
+```csharp
+using FastWord;
+
+var values = new Dictionary<string, object>
+{
+    ["姓名"] = "张萌",
+    ["日期"] = new DateTime(2026, 10, 7, 9, 0, 0),
+    ["签名"] = ImagePlaceholder.FromFile("sign.png", width: 70, height: 30),
+};
+await Word.SaveAsByTemplateAsync(ResponseStream, "Templates/SceneTranscript.docx", values);
+```
+
+**改写范围**：只碰 `word/document.xml` 和 `word/(header|footer)\d*.xml` 这几颗部件，其余部件（`styles.xml`、`settings.xml`、`theme`、`fontTable`、`webSettings`、`endnotes`、`footnotes`、`docProps/*`、`_rels/.rels`、`word/_rels/document.xml.rels`）**逐字节照抄**。真机核对：一份 24.5 KB 的真实法律文书模板填完后，17 颗未碰部件与模板完全一致，包内只多出 4 个 `word/media/*` 和 1 个 `word/_rels/footer2.xml.rels`。
+
+**标签匹配粒度是「一段之内」**（与 MiniWord 同）：引擎把一段（`w:p`）里所有 `w:t` 拼成整串再找 `{{…}}`，所以 Word 自己把标签拆成 `{{` + `SituationNotify` + `}}` 三个 run、中间还插 `w:proofErr` 的常见情况能正常缝合；**跨段落的标签不认**。替换值落回它所属的那颗 `w:t`，并补 `xml:space="preserve"`，前后文本各归原位；该 run 的 `w:rPr`（字体、字号、下划线）原样保留，所以填进去的字接着模板那条下划线走。
+
+**未提供的键保留原样**：字典里没有 `Phone` 时，`{{Phone}}` 三个字面内容照旧出现在成品里（宁可让人看见，也不静默吞掉法律文书的一段正文）。这与 MiniWord 一致。
+
+**值转文本**：`null`/`DBNull` → 空串；`string` 原样；`DateTime`/`DateTimeOffset` 用 `TemplateOptions.DateTimeFormat`（默认 `yyyy-MM-dd HH:mm:ss`）、`DateOnly` 用 `DateOnlyFormat`（默认 `yyyy-MM-dd`）；其余 `IFormattable` 按 `CultureInfo.CurrentCulture`；兜底 `ToString()`。要 `2026年10月07日` 这种中文日期就在业务层拼好字符串再传。
+
+| 字段 | 默认 | 含义 |
+| --- | --- | --- |
+| `TemplateOptions.DateTimeFormat` | `"yyyy-MM-dd HH:mm:ss"` | `DateTime`/`DateTimeOffset` 值转文本的格式串 |
+| `TemplateOptions.DateOnlyFormat` | `"yyyy-MM-dd"` | `DateOnly` 值转文本的格式串 |
+
+**图片占位**：值给 `ImagePlaceholder`（`WordImage` + 可选 `Width`/`Height`，单位像素；也能由 `byte[]` 隐式转）就在原标签位置发一颗 `wp:inline` 内联图，`w:drawing` 紧跟所属 run，尺寸按 `px × 9525` EMU（96 dpi）。不给尺寸就用图片**原生像素尺寸**（PNG IHDR / GIF LSD / BMP DIB / JPEG SOFn 走表嗅出来，零依赖）。
+
+打包动作三件，全部有避让：
+
+- 媒体部件写在 `word/media/imageN.{png|jpeg|gif|bmp}`，`N` 从模板里已有的最大号往后数（不覆盖模板自带图）；
+- 关系号从该部件 `.rels` 里已有的最大 `rId` 往后数，`.rels` 不存在就新建；`wp:docPr/@id` 同样从文档内已有最大 id 往后数（同包内 id 撞车 Word 会报文件损坏）；
+- `[Content_Types].xml` 只补缺的 `<Default Extension="png|jpeg|…"/>`，已有的 `rels`/`xml` 声明照旧。
+
+同一张图（字节完全相同）填几个位置，媒体部件只存一份、多颗关系指向它；`ContentHash`（长度 + 首 64 字节 + 末字节）命中后仍做整串比对，所以不会因散列撞车而错绑成另一张签名。
+
+**验收证据**（真实模板，非合成）：`{{Date}}` 在同一页脚出现四次全部填上、正文 16 颗标签一处不剩、每个 `r:embed` 经 `DocumentFormat.OpenXml` 的关系图取回的字节 = 对应签名的原字节（四张尺寸各不相同，绑定顺序可见）；产物的可见文本与老引擎 MiniWord 0.9.1 对同一模板同一份值的产物逐字相同。差异只在两处，且都是改好的方向：MiniWord 把媒体放在包根 `/media/imageN.jpg`、扩展名由调用方声明（上传的 PNG 会被叫成 `.jpg`），FastWord 用 Word 惯用的 `word/media/imageN.png|jpeg` 并按魔数判定。
+
 ## 3. 版式与读取模型（写出去长什么样、读回来是什么形状）
 
 ### 3.1 包结构（固定四+一个部件，页脚可选加一）
@@ -164,7 +218,17 @@ A4 纵向、1 英寸页边距：`pgSz w=11906 h=16838`、`pgMar 1440`，可用�
 
 导出侧的边界：
 
-- **不导出图片**：FastWord 列模型里没有图片概念——`byte[]` 单元格按 base64 文本渲染。图片导出到 docx 是 v2 事项（读取侧同样只会拿到文字，图片没有 alt 之类可依赖）。
+- **表格导出不内嵌图片**：`SaveAs` 那条线没有图片概念——`byte[]` 单元格按 base64 文本渲染。图片入口在**模板侧**（§2.5 的 `ImagePlaceholder`），且只嗅 PNG/JPEG/GIF/BMP 四种魔数，EMF/WMF/TIFF 会退化成 `image/bin` + `application/octet-stream`（Word 多半不显示）。读取侧同样只会拿到文字，图片没有 alt 之类可依赖。
+
+模板渲染侧（`SaveAsByTemplate`）的边界：
+
+- **只有替换，没有控制流**：没有行循环、条件段、区块复制那套语法（MiniWord 的 `MiniWordForeach` 这里也没重做）。要按数据行数长出来的表格，用 §2.1 的 `SaveAs` 现排，或把模板本身排够行数再逐行填标量。
+- **标签不跨段落**：`{{` 与 `}}` 落在两个 `w:p` 里时两侧都原样留着。真实 Word 只会把标签拆进同一句的多个 run（引擎能缝），跨段的情况在手工模板里极罕见。
+- **键名精确匹配**：`{{Name}}` 只认 `Name`，大小写不同或带空格之外的修饰都不填（`{{ Name }}` 两侧空格会被吃掉，等价于 `{{Name}}`）。
+- **未知键留字面量**：见 §2.5，别指望它静默变空。
+- **只认 document + header/footer 五颗部件**：批注、脚注/尾注正文里的 `{{标签}}` 不填（法律文书模板没有这种用法，需要时按 §2.5 的 `FillableRx` 扩）。
+- **幂等**：产物里没有标签了，再拿它当模板渲染一遍是空操作，不会重复追加媒体部件。
+- **图片只有 inline（内联）**，不做 `wp:anchor` 浮于文字上方；签字位靠下划线段落 + 内联图排出来，与 MiniWord 的默认 `Inline` 行为一致。
 - **不做分页续表头**：分页交给 Word 引擎；跨页重复表头是 FastPdf 的能力，Word 侧没有（表头行也没标 `tblHeader`，跨页时不重绘）。页脚已有（`FooterText`），页眉没有。
 - **底纹/边框是固定档**：`tblBorders` 六向 `single sz=4`、`HeaderFill` 单色，没有逐格样式或斑马条。
 - **样式集很薄**：只发 docDefaults + 三颗段落样式，正文无字符级样式表；要精细排版得自己后处理。
@@ -175,8 +239,11 @@ A4 纵向、1 英寸页边距：`pgSz w=11906 h=16838`、`pgMar 1440`，可用�
 | --- | --- |
 | 入口（写表） | `Word.SaveAs`（path/stream） · `Word.SaveAsAsync` · `Word.GetAsByteArray` |
 | 入口（写散文） | `Word.SaveLines`（path/stream） · `Word.GetLinesAsByteArray` |
+| 入口（填模板） | `Word.SaveAsByTemplate`（out-path×模板路径 / out-stream×模板路径 / out-stream×模板流） · `Word.SaveAsByTemplateAsync`（路径版 + 流版） · `Word.GetAsByteArrayByTemplate`（§2.5） |
 | 入口（读） | `Word.Read`（path/stream） · `Word.ReadAsync` |
 | 选项（写） | `WordOptions`（`Title`/`PrintHeader`/`HeaderFill`/`FontSizePt`/`BorderColor`/`FooterText`） |
+| 选项（模板） | `TemplateOptions`（`DateTimeFormat`/`DateOnlyFormat`） |
+| 模板图片 | `ImagePlaceholder`（`Image`/`Width`/`Height`/`FromFile`，`byte[]`·`WordImage` 可隐式转） · `WordImage`（`Data`/`Format`/`PixelWidth`/`PixelHeight`/`Extension`/`ContentType`/`FromFile(Async)`） · `WordImageFormat`（`Png`/`Jpeg`/`Gif`/`Bmp`/`Unknown`） |
 | 选项（读） | `WordReadOptions`（`IncludeEmptyParagraphs`） |
 | 读取模型 | `WordDocument`（`Blocks`/`Paragraphs`/`Tables`） · `WordBlock`+`WordBlockKind` · `WordParagraph`（`Text`/`StyleName`/`IsListItem`） · `WordTable`（`Rows`/`ColumnCount`/`Query`） |
 | 本库自带列模型 | 数据源五选一 · `WordSheet`（多表） · `WordColumn`/`WordFormat`/`WordIgnore`/`WordColumnWidth` 特性（与 FastExcel 的 `[Excel*]` 同形，但是独立类型、互不相认） |

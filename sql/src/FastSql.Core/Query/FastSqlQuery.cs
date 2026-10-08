@@ -64,6 +64,11 @@ public class FastSqlQuery<T> : IQuery<T>, IEngineCarrier
     public IOrderedQuery<T> OrderByDescending<TKey>(Expression<Func<T, TKey>> key)
         => new FastSqlOrderedQuery<T>(Engine.Order(key, descending: true, append: false));
 
+    /// <summary>成员名那一颗同样是<em>只转发</em>：认列、抛与叠加都在 <see cref="QueryEngine"/> 里，
+    /// 这一层不养第二份口径（§5.5）。</summary>
+    public IOrderedQuery<T> OrderBy(string memberName, bool descending = false)
+        => new FastSqlOrderedQuery<T>(Engine.Order(memberName, descending, append: false));
+
     public IQuery<T> Skip(int count) => new FastSqlQuery<T>(Engine.Skip(count));
 
     public IQuery<T> Take(int count) => new FastSqlQuery<T>(Engine.Take(count));
@@ -132,6 +137,10 @@ public class FastSqlQuery<T> : IQuery<T>, IEngineCarrier
 
     public Task<int> CountAsync(CancellationToken ct = default) => Engine.CountAsync(ct);
 
+    public Task<bool> AnyAsync(CancellationToken ct = default) => Engine.AnyAsync(ct);
+
+    public Task<long> LongCountAsync(CancellationToken ct = default) => Engine.LongCountAsync(ct);
+
     public Task<PagedResult<T>> ToPagedAsync(int page, int size, PagedOptions? options = null, CancellationToken ct = default)
         => Engine.PagedAsync<T>(page, size, options, ct);
 
@@ -145,6 +154,10 @@ public class FastSqlQuery<T> : IQuery<T>, IEngineCarrier
     public T? FirstOrDefault() => Blocking(() => Engine.FirstAsync<T>(default));
 
     public int Count() => Blocking(() => Engine.CountAsync(default));
+
+    public bool Any() => Blocking(() => Engine.AnyAsync(default));
+
+    public long LongCount() => Blocking(() => Engine.LongCountAsync(default));
 
     public bool Contains(T value)
     {
@@ -185,6 +198,9 @@ sealed class FastSqlOrderedQuery<T>(QueryEngine engine) : FastSqlQuery<T>(engine
 
     public IOrderedQuery<T> ThenByDescending<TKey>(Expression<Func<T, TKey>> key)
         => new FastSqlOrderedQuery<T>(Engine.Order(key, descending: true, append: true));
+
+    public IOrderedQuery<T> ThenBy(string memberName, bool descending = false)
+        => new FastSqlOrderedQuery<T>(Engine.Order(memberName, descending, append: true));
 }
 
 /// <summary>分组链（§5.3）。<b>这一层没有任何物化出口</b>，这是刻意的：分组而未选的形状（整行列 +

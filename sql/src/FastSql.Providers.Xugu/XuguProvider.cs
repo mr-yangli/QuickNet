@@ -67,7 +67,11 @@ namespace FastSql.Providers.Xugu;
 /// <item><c>Upsert_MergeInto</c>：<c>MERGE INTO … USING … ON</c> 在这一家确实有语法（两份产物都发过它），
 /// 但 <c>src/</c> 里一行都没发过 —— 与 <c>MySqlProviderBase</c> 那颗 <c>Upsert_OnDuplicate</c>、
 /// Oracle 那一档那颗 <c>Upsert_MergeInto</c> 同一条判据。<b>而这一家是三颗里离"能接"最近的一颗</b>：
-/// <see cref="XuguDialect.EmitJoinedSources"/> 那句抛里点名了它，缺的是 §12.5 那个形状能不能带进它那一子句。</item>
+/// <see cref="XuguDialect.EmitJoinedSources"/> 那句抛里点名了它，缺的是 §12.5 那个形状能不能带进它那一子句。
+/// <b>【本笔的一句】那句"同一条判据"今天对三颗中的两颗仍然成立、对 MySQL 那一颗换了理由</b>：
+/// 那一颗的句子从今天起发得出去（<c>MySqlBulk.UpsertClause</c>），而位仍不声明——换成"走过了而位没有读者"
+/// 那一条（见 <c>MySqlProviderBase</c> 类注释 <c>Upsert_OnDuplicate</c> 那一项的改判段，与本家
+/// <c>MultiStatement</c> 那一条同形）。本家这一颗两半边都没动：既没发过句子，也没有读者。</item>
 /// <item><c>Json_Type</c>：<b>本条在交账前改判过一次</b>。上一版这里写的是"这一族有没有 JSON 型【无出处】"，
 /// 而本次读到的类型页里<em>有</em> JSON 那一档 —— 所以理由换成"没有发射口"：<c>Json&lt;T&gt;</c> 在
 /// <c>src/</c> 里仍然是 0 处，而 §4 那句判据量的是代码今天走不走得到。<b>这一处改判本身记 §13.5</b>，
@@ -146,6 +150,11 @@ public sealed class XuguProvider : IDbProvider
 
     /// <summary>没有批量策略（类注释倒数第三条）。这一格与 <c>OracleProviderBase</c> 同一档而不同因：
     /// 那一族的兜底是"驱动有数组绑定而这一族没有"，这一族是"两档出处都给不出一个可报的颗数"。</summary>
+    /// <remarks><b>【本笔表态】</b>批量阶梯铺开时这一家两档都不接：<b>L1</b> —— 虚谷的装载面本次
+    /// 一页手册都没读到（比"读到了但口径不合"还薄一层），而这一族的驱动程序集虽然解析成功过、
+    /// provider 文本却从没在它那儿跑过（§13.5 那句前后两段在本家原文就写着）；<b>Merged</b> ——
+    /// 默认 false，本家没有任何一条多语句批的现场可对。重开条件与 Oracle 那一段同一条尺：先有能读出
+    /// "行数口径"的装载 API，再谈接线。</remarks>
     public IBulkStrategy? Bulk => null;
 
     /// <summary>虚谷的建库模型与接口默认值不同（需要厂商工具或 DBA 操作），显式交 false。</summary>

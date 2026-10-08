@@ -92,7 +92,14 @@ namespace FastSql.Providers.Sqlite;
 /// <c>.OnConflict(</c> 是<em>零处</em>（<c>OnConflict</c> 一词全仓库三处命中，全在注释里）。
 /// §4 判据量的是代码走不走得到，所以不声明；它与 <c>MySqlProviderBase</c> 那颗 <c>Upsert_OnDuplicate</c>、
 /// Oracle 那一档那颗 <c>Upsert_MergeInto</c> 是同一条判据的第三个实例，只是这一家连"语法形状"都与
-/// PG 血统那一支同形，最容易让人误以为已经接上了。</item>
+/// PG 血统那一支同形，最容易让人误以为已经接上了。
+/// <b>【本笔的两句】上面那两句各有一处从今天起要改读</b>：① "同一条判据"对 MySQL 那一颗换了理由
+/// （句子发得出去了而位没有读者，见 <c>MySqlProviderBase</c> 类注释那一项的改判段）；
+/// ② <c>ON CONFLICT</c> 那一个大写形状今天在本仓库<em>有了</em>发射口——在 PG 血统那一家
+/// （<c>PostgreSqlBulk.UpsertClause</c>），本家仍然零处。于是"三处命中，全在注释里"那一句从今天起
+/// 只对<em>本家</em>成立，跨家读要按"PG 血统有一处文本发射、其余各家仍只在注释里"。
+/// 本家要接这一档缺的还是那一颗<em>链上的入口</em>：<c>UpsertClause</c> 那颗槽本家没覆写，
+/// 而它与 SQLite 那一形逐字同形【实测·第 2 轮 40 ∶ 41 ∶ 42】——接一家不必改其余各家，那是下一笔的一行。</item>
 /// <item><c>Comment_On_Column</c>：<c>COMMENT</c> 这个词在本族是语法错【实测·F5 ∶ 2828】，而这一族
 /// <em>没有任何</em>列注释的落处（<c>sqlite_master</c> 回显的是引擎规范化的 DDL 文本【实测·3013】），
 /// 所以 <see cref="SqliteCodeFirst.TryEmitColumnComment"/> 是本文件唯一一颗交 <see langword="false"/>
@@ -217,6 +224,12 @@ public sealed class SqliteProvider : IDbProvider
 
     /// <summary>没有批量策略（类注释倒数第二条）。这一格与 <c>XuguProvider</c>、<c>Gbase8sProvider</c>
     /// 同一档而同因：那颗驱动给不出一个可报的高速通道，也给不出一个可报的参数预算。</summary>
+    /// <remarks><b>【本笔表态】</b>批量阶梯铺开时这一家两档都不接，而它比另两 null 家多一格"看着近、实际远"：
+    /// <b>L1</b> —— 这一族没有装载类形状的 API（它的高速面是"一条事务包住一批语句"，那是执行编排不是装载通道，
+    /// §12.1 的阶梯里根本没有那一层），预算那颗照旧报不出；<b>Merged</b> —— 默认 false，尽管这一家的驱动
+    /// <em>看起来</em>收得下分号批（活实例在场、集成册跑绿过），"看起来收得下"与"仓库发出去的一条批被它逐句执行、
+    /// 行数按句回报"之间差的是一场没跑过的读数 —— 与 MySQL 那颗 true 的对照正落在这里：那一颗有 postRead
+    /// 回填支每轮绿背书，本家这一格今天只有推断。重开条件一句话：集成册补一场多语句批，读数当场改判。</remarks>
     public IBulkStrategy? Bulk => null;
 
     /// <summary>SQLite 打开连接即创建文件，所以支持自动建库。</summary>

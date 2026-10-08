@@ -17,8 +17,24 @@ namespace FastSql.Tests.Dialects;
 /// 各自的注释上，不在这里重复），其余三位各有一条不翻的理由。金仓、达梦、MySQL 三族这一句<em>仍然一字不改</em>，
 /// 而这句话现在是有钉子的：<c>PinnedLive</c> 那三颗 0 与 <c>§13.5</c> 那本活库见证账要对得上。</para>
 ///
+/// <para><b>【v0.40 批量写侧那一轮 —— 原文照抄在前（上面两段），改判在后】上面那句「金仓、达梦、MySQL 三族这一句
+/// 仍然一字不改」里的 MySQL 那一半今天作废，而它不是在 v0.37 第九笔（那台 MySQL 实例到场、集成册整本跑绿）作废的，
+/// 是在本笔作废的：那一场动的是"有没有活库"，本笔动的是"这一本台账里有没有一位的出处落在那台库上"。
+/// <c>mysql</c> 那本的 <c>Bulk_Copy</c> 现在带着集成册的日志名站着 <c>Live</c>，于是「<c>PinnedLive</c> 那三颗 0」
+/// 今天只剩两颗 0（金仓 ∶ 达梦），第三颗数从 0 变成 1。同向的还有 PG 本尊那一本（<c>postgresql</c>，
+/// 第十三本）：它那一位也从 0 变 1。两句合起来的读数——十五本台账里 <c>PinnedLive</c> 非零的从两本变四本
+/// （虚谷四位 ∶ SQLite 三颗 ∶ 本笔新添的两本各一颗），而"三族一字不改"那句的范围缩成两族。
+/// 上面那段"四系今天一句 SQL 都没跑过"与它下面那句"其余三位各有一条不翻的理由"都按本笔改读数量词，
+/// 判据一字不动：翻档要的是"由本 provider 产出的那一条被那台库执行过"，本笔给 MySQL 与 PG 各交出了那一条。</para>
+///
 /// <para><b>一家一份，而不是几家共用一份</b>：这四份名册今天差得很远 —— 14 位对 6 位对 5 位对 7 位，而"仅厂商文档"
-/// 那一档的位数是 7 对 0 对 0 对 0。共用一份台账会把这两处形状一起抹平，而它们正是 §4 那笔"两族能力位不一致是待收敛的账"
+/// 那一档的位数是 7 对 0 对 0 对 0。<b>【本笔改判】这两行读数一起动，而动的方向是同一格新形状</b>：PG 那本
+/// 14 → 15（"仅厂商文档"7 → 8），MySQL 那本 5 → 6（0 → 1），0 那一侧此刻站着达梦／神通／Oracle／虚谷／
+/// GBase 8s 五本。新添的那一位不是又一颗文档乐观声明，是 <c>Bulk_Copy</c> ——<b>这本账第一颗没有 SQL 文本可指
+/// 的位</b>：代码接的是装载通道那段反射装配，它按 Live 的判据（"由本 provider 产出的那一条被那台库执行过"）
+/// 还差集成册那一步，所以落"仅厂商文档"那一档，而落档理由与老七颗异因（那七颗是"文档说有而代码没接"，
+/// 这两颗是"代码接了而库没证"）。"一家一份"这条判据本身不动：它管的仍是"同掩码也不合并见证"。
+/// 共用一份台账会把这两处形状一起抹平，而它们正是 §4 那笔"两族能力位不一致是待收敛的账"
 /// 的全部内容。所以这里逐家一份，四家共有的那三位另由
 /// <see cref="The_offline_ledgers_declare_only_the_bits_they_really_have_in_common"/> 对读一次。
 /// <b>v0.35 第三笔把"一家一份"读成了"一本 provider 一份"</b>：第五份（tidb）是 MySQL 血统的第二本，
@@ -132,6 +148,12 @@ public sealed class CapabilityLedgerTests
         /// 而本家那三颗里最晚翻的那一颗（<c>MultiStatement</c>）是<b>这本账第一颗落在 DDL 侧的 Live</b>：
         /// 它的见证不是日志，是事后翻库翻出来的一颗索引。
         /// 十五本里今天两本有（虚谷四位 ∶ SQLite 三颗），其余十三本一位都没有。</summary>
+        /// <remarks><b>【v0.40 批量写侧那一轮 —— 原文照抄在前（上面三行），改判在后】上面那句"两本有 ∶ 十三本一位都没有"
+        /// 今天是四本有、十一本没有</b>：新增的是 <c>mysql</c> 与 <c>postgresql</c> 那本各自的一位 <c>Bulk_Copy</c>，
+        /// 各自的逐条出处写在这两行的见证串上。上面第一句那份在场实例清单同步添两支（v0.37 第九笔到场的那台
+        /// MySQL 8.4.8 ∶ 同一笔到的那座 PostgreSQL 14），而那一句"由本 provider 产出的那一条被那台库执行过"
+        /// 在本笔正是第一次由<em>装载通道</em>而不是由 SQL 文本满足：那一条不是本仓库拼出的文本，
+        /// 是本仓库经反射装配把行交进去、由那一家的驱动发出去的装载请求。判据不动，动的是一句判据第一次被哪种产物满足。</remarks>
         Live,
 
         /// <summary>产出的文本被黄金样本或本套件的断言钉住；库里接不接是另一件事。</summary>
@@ -158,7 +180,7 @@ public sealed class CapabilityLedgerTests
 
     static readonly Ledger[] Ledgers =
     [
-        new("kingbase", static () => Kingbase.Provider(SqlServer.NoDriverFactory.Instance), 14, 7, 0,
+        new("kingbase", static () => Kingbase.Provider(SqlServer.NoDriverFactory.Instance), 15, 7, 0,
         [
             new(DbCapabilities.Paging_LimitOffset, Provenance.OfflineText, "golden/kingbase/paging-order-skip-take.sql"),
             new(DbCapabilities.Returning, Provenance.OfflineText, "golden/kingbase/insert-with-keys.sql"),
@@ -172,13 +194,24 @@ public sealed class CapabilityLedgerTests
             new(DbCapabilities.Guid_Raw16, Provenance.OfflineText, "本文件那条 UUID 断言"),
 
             // 下面七位今天没有任何消费方或样本：声明它们的是 §9.1/§9.4 的那几家共有说法。
-            new(DbCapabilities.Upsert_OnConflict, Provenance.VendorDoc, "无消费方：UPSERT 那一档还没接线（§12.3 的 L1 退路）"),
+            new(DbCapabilities.Upsert_OnConflict, Provenance.VendorDoc, "位无读者：写侧的一句 upsert 档从本笔起按 IBulkStrategy.UpsertClause 那颗槽分派（槽在血统基类已接，本家一台活库都没有——位与槽是两面，见 MySqlProviderBase 类注释 MultiStatement 那一条），而这一位今天仍然没有消费者"),
             new(DbCapabilities.Cte, Provenance.VendorDoc, "无消费方：共用层没有 WITH 的发射口"),
             new(DbCapabilities.WindowFunctions, Provenance.VendorDoc, "无消费方：窗口函数没有链式入口"),
             new(DbCapabilities.Count_Over_Window, Provenance.VendorDoc, "无消费方：同上"),
             new(DbCapabilities.Boolean_Type, Provenance.VendorDoc, "类型表 bool→BOOLEAN，但样例模型里没有布尔列，故无样本"),
             new(DbCapabilities.Json_Type, Provenance.VendorDoc, "读侧类型表认 json/jsonb（→string），写侧没有 CLR→JSON 的映射，故无样本"),
             new(DbCapabilities.TempTable, Provenance.VendorDoc, "无消费方：Tp 临时主键走的是真实表而不是临时表（§8.2）"),
+
+            // 第 15 位是本笔挂上血统基类的 Bulk_Copy，它与上面七颗同档而<em>异因</em>：那七颗是"文档说有而代码没接"，
+            // 本颗是"代码接了（<c>PostgreSqlBulk.ResolveCopyChannel</c> 那颗反射口）而装载语句一次都没发出去过"——
+            // 本家与另五本一样一台活库都没有，所以它翻不了档。本家那颗行级点名（SERIAL vs IDENTITY）问的是内核
+            // 代数，与本位无关：这一位问的是驱动。
+            //
+            // <b>【v0.40 批量写侧那一轮 —— 原文照抄在前（上面那段），改判只改其中一处数量】上面那句「本家与另五本一样
+            // 一台活库都没有」里的"五本"今天少成四本：PG 本尊（下面的第十三本）从 v0.37 第九笔起有那台授权实例，
+            // 而它这一位本笔已翻 <c>Live</c>。金仓自己那半句照旧成立——本家一台活库都没有，所以它翻不了档；
+            // 能与它并排的是 opengauss／gaussdb／highgo／gbase8c 那四本。这句的数量词按本笔改读，判据一字不动。</b>
+            new(DbCapabilities.Bulk_Copy, Provenance.VendorDoc, "无活库：装载通道已接线（血统那颗反射口），COPY … FROM STDIN 那一句一次都没发出去过"),
         ]),
 
         // PG 血统的第二本台账（v0.36 第二笔，openGauss 叶子到场）。"一本 provider 一份"的第三次复用，
@@ -191,7 +224,7 @@ public sealed class CapabilityLedgerTests
         // 本家比 tidb 那本多一颗<em>点名过的</em>【推断】前件：血统发的 IDENTITY 那一形在 PG 9.2 内核上
         // 可能整个不认（PostgreSqlCodeFirst 类注释自陈），所以 DDL 段那三位的 OfflineText 在本家读作
         // "若这一家认得血统今天发的形状则文本同形"——真库到场第一问记 §14 与本家类注释。
-        new("opengauss", static () => OpenGauss.Provider(SqlServer.NoDriverFactory.Instance), 14, 7, 0,
+        new("opengauss", static () => OpenGauss.Provider(SqlServer.NoDriverFactory.Instance), 15, 7, 0,
         [
             new(DbCapabilities.Paging_LimitOffset, Provenance.OfflineText, "OpenGaussDialectTests 那条 LIMIT/OFFSET 尾巴与只写 OFFSET 不补哨兵、与金仓家逐字相等的断言（同形交对拍，故无基线）"),
             new(DbCapabilities.Returning, Provenance.OfflineText, "OpenGaussDialectTests 键回读那条句尾 RETURNING 与金仓家逐字相等的断言（与 tidb/oceanbase 的\"语句后另发一句\"正对面）"),
@@ -203,13 +236,18 @@ public sealed class CapabilityLedgerTests
 
             // 下面七位与金仓那本同一判据、同一批理由：这一档的掩码是从 §4 那张表攒来的乐观声明，
             // openGauss 继承的是同一份，本家一位不翻案、不删减（收敛是 §4 的账）。
-            new(DbCapabilities.Upsert_OnConflict, Provenance.VendorDoc, "无消费方：UPSERT 那一档还没接线（§12.3 的 L1 退路）"),
+            new(DbCapabilities.Upsert_OnConflict, Provenance.VendorDoc, "位无读者：写侧的一句 upsert 档从本笔起按 IBulkStrategy.UpsertClause 那颗槽分派（槽在血统基类已接，本家一台活库都没有——位与槽是两面，见 MySqlProviderBase 类注释 MultiStatement 那一条），而这一位今天仍然没有消费者"),
             new(DbCapabilities.Cte, Provenance.VendorDoc, "无消费方：共用层没有 WITH 的发射口"),
             new(DbCapabilities.WindowFunctions, Provenance.VendorDoc, "无消费方：窗口函数没有链式入口"),
             new(DbCapabilities.Count_Over_Window, Provenance.VendorDoc, "无消费方：同上"),
             new(DbCapabilities.Boolean_Type, Provenance.VendorDoc, "类型表 bool→BOOLEAN，谓词侧 IS TRUE 有对拍见证但那是文本档，类型列本体无样本"),
             new(DbCapabilities.Json_Type, Provenance.VendorDoc, "读侧类型表认 json/jsonb（→string），写侧没有 CLR→JSON 的映射，故无样本"),
             new(DbCapabilities.TempTable, Provenance.VendorDoc, "无消费方：Tp 临时主键走的是真实表而不是临时表（§8.2）"),
+
+            // 第 15 位是本笔挂上血统基类的 Bulk_Copy，与上面七颗同档而异因（那七颗"文档说有而代码没接"，本颗
+            // "代码接了而装载语句一次没发过"）。它与本家那颗 9.2 内核代数的【推断】前件同一档：两问都要真实例
+            // 才答得出，而这一问的来路是反射口、不是厂商行。
+            new(DbCapabilities.Bulk_Copy, Provenance.VendorDoc, "无活库：装载通道已接线（血统那颗反射口），COPY … FROM STDIN 那一句一次都没发出去过"),
         ]),
 
         // PG 血统的第三本台账（v0.36 第三笔，GaussDB 叶子到场 —— 行 904「到场即照本行再挂」裁决的落地）。
@@ -223,7 +261,7 @@ public sealed class CapabilityLedgerTests
         // GaussDB 自己分发的托管驱动连名字都没有入账读数，DDL 段那三位的 OfflineText 在本册读作
         // "若这一家认得血统今天发的形状则文本同形"，而"认不认"那一问前面还压着"这台库与 openGauss
         // 是不是同一套文本假设"——两问都记 §14 与本家类注释。
-        new("gaussdb", static () => GaussDb.Provider(SqlServer.NoDriverFactory.Instance), 14, 7, 0,
+        new("gaussdb", static () => GaussDb.Provider(SqlServer.NoDriverFactory.Instance), 15, 7, 0,
         [
             new(DbCapabilities.Paging_LimitOffset, Provenance.OfflineText, "GaussDbDialectTests 那条 LIMIT/OFFSET 尾巴与只写 OFFSET 不补哨兵、与金仓家逐字相等的断言（同形交对拍，故无基线）"),
             new(DbCapabilities.Returning, Provenance.OfflineText, "GaussDbDialectTests 键回读那条句尾 RETURNING 与金仓家逐字相等的断言（两颗分叉叶互读的成功侧另有一格）"),
@@ -235,13 +273,18 @@ public sealed class CapabilityLedgerTests
 
             // 下面七位与金仓本、openGauss 本同一判据、同一批理由：这一档的掩码是从 §4 那张表攒来的乐观声明，
             // GaussDB 继承的是同一份，本家一位不翻案、不删减（收敛是 §4 的账）。
-            new(DbCapabilities.Upsert_OnConflict, Provenance.VendorDoc, "无消费方：UPSERT 那一档还没接线（§12.3 的 L1 退路）"),
+            new(DbCapabilities.Upsert_OnConflict, Provenance.VendorDoc, "位无读者：写侧的一句 upsert 档从本笔起按 IBulkStrategy.UpsertClause 那颗槽分派（槽在血统基类已接，本家一台活库都没有——位与槽是两面，见 MySqlProviderBase 类注释 MultiStatement 那一条），而这一位今天仍然没有消费者"),
             new(DbCapabilities.Cte, Provenance.VendorDoc, "无消费方：共用层没有 WITH 的发射口"),
             new(DbCapabilities.WindowFunctions, Provenance.VendorDoc, "无消费方：窗口函数没有链式入口"),
             new(DbCapabilities.Count_Over_Window, Provenance.VendorDoc, "无消费方：同上"),
             new(DbCapabilities.Boolean_Type, Provenance.VendorDoc, "类型表 bool→BOOLEAN，谓词侧 IS TRUE 有对拍见证但那是文本档，类型列本体无样本"),
             new(DbCapabilities.Json_Type, Provenance.VendorDoc, "读侧类型表认 json/jsonb（→string），写侧没有 CLR→JSON 的映射，故无样本"),
             new(DbCapabilities.TempTable, Provenance.VendorDoc, "无消费方：Tp 临时主键走的是真实表而不是临时表（§8.2）"),
+
+            // 第 15 位是本笔挂上血统基类的 Bulk_Copy，与上面七颗同档而异因（那七颗"文档说有而代码没接"，本颗
+            // "代码接了而装载语句一次没发过"）。它在本家比 openGauss 本在这一位上多压一层：那一家至少有一条
+            // "厂商分发的是 Npgsql 的 fork"的行级说法，GaussDB 连自家托管驱动的名字都没有入账读数。
+            new(DbCapabilities.Bulk_Copy, Provenance.VendorDoc, "无活库：装载通道已接线（血统那颗反射口），COPY … FROM STDIN 那一句一次都没发出去过（本家连驱动名字都没有读数）"),
         ]),
 
         // PG 血统的第四本台账（v0.36 第四笔，瀚高 HighGo 叶子到场）。"一本 provider 一份"的第五次复用，
@@ -251,7 +294,7 @@ public sealed class CapabilityLedgerTests
         // 形状则文本同形"，而"认不认"连行级前件都没有，真实例第一问是"兼容的是哪一代 PG"（§14 行 2044
         // 本笔换主语处）。七颗 OfflineText 全部落在 HighgoDialectTests 的逐字相等断言上，其中两两互读
         // 补满格让血统四叶的 C(4,2)=6 条边至此每条至少一颗见证。
-        new("highgo", static () => Highgo.Provider(SqlServer.NoDriverFactory.Instance), 14, 7, 0,
+        new("highgo", static () => Highgo.Provider(SqlServer.NoDriverFactory.Instance), 15, 7, 0,
         [
             new(DbCapabilities.Paging_LimitOffset, Provenance.OfflineText, "HighgoDialectTests 那条 LIMIT/OFFSET 尾巴与只写 OFFSET 不补哨兵、与金仓家逐字相等的断言（同形交对拍，故无基线）"),
             new(DbCapabilities.Returning, Provenance.OfflineText, "HighgoDialectTests 键回读那条句尾 RETURNING 与金仓家逐字相等的断言（血统两两互读补满的六条边各含此形）"),
@@ -263,13 +306,18 @@ public sealed class CapabilityLedgerTests
 
             // 下面七位与金仓本、openGauss 本、GaussDB 本同一判据、同一批理由：这一档的掩码是从 §4
             // 那张表攒来的乐观声明，瀚高继承的是同一份，本家一位不翻案、不删减（收敛是 §4 的账）。
-            new(DbCapabilities.Upsert_OnConflict, Provenance.VendorDoc, "无消费方：UPSERT 那一档还没接线（§12.3 的 L1 退路）"),
+            new(DbCapabilities.Upsert_OnConflict, Provenance.VendorDoc, "位无读者：写侧的一句 upsert 档从本笔起按 IBulkStrategy.UpsertClause 那颗槽分派（槽在血统基类已接，本家一台活库都没有——位与槽是两面，见 MySqlProviderBase 类注释 MultiStatement 那一条），而这一位今天仍然没有消费者"),
             new(DbCapabilities.Cte, Provenance.VendorDoc, "无消费方：共用层没有 WITH 的发射口"),
             new(DbCapabilities.WindowFunctions, Provenance.VendorDoc, "无消费方：窗口函数没有链式入口"),
             new(DbCapabilities.Count_Over_Window, Provenance.VendorDoc, "无消费方：同上"),
             new(DbCapabilities.Boolean_Type, Provenance.VendorDoc, "类型表 bool→BOOLEAN，谓词侧 IS TRUE 有对拍见证但那是文本档，类型列本体无样本"),
             new(DbCapabilities.Json_Type, Provenance.VendorDoc, "读侧类型表认 json/jsonb（→string），写侧没有 CLR→JSON 的映射，故无样本"),
             new(DbCapabilities.TempTable, Provenance.VendorDoc, "无消费方：Tp 临时主键走的是真实表而不是临时表（§8.2）"),
+
+            // 第 15 位是本笔挂上血统基类的 Bulk_Copy，与上面七颗同档而异因（那七颗"文档说有而代码没接"，本颗
+            // "代码接了而装载语句一次没发过"）。本家那句"整本没有行级前件"由它<em>不被推翻</em>：那一格量的是
+            // 厂商行点没点名，而这一位的前件住在反射口里，行 907 对它一个字都没有说过。
+            new(DbCapabilities.Bulk_Copy, Provenance.VendorDoc, "无活库：装载通道已接线（血统那颗反射口），COPY … FROM STDIN 那一句一次都没发出去过"),
         ]),
 
         // 第十一本台账（v0.36 第六笔，GBase 8c 叶子到场）。PG 血统的第五本，"一本 provider 一份"的第七次复用，
@@ -279,7 +327,7 @@ public sealed class CapabilityLedgerTests
         // "与 openGauss 高度相似"，所以那一问要两跳才落到本家头上（本行→邻家行→内核代数）。同一句
         // "若这一家认得血统今天发的形状则文本同形"，第一次是替邻家问的。七颗 OfflineText 全部落在
         // Gbase8cDialectTests 的逐字相等断言上，其中两两互读那一格把血统五叶的 C(5,2)=10 条边补满（一册四条）。
-        new("gbase8c", static () => Gbase8c.Provider(SqlServer.NoDriverFactory.Instance), 14, 7, 0,
+        new("gbase8c", static () => Gbase8c.Provider(SqlServer.NoDriverFactory.Instance), 15, 7, 0,
         [
             new(DbCapabilities.Paging_LimitOffset, Provenance.OfflineText, "Gbase8cDialectTests 那条 LIMIT/OFFSET 尾巴与只写 OFFSET 不补哨兵、与金仓家逐字相等的断言（同形交对拍，故无基线）"),
             new(DbCapabilities.Returning, Provenance.OfflineText, "Gbase8cDialectTests 键回读那条句尾 RETURNING 与金仓家逐字相等的断言（血统两两互读补满的十条边各含此形）"),
@@ -291,19 +339,25 @@ public sealed class CapabilityLedgerTests
 
             // 下面七位与金仓本、openGauss 本、GaussDB 本、瀚高本同一判据、同一批理由：这一档的掩码是从 §4
             // 那张表攒来的乐观声明，GBase 8c 继承的是同一份，本家一位不翻案、不删减（收敛是 §4 的账）。
-            new(DbCapabilities.Upsert_OnConflict, Provenance.VendorDoc, "无消费方：UPSERT 那一档还没接线（§12.3 的 L1 退路）"),
+            new(DbCapabilities.Upsert_OnConflict, Provenance.VendorDoc, "位无读者：写侧的一句 upsert 档从本笔起按 IBulkStrategy.UpsertClause 那颗槽分派（槽在血统基类已接，本家一台活库都没有——位与槽是两面，见 MySqlProviderBase 类注释 MultiStatement 那一条），而这一位今天仍然没有消费者"),
             new(DbCapabilities.Cte, Provenance.VendorDoc, "无消费方：共用层没有 WITH 的发射口"),
             new(DbCapabilities.WindowFunctions, Provenance.VendorDoc, "无消费方：窗口函数没有链式入口"),
             new(DbCapabilities.Count_Over_Window, Provenance.VendorDoc, "无消费方：同上"),
             new(DbCapabilities.Boolean_Type, Provenance.VendorDoc, "类型表 bool→BOOLEAN，谓词侧 IS TRUE 有对拍见证但那是文本档，类型列本体无样本"),
             new(DbCapabilities.Json_Type, Provenance.VendorDoc, "读侧类型表认 json/jsonb（→string），写侧没有 CLR→JSON 的映射，故无样本"),
             new(DbCapabilities.TempTable, Provenance.VendorDoc, "无消费方：Tp 临时主键走的是真实表而不是临时表（§8.2）"),
+
+            // 第 15 位是本笔挂上血统基类的 Bulk_Copy，与上面七颗同档而异因（那七颗"文档说有而代码没接"，本颗
+            // "代码接了而装载语句一次没发过"）。本家那颗"前件是转引来的"在这一位上第二次兑现：行 905 对驱动
+            // 只说了"与 openGauss 高度相似"，所以"这台驱动里有没有导入器"要两跳才落到本家，而两跳之后没有活库替它答。
+            new(DbCapabilities.Bulk_Copy, Provenance.VendorDoc, "无活库：装载通道已接线（血统那颗反射口），COPY … FROM STDIN 那一句一次都没发出去过（本家那一问要经邻家那一行才问得出）"),
         ]),
 
         // 第十三本台账（v0.37 第二笔，PostgreSQL 本尊叶到场）。PG 血统的第六本、"一本 provider 一份"的第八次复用，
         // 而它在这一族的位置与另五本不同向：它不是又一棵"照着血统发"的壳，它是血统那一句话所回指的那一家本身——
         // 于是文件头 v0.36 第二笔立下的"PG 血统没有本尊可回指"在本册作废（原句留在上面那一段，划不掉是因为
-        // 它量的是当时在场的册数）。掩码照旧 14 位、出自同一颗 FamilyCapabilities，七颗 OfflineText 全部落在
+        // 它量的是当时在场的册数）。掩码照旧与另五本同源于一颗 FamilyCapabilities（本笔起那一份是 15 位，多的
+        // 那一位见本册末尾的 <c>Bulk_Copy</c> 行），七颗 OfflineText 全部落在
         // PostgreSqlDialectTests 的逐字相等断言上，而本册没有 golden/postgresql/：血统的基线早在 v0.22 就是
         // golden/kingbase/ 那 18 份，本尊到场不改变"同形交给对拍"这条处置（对照：MySQL 本尊有 golden/mysql/，
         // 因为它是那一族的第一份产物，而这一族的第一份产物是金仓）。
@@ -314,7 +368,7 @@ public sealed class CapabilityLedgerTests
         // 它是本仓库自己算的【推断】，而那一层下面 <c>PostgreSqlProvider</c> 类注释第三段与方言测试的版本格各钉一份。
         // 所以"零覆写的正典叶"在本家第一次带<em>代价</em>：正典叶对齐的是最老那一侧，而 MySQL 本尊对齐的是最新
         // 那一侧（8.0 的 <c>VALUES()</c> 读法），两颗本尊同为零覆写而选型方向相反。
-        new("postgresql", static () => PostgreSql.Provider(SqlServer.NoDriverFactory.Instance), 14, 7, 0,
+        new("postgresql", static () => PostgreSql.Provider(SqlServer.NoDriverFactory.Instance), 15, 7, 1,
         [
             new(DbCapabilities.Paging_LimitOffset, Provenance.OfflineText, "PostgreSqlDialectTests 那条 LIMIT/OFFSET 尾巴与只写 OFFSET 不补哨兵、与金仓家逐字相等的断言（同形交对拍，故无基线）"),
             new(DbCapabilities.Returning, Provenance.OfflineText, "PostgreSqlDialectTests 键回读那条句尾 RETURNING 与金仓家逐字相等的断言（血统两两互读补满的十五条边各含此形）"),
@@ -326,13 +380,35 @@ public sealed class CapabilityLedgerTests
 
             // 下面七位与金仓本及另四本 PG 血统台账同一判据、同一批理由：这一档的掩码是从 §4 那张表攒来的
             // 乐观声明，本尊继承的是同一份，一位不翻案、不删减（收敛是 §4 的账）。
-            new(DbCapabilities.Upsert_OnConflict, Provenance.VendorDoc, "无消费方：UPSERT 那一档还没接线（§12.3 的 L1 退路）"),
+            // 【本笔只改这一颗的措辞，且<em>只有本尊这一本</em>多一档读数：那一段句尾在本家授权实例上跑过
+            // （集成册 <c>BulkWritePathTests</c> 的 upsert 那两条），而<em>位仍不翻 Live</em>——执行的是槽，
+            // 位的判据是"有没有读者按这一位分派"，那一个读者今天还是没有。金仓本与另四本一字不动。】
+            new(DbCapabilities.Upsert_OnConflict, Provenance.VendorDoc, "位无读者：写侧的一句 upsert 档从本笔起按 IBulkStrategy.UpsertClause 那颗槽分派（槽在本血统已接，ON CONFLICT … DO UPDATE SET … = EXCLUDED. 那一段句尾在本家授权实例上跑过——位与槽是两面，见 MySqlProviderBase 类注释 MultiStatement 那一条），而这一位今天仍然没有消费者"),
             new(DbCapabilities.Cte, Provenance.VendorDoc, "无消费方：共用层没有 WITH 的发射口"),
             new(DbCapabilities.WindowFunctions, Provenance.VendorDoc, "无消费方：窗口函数没有链式入口"),
             new(DbCapabilities.Count_Over_Window, Provenance.VendorDoc, "无消费方：同上"),
             new(DbCapabilities.Boolean_Type, Provenance.VendorDoc, "类型表 bool→BOOLEAN，谓词侧 IS TRUE 有对拍见证但那是文本档，类型列本体无样本"),
             new(DbCapabilities.Json_Type, Provenance.VendorDoc, "读侧类型表认 json/jsonb（→string），写侧没有 CLR→JSON 的映射，故无样本"),
             new(DbCapabilities.TempTable, Provenance.VendorDoc, "无消费方：Tp 临时主键走的是真实表而不是临时表（§8.2）"),
+
+            // 第 15 位是本笔挂上血统基类的 Bulk_Copy，与上面七颗同档而异因（那七颗"文档说有而代码没接"，本颗
+            // "代码接了而装载语句一次没发过"）。本尊在这一位上比另五本多一档读数：驱动侧那颗导入器与它的四个
+            // 方法今天在一颗一次性探针里对着厂商真包量过签名，而仓库自己的驱动解析路径一次都没跑过——落档不变，
+            // 落档的理由从"驱动侧不知道有什么"换成了"活库侧没证"。
+            //
+            // <b>【v0.40 批量写侧那一轮 —— 原文照抄在前（上面那段），改判在后】上面那句"活库侧没证"与那句
+            // "COPY … FROM STDIN 那一句一次都没发出去过"今天两句一起作废，而<em>只有本尊这一本作废</em>：
+            // 这台 PG 实例是 v0.37 第九笔带来的，本笔把集成册整本在它身上跑过，钉住这一位的是
+            // <c>BulkPathTests.A_requested_copy_channel_lands_the_whole_batch_and_reports_the_layer</c>
+            // （交回 <c>report.Method == CopyChannel</c>，另配 <c>What_the_channel_writes_is_what_the_text_layer_writes</c>
+            // 那句"通道写进去的与文本层写的是同一批行"，以及 <c>The_payload_handed_to_the_channel_is_the_kernels_normalized_one_and_in_row_order</c>
+            // 那颗行序钉）【实测·obj/logs/v40-postgresql-integration-fix1.log，160 ∶ 0 红 ∶ 44 具名 skip，
+            // 本册在本家只 skip 掉 MySQL 独有的那两条】。耗时那一格照 §13.4 只记账：2 000 行
+            // copy_ms 32 ∶ l3_ms 106，另有一趟重跑读到的 31 ∶ 132【v40-postgresql-integration-full2.log 同一句 [bulk-timing]】。
+            // 上面那句"驱动侧签名量过而仓库自己的驱动解析路径一次都没跑过"也跟着换档：本笔跑的是清单 →
+            // 独立 AssemblyLoadContext → 工厂 → 反射装配那条链，厂商包 Npgsql 在本家是真解析成功的一支。
+            // 五本里其余四本（opengauss／gaussdb／highgo／gbase8c）的理由一字不动——它们一台活库都没有。
+            new(DbCapabilities.Bulk_Copy, Provenance.Live, "装载语句在本家真库发出去了：集成册 BulkPathTests 整本全绿，钉的是点名 CopyChannel 那一条交回 L1（另有通道与文本层同批行、行序两颗钉）【obj/logs/v40-postgresql-integration-fix1.log】；2 000 行 copy 32ms ∶ l3 106ms 只记账"),
         ]),
 
         // 第三族：这一家<em>只声明今天真的产得出文本的那几位</em>（§4 那份"能力位是声明，
@@ -411,7 +487,20 @@ public sealed class CapabilityLedgerTests
         // 不是照 §4 那张表抄的。库里"有"而代码没接的那几位（Upsert_OnDuplicate、Cte、WindowFunctions、
         // Json_Type、MultiStatement…）全部留在 MySqlProviderBase 的"刻意不声明"那一段里，不进这本账：
         // <b>台账记的是声明位，不记可指认而未指认的库存量</b>，这一格与金仓那七位是同一件事的两半。
-        new("mysql", static () => MySql.Provider(SqlServer.NoDriverFactory.Instance), 5, 5, 0,
+        // <b>【本笔改判】上面第一句那两颗数一起动：位数 5 → 6（<c>Bulk_Copy</c> 随血统基类挂上），
+        // "VendorDoc 那一档同样是 0 位"跟着作废——本家此刻与 sqlite 那本各带 1 位、同数而异因。
+        // "最少"那一格也不再是本家，它由 gbase8s 那本 4 位独占。本家的六颗里五颗按"代码今天真产得出文本"攒，
+        // 第六颗按"代码今天真有一段反射装配"攒——这本账第一次有一位<em>不是文本</em>，所以它没有基线可指。
+        // 【v0.40 批量写侧那一轮 —— 原文照抄在前（上面整段），改判在后】上面那句「本家此刻与 sqlite 那本各带 1 位、
+        // 同数而异因」里的"各带 1 位"在本家这一侧今天换成 0：那 1 位（<c>Bulk_Copy</c>）走上 <c>Live</c> 了，
+        // 于是 <c>VendorDocOnly</c> = 6 − 5 − 1 = 0，那句最早的原话「VendorDoc 那一档同样是 0 位」在位数涨过一格
+        // 之后重新成立，而它成立的原因整颗换掉：原来那句说的是"这六位里没有一位是文档乐观声明"，今天这句说的是
+        // "这一档空了，因为那位既不是文档也不是文本——它在真库上跑过"。本家的 <c>Live</c> 从此不再是 0，
+        // 第一颗的逐条出处写在那一行的注释与见证串上。
+        // 【同段的 sqlite 那一半照旧】sqlite 那本带的 1 位是 <c>MultiStatement</c>，它本来就是 Live 档的 DDL 见证，
+        // 不随本笔动。"各带 1 位、同数而异因"这句的两侧数字从今天起不再相等：1 ∶ 0。
+        // </b>
+        new("mysql", static () => MySql.Provider(SqlServer.NoDriverFactory.Instance), 6, 5, 1,
         [
             // 这一位没有本家基线：它的产出与金仓那一族只差引号字形（同一套尾巴），按 §13.3 那句"同形交给对拍"。
             // 所以见证是 MySqlDialectTests 里那句 LIMIT/OFFSET 断言，而不是一个文件名 —— 台账接受这两种形状。
@@ -429,6 +518,27 @@ public sealed class CapabilityLedgerTests
             // 与达梦同一型（CHAR(36)），而<em>不</em>是同一判断：那一家是"没有原生 uuid 这一档"，
             // 这一家有 BINARY(16) 而它要连接串参数与字节置换一致才成立 —— SPI 里没有那一格（§14）。
             new(DbCapabilities.Guid_Char36, Provenance.OfflineText, "本文件那条 CHAR(36) 断言"),
+
+            // 第 6 位是本笔挂上血统基类的 Bulk_Copy，也是这本账第一颗<em>不是 SQL 文本</em>的位：可指的产出是
+            // <c>MySqlBulk.ResolveCopyChannel</c> 那条反射装配。它落在"仅厂商文档"而不是 Live，差的那一格判据
+            // 写得很窄也要写下来：Live 要的是"由<em>本 provider</em> 产出的那一条语句被那台库执行过"，而对照量具
+            // m1∶m2 那两场量的是驱动 API 本身（放行本地装载后 24 格全绿、不放行时驱动当场拒），provider 那一侧
+            // 还没在集成册发过一句。翻档的那天它带着日志名往上走一档，与虚谷那四位同一判据。
+            //
+            // <b>【v0.40 批量写侧那一轮 —— 原文照抄在前（上面整段），改判在后】那一天到了，那一档也走上去了</b>：
+            // 集成册在本家跑了 <c>BulkPathTests</c> 整本，钉住这一位的是
+            // <c>The_same_batch_lands_on_l1_once_the_connection_string_allows_local_infile</c> 那一条：同一个请求在
+            // <c>FallbackPolicy.Never</c> 下交回 <c>report.Method == CopyChannel</c> ∶ <c>Degraded == false</c> ∶
+            // <c>BulkDegraded</c> 留痕为空 ∶ 库里真有那五行 —— 这四句一起成立才排掉"退到 L3 而只是没报错"那种假绿，
+            // 而退到 L3 在 Never 下是当场抛。<b>另外三句各钉一角</b>：
+            // <c>The_copy_channel_rides_the_transaction_and_rolls_back_with_it</c> 钉"通道走的是事务那条连接"
+            // （未提交的行在同一条连接上读得到，通道若从工厂另借一条就是 0），
+            // 三趟复跑的耗时【实测·obj/logs/v40-my-bulk-repeat-{1,2,3}.log：2 000 行 copy_ms 67 ∶ 68 ∶ 58
+            // 对 l3_ms 108 ∶ 105 ∶ 107】只记账——照 §13.4 那句"不要把一次现场读数钉成断言"不钉数；
+            // 钉住的是"这一家由本 provider 产出的那一句装载语句被那台 8.4.8 执行过"
+            // 【实测·obj/logs/v40-mysql-integration-fix1.log】。上面那句"翻档的那天它带着日志名往上走一档"因此兑现，
+            // 而它的"与虚谷那四位同一判据"这一半也一并兑现：本家这一位现在与那四位走的是同一格判据。
+            new(DbCapabilities.Bulk_Copy, Provenance.Live, "集成册 BulkPathTests 在本家全绿（obj/logs/v40-mysql-integration-fix1.log）；钉的是那条 Never 档交回 CopyChannel ∶ 不降级 ∶ 无留痕 ∶ 库里有五行那一条，另有同一事务可见性一条与三趟复跑耗时【v40-my-bulk-repeat-{1,2,3}.log】"),
         ]),
 
         // MySQL 血统的第二本台账（v0.35 第三笔，TiDB 叶子到场）。它是这本账的第一例<b>逐位同掩码的两份</b>：
@@ -436,15 +546,21 @@ public sealed class CapabilityLedgerTests
         // （tidb == mysql 叶 == 血统基类），所以它的可迁移性依赖上面那本 mysql 的见证仍然成立；
         // 两份都记，是因为 §13.5 那句"每个声明位都要有一个见证"量的是 provider，不是血统。
         // 这一本没有 golden/tidb/ 文件可指（同形交对拍走到极端：连引号字形都不差），
-        // 五颗见证全部落在 TiDbDialectTests 的逐字相等断言上——台账接受这种形状，先例就是上面
+        // 五颗<em>文本</em>见证全部落在 TiDbDialectTests 的逐字相等断言上——台账接受这种形状，先例就是上面
         // mysql 自己那本的第一行（"同形交对拍，故无基线"）。
-        new("tidb", static () => TiDb.Provider(SqlServer.NoDriverFactory.Instance), 5, 5, 0,
+        new("tidb", static () => TiDb.Provider(SqlServer.NoDriverFactory.Instance), 6, 5, 0,
         [
             new(DbCapabilities.Paging_LimitOffset, Provenance.OfflineText, "TiDbDialectTests 那条尾巴两子句与 2^64−1 哨兵和 mysql 家逐字相等的断言（同形交对拍，故无基线）"),
             new(DbCapabilities.Schemas, Provenance.OfflineText, "TiDbDialectTests DDL 段那条带模式建表限定不折叠、与 mysql 家逐字相等的断言"),
             new(DbCapabilities.Comment_On_Column, Provenance.OfflineText, "TiDbDialectTests DDL 段那条 MODIFY COLUMN 带注释与 mysql 家逐字相等的断言"),
             new(DbCapabilities.Alter_Column_Precision, Provenance.OfflineText, "同上：这一对在这一家是同一句的两个槽位，共用一颗见证（与 mysql 本家那两行的形状相同）"),
             new(DbCapabilities.Guid_Char36, Provenance.OfflineText, "TiDbDialectTests 那条 CHAR(36) 断言"),
+
+            // 第 6 位随血统基类继承，本家一个字都不改写——而"继承来的位"在台账里交的是<em>本家自己的</em>出处：
+            // 上面那五位继承时至少还有 mysql 本家那份文本可指，这一位连那一半都没有（本家的 LOAD DATA 侧
+            // 连驱动解析都没跑过，比邻本少一档读数）。它因此与 tidb 那五颗同档而更虚：五颗是"文本钉住、库没证"，
+            // 这一颗是"文本都没有、只有那段反射装配在场"。
+            new(DbCapabilities.Bulk_Copy, Provenance.VendorDoc, "随血统继承同一颗反射口（MySqlBulk.ResolveCopyChannel），本家无驱动解析读数：装载那一路连一次都没跑过"),
         ]),
 
         // MySQL 血统的第三本台账（v0.35 第四笔，OceanBase 的 MySQL 模叶子到场）。它是"一本 provider 一份"
@@ -454,13 +570,18 @@ public sealed class CapabilityLedgerTests
         // 这一家比 tidb 那本多一层<em>表达不出来</em>的前件："模式在连接上决定"（§9.1），本本的每一颗
         // OfflineText 都读作"若连接在 MySQL 模则文本同形"——SPI 没有那一格（§14 的参数名单，第二个实例），
         // 所以这一格前件只能记在注释里，这本账因此也是六本里唯一一本每一行都自带悬条件的。
-        new("oceanbase", static () => OceanBase.Provider(SqlServer.NoDriverFactory.Instance), 5, 5, 0,
+        new("oceanbase", static () => OceanBase.Provider(SqlServer.NoDriverFactory.Instance), 6, 5, 0,
         [
             new(DbCapabilities.Paging_LimitOffset, Provenance.OfflineText, "OceanBaseDialectTests 那条尾巴两子句与 2^64−1 哨兵和 mysql 家逐字相等的断言（同形交对拍，故无基线）"),
             new(DbCapabilities.Schemas, Provenance.OfflineText, "OceanBaseDialectTests DDL 段那条带模式建表限定不折叠、与 mysql 家逐字相等的断言"),
             new(DbCapabilities.Comment_On_Column, Provenance.OfflineText, "OceanBaseDialectTests DDL 段那条 MODIFY COLUMN 带注释与 mysql 家逐字相等的断言"),
             new(DbCapabilities.Alter_Column_Precision, Provenance.OfflineText, "同上：这一对在这一家同样是同一句的两个槽位，共用一颗见证（与 mysql／tidb 两本的同格同形）"),
             new(DbCapabilities.Guid_Char36, Provenance.OfflineText, "OceanBaseDialectTests 那条 CHAR(36) 断言"),
+
+            // 第 6 位同样是随血统继承而不改写，而本家在这一位上比 tidb 本多压一层自家独有的悬条件：这一本
+            // 每一行都读作"若连接在 MySQL 模则…"，装载那一路因此要先过"模式在连接上决定"那道闸，
+            // 而它今天连被问的资格都还没排到（本家一台实例都没有）。
+            new(DbCapabilities.Bulk_Copy, Provenance.VendorDoc, "随血统继承同一颗反射口（MySqlBulk.ResolveCopyChannel），本家无驱动解析读数：装载那一路在 MySQL 模下成不成立没人证过"),
         ]),
 
         // 第五族：7 位、VendorDoc 那一档仍然是 0，与前两家同一把尺（"代码今天真的走到那一条语句"）。

@@ -278,6 +278,72 @@ public sealed class WritePathTests
         });
     }
 
+    [Fact]
+    public async Task The_row_update_chain_fills_its_audit_column_and_the_database_sees_the_filled_value()
+    {
+        Database.Ready();
+
+        var stamp = new DateTime(2026, 7, 8, 9, 10, 11, 123);
+        var note = scope("audit-update");
+        var fired = 0;
+        var kinds = new List<string>();
+        var columns = new List<string>();
+        var aop = new FastSqlAop();
+
+        // 种类是分派键（§10.1 的那句"一条订阅可以同时管创建列与修改列"在真库上的读数）：
+        // "每次写都刷新"的那一列只在该 <c>update</c> 一词时补，而它补出来的值必须落进库里那一行。
+        aop.AuditValue = e =>
+        {
+            fired++;
+            kinds.Add(e.OperationKind);
+            columns.Add(e.Column.MemberName);
+
+            if (e.OperationKind == "update" && e.Column.MemberName == "PaidAt")
+                e.SetValue(stamp);
+        };
+
+        // 落库走的是没有钩子的那只 orm：这一条用例量的只有更新那一侧，插入的读数已在上面那条结清。
+        await Orm.InsertRange([row(tagged(81), 1m, note), row(tagged(82), 2m, note), row(tagged(83), 3m, note)])
+            .ExecuteAffrowsAsync(TestContext.Current.CancellationToken);
+
+        var held = await Orm.Select<Order>()
+            .Where(o => o.Note == note)
+            .ToListAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(3, held.Count);
+        Assert.All(held, o => Assert.Null(o.PaidAt));
+
+        // 一只链对象、三个出口（一份文本 + 一次执行 + 中间那份回放）：格子只算一次，
+        // 所以次数仍是 3 行 × 7 个可写列，与上面那条插入用例同一个尺子。
+        var bulk = Database.OrmWith(aop).UpdateRange(held);
+
+        var plan = bulk.Explain();
+        var replayAfterText = plan.HookReplay.Count;
+
+        await bulk.ExecuteBulkAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(3 * 7, fired);
+        Assert.All(kinds, kind => Assert.Equal("update", kind));
+
+        // 主键在这一格是 WHERE 的判据而不是写出去的列，所以它不进格子（离线那条同名句子的真库对照）。
+        Assert.DoesNotContain(nameof(Order.Id), columns);
+
+        // 只有真被改写的那几格进回放，而回放排在发射段那些步之前（§10.1 硬规则 1 的顺序那一半）。
+        Assert.Equal(3, replayAfterText);
+        Assert.All(plan.HookReplay, trace => Assert.StartsWith("PaidAt = ", trace.Before));
+        Assert.Equal([0, 1, 2], plan.HookReplay.Select(t => t.Step).ToArray());
+
+        // SetValue 写穿实体：手里那三只的 PaidAt 已经变了，调用方不必回读就知道库里现在是什么。
+        Assert.All(held, o => Assert.Equal(stamp, o.PaidAt));
+
+        var stored = Database.Rows(
+            $"SELECT [CustomerName], {Millis("[PaidAt]")} AS PaidAt FROM [dbo].[FastSqlOrder] WHERE [Note] = @note",
+            ("@note", note));
+
+        Assert.Equal(3, stored.Count);
+        Assert.All(stored, r => Assert.Equal(stamp, DateTime.Parse(r["PaidAt"], CultureInfo.InvariantCulture)));
+    }
+
     // ── 事务三形态（§6 (1)(2)(3)） ──────────────────────────────────
 
     [Fact]

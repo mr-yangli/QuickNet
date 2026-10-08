@@ -293,11 +293,22 @@ public interface IChangeGuard
 
 /// <summary>批量高速层（§12.1 的 L1/L2/L4）。P0 的 provider 一律返回 null，退回链自然从 L3 起。</summary>
 /// <remarks><b>§12.1 那张决策表里今天在场的只有两颗</b>：<see cref="ParameterBudget"/> 有四个真读数（2100 / 32767 /
-/// 65535 / 没有 provider 报的那些家走共用层的 100），<see cref="ResolveCopyChannel()"/> 从本版起有唯一一家落地（SQL Server 的
-/// <c>SqlBulkCopy</c>，反射绑定，因为装载类不在 <c>DbProviderFactory</c> 的抽象面上，而本仓库的编译期驱动引用纪律
-/// 不许直接 <c>new</c> 它）。原稿那颗 <c>CanResolveKeys</c> 没有进来，因为它要答的问题（"批量 + 要主键能不能成立"）
+/// 65535 / 没有 provider 报的那些家走共用层的 100），<see cref="ResolveCopyChannel()"/> 从本版起有三家落地
+/// （SQL Server 的 <c>SqlBulkCopy</c>、MySQL 血统的 <c>MySqlBulkCopy</c>、PG 血统的二进制 COPY 导入器），
+/// 三家同一手法：反射绑定、第一次取用时才找类型、缺成员整家退 L3 —— 装载类都不在
+/// <c>DbProviderFactory</c> 的抽象面上，而本仓库的编译期驱动引用纪律不许直接 <c>new</c> 它们（§1.2 原则 3）。
+/// <b>"缺成员整家退 L3"这一条是三家共同的<em>看不见</em>的失败</b>：那个形状与"这一家根本没有装载类"逐字同形，
+/// 离线册只能证形状不能证命中，所以每一家都要在真库上跑一次才算接上【实测·MySQL 血统那一家第一版就是这么
+/// 静默退了一整版 —— 驱动在 C# 调用面与反射面之间有四格形状差（可选参数、<c>ValueTask</c> 返回值、
+/// 构造子重载、没有 <c>Dispose</c> 面），逐颗见 <c>MySqlBulkCopyChannel</c> 的改判段】。
+/// 三家的差别只记在两格里：闸门（只有 MySQL 家欠连接串一颗参数，见 <see cref="IBulkCopyChannel.UnavailableBecauseOf"/>）
+/// 与载体（两家交 <c>DataTable</c>、一家逐行推）。原稿那颗 <c>CanResolveKeys</c> 没有进来，因为它要答的问题（"批量 + 要主键能不能成立"）
 /// 今天由 <c>InsertEngine</c> 自己判得更准：那一档不是"通道能不能给键"，是"这一条出口要不要键"，
-/// 而后者是出口的形状不是库的能力，放在这里会让 provider 替调用方决定它自己没问过的东西。</remarks>
+/// 而后者是出口的形状不是库的能力，放在这里会让 provider 替调用方决定它自己没问过的东西。
+/// <para><b>【本笔补的一句 —— 上面那句"今天在场的只有两颗"从今天起要读成四颗】</b>：写侧扩展这两版又挂上两颗
+/// 带默认值的表态槽（<see cref="SupportsMergedStatements"/> 与 <see cref="UpsertClause"/>），它们不在 §12.1
+/// 那张<em>插入</em>阶梯的决策表里，而在 <c>UpdateRange</c> 那条链的选层判据里，所以那句"决策表里在场的只有两颗"
+/// 说的是那张表，不是这颗接口。四颗共同的形状：<b>默认值就是"不接"</b>，接一家不必改其余十四家。</para></remarks>
 public interface IBulkStrategy
 {
     int ParameterBudget { get; }
@@ -305,7 +316,7 @@ public interface IBulkStrategy
     string Describe { get; }
 
     /// <summary>L1 装载通道（§12.1 第三行）。交回 <see langword="null"/> = 这一家不接（或这一支驱动里没有装载类），
-    /// 阶梯自然从 L3 起 —— 默认实现让其余六家一个字节都不必改，这与 <see cref="IDbProvider.CanCreateDatabase"/> 那颗默认位同一个手法：
+    /// 阶梯自然从 L3 起 —— 默认实现让不接的每一家一个字节都不必改，这与 <see cref="IDbProvider.CanCreateDatabase"/> 那颗默认位同一个手法：
     /// <b>新增的 SPI 槽位一律带默认值，否则接一家就要改六家</b>。
     /// <para><b>它是方法而不是属性</b>：<c>RequiresUnreferencedCode</c> 的特性目标里没有属性
     /// （CS0592），而这一颗<em>必须</em>带那一句标注 —— 取它的过程是一次按类型名的反射查找，
@@ -316,4 +327,42 @@ public interface IBulkStrategy
     [RequiresUnreferencedCode("装载通道按类型名在驱动程序集里找（SqlBulkCopy 那一族没有 ADO.NET 抽象面），被裁剪的驱动会交回 null。")]
     [RequiresDynamicCode("与 RequiresUnreferencedCode 同一条：反射解析装载类需要运行时生成代码。")]
     IBulkCopyChannel? ResolveCopyChannel() => null;
+
+    /// <summary>这一家能不能把<b>多条写语句塞进一条命令文本、一次往返发出去</b>（§12.1 批量写链的 Merged 档，
+    /// <c>UpdateRange</c> 的整行更新走的那一档）。默认 false = 没有读数证明这一家收得下多语句批，
+    /// <c>UpdateRange</c> 的 Auto 因此落逐条 —— 与 <see cref="ResolveCopyChannel"/> 同一手法：
+    /// <b>新增 SPI 槽位一律带默认值，表态是覆写者的事，不表态就是 false</b>。
+    /// <para>今天覆写为 true 的两家各有各的读数：<b>SQL Server</b>（<c>DbCapabilities.MultiStatement</c>
+    /// 从第一天就声明，SqlClient 的分号批是公开契约），<b>MySQL 血统</b>（本仓库已经在一条命令文本里发过
+    /// <c>INSERT … ; SELECT LAST_INSERT_ID()</c> 并在授权实例上跑通 —— <c>InsertEngine.Build</c> 的 postRead
+    /// 分支与 <c>AdoExecutor.WriteWithResultAsync</c> 那句"批的<em>第一个</em>结果"的注释就是它的复点）。
+    /// PG 血统的 Npgsql 同样收批，但本仓库今天没有任何一条产出的批在它那儿跑过，按 §4「代码今天真的走到」
+    /// 不声明；Oracle 血统连一颗有出处的驱动读数都没有，更不声明。</para>
+    /// <para><b>本笔把这两句声称换成了一条链自己的真库读数</b>：<c>UpdateRange</c> 的合并档（四句 UPDATE 并成
+    /// 一条命令）在 SQL Server 与 MySQL 两支上都落库成功、逐列读回一致，而在没表过态的三家（PG 血统、虚谷、
+    /// SQLite）Auto 走的确实是逐条、点名 Merged 确实降级、<c>FallbackPolicy.Never</c> 确实拒在连接之前
+    /// 【实测·集成册 <c>BulkWritePathTests</c>，五家各一趟：<c>obj/logs/v40-{mysql,sqlserver,postgresql,xugu,sqlite}-bulkwrite-2.log</c>】。
+    /// 反面仍然没人补：PG 血统那一家今天有活库，缺的是<em>在它身上跑一次并好的批</em>那一格——
+    /// 那一次绿了就把它的 false 翻成 true，不是在这一句里先猜。</para></summary>
+    bool SupportsMergedStatements => false;
+
+    /// <summary>这一家"<b>一句</b>把整批改完"的那一段句尾（§12.1 写侧扩展的 Upsert 档，
+    /// <c>UpdateRange</c> 点名才走，2026-10-07 的第二条裁决）。交回 <see langword="null"/> = 这一家不接 ——
+    /// 与 <see cref="SupportsMergedStatements"/> 同一手法：<b>新增 SPI 槽位一律带默认值，接两家不必改其余十四家</b>。
+    /// <para><b>交回的是句尾而不是整句</b>：内核已经按 <see cref="Sql.ISqlDialect"/> 的发出口拼好了
+    /// <c>INSERT INTO 表 (列) VALUES (…),(…)</c>，这一颗只补它后面那一段（MySQL 血统的行别名加
+    /// <c>ON DUPLICATE KEY UPDATE</c>、PG 血统的 <c>ON CONFLICT … DO UPDATE SET … = EXCLUDED.…</c>）。
+    /// 拆成句尾而不是一整句，为的是让列清单、VALUES 的形状与参数表只有<em>一处</em>真相 —— 那一处是内核，
+    /// provider 不许自己再拼一遍 VALUES（它一旦拼了，分块与取号就跟着有第二个出处）。</para>
+    /// <para><b>两种形状都是量出来的，不是从文档抄的</b>【实测·探针 <c>obj/probe-upsert</c>，
+    /// <c>obj/logs/v40-upsert-shapes2.log</c>】：MySQL 8.4.8 上老的 <c>VALUES(col)</c> 写法仍然收下而每句报两条
+    /// Warning 1287（厂商写明后续版本移除），所以本槽接的是 8.0.19+ 的行别名写法——同一条三值批在它那儿收下而
+    /// <c>SHOW WARNINGS</c> 为空；PG 那台上 <c>ON CONFLICT (键) DO UPDATE SET 列 = EXCLUDED.列</c> 的三值批同样收下。
+    /// 两颗共有的那一件事是<em>缺键就插</em>：那是这一档与 Merged 档的<em>语义</em>差而不是速度差，
+    /// 所以 <c>BulkWriteMethod.Auto</c> 永远不取它（判据在 <c>UpdateBulkEngine.Decide</c>）。</para>
+    /// <para><b>两道拒收不在这一颗里</b>：全局过滤器在场、以及"主键由库给值而调用方没给键"那两种现场由内核拒，
+    /// 因为那一半是这条链的形状而不是这一家的能力。这里也与 <c>DbCapabilities.Upsert_*</c> 那三位不重叠：
+    /// 位是公开的能力清单而槽是写侧选层的判据（<c>MySqlProviderBase</c> 类注释里 <c>MultiStatement</c> 那一条
+    /// 立的"位与槽是两面"在此原样适用），那三位今天仍然没有读者。</para></summary>
+    string? UpsertClause(UpsertColumns columns) => null;
 }

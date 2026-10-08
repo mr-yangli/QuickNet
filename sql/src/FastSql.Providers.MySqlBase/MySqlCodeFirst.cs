@@ -7,7 +7,7 @@ namespace FastSql.Providers.MySqlBase;
 /// <summary>MySQL 血统的 DDL（§9.2、§10.4，第四家）。与另四族同一纪律：P0 只产出文本与黄金样本比对，
 /// <b>不执行</b>，而 DDL 与运行时查询共用同一个 <see cref="IdentifierPolicy.MySql"/>。
 ///
-/// <para>五处与三族不同，其中三处是"换个写法"之外的东西：
+/// <para>七处与三族不同，其中四处是"换个写法"之外的东西：
 /// <list type="bullet">
 /// <item><b>模式就是数据库，而默认那一个是连接带来的</b>：所以 <c>Schema</c> 为 null 时与 Oracle 血统同一处理
 /// —— <em>什么都不写</em>，而不是补一个假名字（这一家没有 <c>dbo</c>/<c>public</c> 那种人人可进的公共模式）。
@@ -32,7 +32,9 @@ namespace FastSql.Providers.MySqlBase;
 /// 也没有 T-SQL 那种扩展属性存储过程。所以 <see cref="TryEmitColumnComment"/> 发的是
 /// <c>ALTER TABLE … MODIFY COLUMN &lt;整列定义&gt; COMMENT '…'</c> —— 一句能加上注释，
 /// 而<em>代价</em>要说清：它顺手重写了那一列的型与约束（所以必须从契约重发全部三格，见上一条），
-/// 而反过来 <see cref="EmitAlterColumnPrecision"/> 若不带上契约里的注释就会把注释抹掉。
+/// 而反过来 <see cref="EmitAlterColumnPrecision"/> 若不带上契约里的注释就会把注释抹掉
+/// —— 这一半在 8.4.8 活库上量过：同一列先发带 <c>COMMENT</c> 的那一句、备注读得回来，再发一句把它省掉的，
+/// 目录里那颗 <c>column_comment</c> 就成空串（读数记 <c>obj/logs/v38-my-recon-1.log</c> 的 R-07/R-08/R-09 三行）。
 /// 两条共用一个 <c>Definition(column, includeComment)</c> 出口正是为了让这两半不会各自漏一格。
 /// 库里已有而契约没有的注释会在改精度时丢失，这一档记 §14。</item>
 /// <item><b>全文索引在这里是真语法</b>：<c>CREATE FULLTEXT INDEX</c> 在另两族要抛（PG 系与 Oracle 血统各有各的另一套东西），
@@ -42,6 +44,25 @@ namespace FastSql.Providers.MySqlBase;
 /// 而索引类型在 <c>IndexContract</c> 里没有那一格。所以这里发一颗不带 parser 的 FULLTEXT，
 /// 并把"中文全文索引今天建成的是英文分词"这一档记进 §10.4 与 §14 ——
 /// 它比"抛"更该写清，因为这一家<em>不报错</em>。</item>
+/// <item><b>表注释是一句表选项，而列注释是一整列重写</b>：<c>ALTER TABLE … COMMENT = '…'</c> 动的是
+/// 建表尾部那一串（<c>ENGINE = … DEFAULT CHARSET = …</c>）的同族字段，它<em>不重写任何一列</em>，
+/// 所以本族的两句注释不共享上一条那套"必须重发三格"的纪律 —— 一句便宜、一句贵，而贵的那一句
+/// <see cref="TryEmitColumnComment"/> 已经把代价写在注释里了。清备注走空串：这一家
+/// <c>COMMENT = ''</c> 写的就是"没有备注"，而目录里那一颗读回来的也是空串（见
+/// <c>MySqlSchemaReader.TableCommentSql</c>），写与读在这一格是闭合的。两句都在活库上量过：写值、清值
+/// 都当场生效，而<b>这一句不吃 <c>ALGORITHM = INSTANT</c></b>（库报 "ALGORITHM=INSTANT is not supported
+/// for this operation"，<c>INPLACE, LOCK = NONE</c> 才认），所以这里刻意不带任何 ALGORITHM 子句——
+/// 给这一句"加一颗 INSTANT 让它更快"是一条会当场红的路子
+/// （读数记 <c>obj/logs/v38-my-recon-1.log</c> 的 R-06 四行）。</item>
+/// <item><b><c>DROP INDEX</c> 在这里必须带 <c>ON &lt;表&gt;</c></b>：这一家的索引名住在<em>表</em>的
+/// 命名空间里（两张表可以各有一条同名索引），而 PG 家的索引名是模式级唯一的、那一句反过来
+/// <em>没有</em> <c>ON</c> —— 同一条"删掉目录里读回来的那一条"在两家用两种写法说。
+/// 挡在删之外的两形状都不从这里过：主键那一条在 <c>MySqlSchemaReader</c> 交回的清单<em>里就没有</em>
+/// （它走列回写，而这一家删它要另一句 <c>ALTER TABLE … DROP PRIMARY KEY</c>；活库上对 <c>PRIMARY</c>
+/// 直接发这一句被库挡下，报的是"自增列必须定义成 key"那一句，
+/// 见 <c>obj/logs/v38-my-recon-1.log</c> 的 R-11），外键的支撑索引
+/// 带着约束名回来、由计划层归进"要人工"（库对那一句报 <c>Cannot drop index …: needed in a foreign
+/// key constraint</c>，同一份 log 的 R-10，判据出处见 <c>MySqlSchemaReader</c> 类注释第二条）。</item>
 /// </list></para>
 ///
 /// <para>两处这一族特有的取舍写在 <see cref="TableOptions"/> 与 <see cref="EmitCreateIndex"/> 上：
@@ -122,6 +143,17 @@ public class MySqlCodeFirst(MySqlTypes types) : ICodeFirstDialect
         return true;
     }
 
+    /// <summary>表注释那一句（类注释第六条）：一句表选项，不吃 <c>Definition</c>，因为这一句不碰任何一列。
+    /// 与列侧同一条 <c>unicode: false</c> 的取法（这一家没有 <c>N'…'</c> 前缀，字符集在建表那一串上已经定了）。</summary>
+    public bool TryEmitTableComment(SqlWriter writer, TableInfo table, string? comment)
+    {
+        writer.Append("ALTER TABLE ");
+        EmitTable(writer, table);
+        writer.Append(" COMMENT = ").AppendStringLiteral(comment ?? string.Empty, unicode: false);
+
+        return true;
+    }
+
     public void EmitCreateIndex(SqlWriter writer, TableInfo table, IndexContract index)
     {
         writer.Append(index.Kind switch
@@ -161,6 +193,17 @@ public class MySqlCodeFirst(MySqlTypes types) : ICodeFirstDialect
         }
 
         writer.Append(" )");
+    }
+
+    /// <summary>删库里读回来的那一条（类注释第七条）：<c>ON</c> 那一半不是版式，是这一家索引名的命名空间
+    /// 决定的——光有名字在这家<em>指不落</em>。表名的模式限定与建表那一句走同一个 <see cref="EmitTable"/>
+    /// （模式为空就不写），所以这里不复制那条判据。</summary>
+    public bool TryEmitDropIndex(SqlWriter writer, TableInfo table, SchemaIndex index)
+    {
+        writer.Append("DROP INDEX ").Append(Identifiers.Quote(index.Name)).Append(" ON ");
+        EmitTable(writer, table);
+
+        return true;
     }
 
     string Definition(ColumnContract column, bool includeComment = false)

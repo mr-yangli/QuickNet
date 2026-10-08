@@ -1214,13 +1214,22 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
     }
 
     /// <summary>删除：一句实体一句按主键的 <c>DELETE</c>。<see cref="SaveChangesOp.Columns"/> 留空 ——
-    /// 那条语句里没有 <c>SET</c>，把主键列填进去会让人以为它能像 UPDATE 那样挑列。</summary>
+    /// 那条语句里没有 <c>SET</c>，把主键列填进去会让人以为它能像 UPDATE 那样挑列。
+    /// <b>【v0.38 第十七笔】软删在册时这一句发的本来就是 UPDATE，那一格因此交出的就是 <c>SET</c> 里那几列</b>：
+    /// 留空的话，报告里会出现一句带着 <c>SET</c> 而"点名列"为空的语句，而这一格的口径从来是
+    /// "这条语句自己点名了哪几列"，不是"这条链的名字叫 delete"。</summary>
     async Task<IReadOnlyList<SaveChangesOp>> WriteDeletesAsync(List<HookTrace> traces, CancellationToken ct)
     {
         var statements = 0;
         var rows = 0;
         string? first = null;
         var step = traces.Count;
+
+        // 软删（§10.7 约束 3）在这一档同样生效，而摘掉的每一行共用<em>同一颗</em>时间：一次 SaveChanges
+        // 摘三行是"一次删除动作"，各读一次时钟就把一件事记成三个时刻。规则为空时 soft 与 stamp 都是 null，
+        // 下面的发射与这一格落地之前逐字同形（物理删除那条路径不为此多付一次查表）。
+        var soft = _orm.Behaviors.HasAny ? _orm.Behaviors.RuleFor(typeof(T)) : null;
+        var stamp = soft?.Stamp();
 
         foreach (var node in _order)
         {
@@ -1234,12 +1243,18 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
                     throw Unwritable(ordinal, node);
 
             object?[] key = [.. _keyOrdinals.Select(ordinal => node.Snapshot[ordinal])];
-            var sql = Emit(new DeleteStatement { Table = _table, Where = WhereWithTokens(key, node.Snapshot) }, key.Length + _tokens.Length, traces, ref step);
+            var where = WhereWithTokens(key, node.Snapshot);
+            var ast = new DeleteStatement { Table = _table, Where = where };
+            var sql = Emit(ast, soft?.Rewrite(_contract, _table, where, stamp), key.Length + _tokens.Length, traces, ref step);
 
             var affected = await _orm.Ado.NonQueryAsync(sql, new ExecutionTag("delete", [_contract.Table.Name], _cluster), ct).ConfigureAwait(false);
 
             // 删除的并发谓词同样取快照：意图是「删掉我读到的那一版」，那一版被人改过就不是这一行了。
             // 这一档不回填任何东西 —— 语句成功就意味着行不在了，<c>deleted</c> 侧没有要留下的值。
+            // 【v0.38 第十七笔补一句】软删在册时那句话改成"那一格写上了值"，而<em>判据一个字没动</em>：
+            // WHERE 仍是主键 + 并发列（软删不改条件），所以 0 行仍然只有"版本不匹配"与"行已经不在了"两种成因，
+            // 没有多出第三种 —— 这一格刻意<em>不</em>往 WHERE 里加"且尚未置位"那一支，加了才需要
+            // "被挡住的行算不算一次并发冲突"那句裁决（归用户，见 §14 的 P1 余项那一格）。
             if (affected == 0 && _tokens.Length > 0)
                 throw await ConflictAsync((T) node.Entity, node.Snapshot, key, "delete", sql, ct).ConfigureAwait(false);
 
@@ -1248,9 +1263,11 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
             first ??= sql.Text;
         }
 
+        // 软删在册时那一格交的是 SET 里点名的列，没在册时交空 —— 判据见方法注释那句【v0.38 第十七笔】。
+        // 按批算而不是按行算：一次 SaveChanges 的删除档只产一份报告，而列名与"几句、几行"同一层。
         return statements == 0
             ? []
-            : [Operation(WriteOperation.Delete, statements, rows, [], first!)];
+            : [Operation(WriteOperation.Delete, statements, rows, soft is null ? [] : soft.SetColumns(_contract), first!)];
     }
 
     /// <summary>整批写成功之后的结算（三档共用一次，所以它拿到的是「全部成功」这个前提）。
@@ -1333,15 +1350,12 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
         return Bind(new DialectSql(writer.ToSqlString(), writer.Parameters), "update", traces, ref step);
     }
 
-    DialectSql Emit(DeleteStatement ast, int parameters, List<HookTrace> traces, ref int step)
-    {
-        var dialect = _orm.Provider.Dialect;
-        var writer = StatementEmitter.Writer(dialect, StatementEmitter.EstimateLength(parameters, _identifierChars));
-
-        dialect.Emit(in ast, writer);
-
-        return Bind(new DialectSql(writer.ToSqlString(), writer.Parameters), "delete", traces, ref step);
-    }
+    /// <summary>摘行那一句的发射。<c>soft</c> 非 null 时发的是软删改写后的那一棵 UPDATE（§10.7 约束 3，
+    /// 分岔在 <see cref="StatementEmitter.EmitDelete"/> 里，与链式 <c>Delete</c> 和批量 <c>DeleteRange</c> 共用一份），
+    /// 文本仍走下面那两个钩子，所以 <c>AuditDiff</c> 与日志看到的就是真正发出去的那一句 —— 这一档正是约束 3
+    /// 那句「不会出现日志里写着 DELETE、库里其实是 UPDATE」的现场。</summary>
+    DialectSql Emit(DeleteStatement ast, UpdateStatement? soft, int parameters, List<HookTrace> traces, ref int step)
+        => Bind(StatementEmitter.EmitDelete(_orm.Provider.Dialect, ast, soft, _identifierChars, parameters), "delete", traces, ref step);
 
     /// <summary>两个钩子的顺序即语义：<c>CudBuilding</c> 改整句文本（所以它必须在参数级改写之前，
     /// 否则改写者新加的参数没人过钩子），<c>ParameterBinding</c> 改值。跟踪器这一份与三条链同一份实现。</summary>

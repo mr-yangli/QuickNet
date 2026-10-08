@@ -82,7 +82,41 @@ public interface IBulkCopyChannel
     /// <see cref="IChangeGuard.Compares"/> 那句"返回 false 时调用方必须整批退回"同一个道理。</summary>
     bool SupportsColumn(ColumnContract column);
 
+    /// <summary>这条连接串下这一家通道<em>真的</em>可用吗。交回非 null =「装载类在场，而这条串过不去」，
+    /// 交回的是给人看的一句话（与 <c>InsertEngine.Refusal</c> 的"交回话而不是布尔"同一取向）：那句话在
+    /// Auto 与 CopyChannel 两档请求下都进 <see cref="BulkReport.Reason"/>（命名了 MultiValue/SingleRow 的请求
+    /// 根本不解通道，Reason 里也就没有这一句），整批因此落在 L3 而不是付掉往返再在半路炸。
+    /// <b>「落在 L3」与「留降级痕」是两件事</b>：请求了 CopyChannel 而拿不到才算降级（派 <c>BulkDegraded</c>），
+    /// Auto 拿不到不算（它没承诺过任何一层，§12.2 那条裁决）【实测·真库 8.4.8，缺那颗参数时 Auto 交回
+    /// Method=MultiValue、Degraded=false，而这句话原样进 Reason】—— 所以这一句话是 Auto 那条路上唯一的可见面，
+    /// 写得越能行动越好（点名缺的是哪颗参数）。
+    /// <b>默认 null = 通道存在即可用</b>：T-SQL 与 PG 血统都是那一种（装载类不欠连接串任何开关）。
+    /// 今天真实存在的一道闸门在 MySQL 血统：<c>LOAD DATA LOCAL</c> 要连接串放行
+    /// <c>AllowLoadLocalInfile=true</c>，缺它时驱动在执行当场抛 NotSupportedException【实测·对照量具 m1∶m2，
+    /// 补上那颗参数后同一条语句 24 格全绿】—— 有闸门的家覆写这一颗，闸门本身归家、不归内核。</summary>
+    string? UnavailableBecauseOf(string connectionString) => null;
+
     [RequiresUnreferencedCode("装载类不在 DbProviderFactory 的抽象面上，只能按类型名在驱动程序集里找；被裁剪的驱动会在这里报通道不存在。")]
     [RequiresDynamicCode("与 RequiresUnreferencedCode 同一条：反射解析驱动类型需要运行时生成代码。")]
     Task<int> WriteAsync(BulkConnection target, BulkCopyRequest request, CancellationToken ct);
 }
+
+/// <summary>递给 <see cref="IBulkStrategy.UpsertClause"/> 的那三份<b>已经按本家方言取过号</b>的列名清单
+/// （§12.1 写侧扩展的 Upsert 档）。三份都要，是因为两家各用其中两份、而共用那份的<em>顺序</em>：
+/// MySQL 的行别名清单必须与 <c>INSERT</c> 的列清单逐位同序（按 <see cref="Settable"/> 与 <see cref="Keys"/>
+/// 各拼一遍就会与 VALUES 错列），PG 的 <c>ON CONFLICT</c> 只点名键。<b>取号只有内核这一扇门</b>
+/// （<see cref="ISqlDialect.EmitIdentifier"/>），所以 provider 既不猜引号也不猜大小写折叠。</summary>
+/// <param name="ValueOrder">写入清单的顺序 = <paramref name="Settable"/> ++ <paramref name="Keys"/>，
+/// 与内核拼出的那一条 <c>INSERT … VALUES</c> 的列清单逐位相同。</param>
+/// <param name="Settable">冲突那一支要改写的列——已按 <c>UpdateRange</c> 整行更新的同一把尺排除主键、
+/// 库里给值的列与并发列。</param>
+/// <param name="Keys">定位与冲突判定的主键列，顺序同契约（复合键在这里装得下：<c>ON CONFLICT (a, b)</c>
+/// 是一句合法文本，与 <c>DeleteRange</c> 那句"IN 装不下元组"是两件事）。</param>
+/// <param name="Identifier">把一颗<em>裸</em>标识符换成这一家的取号形态。provider 自己点名的名字
+/// （MySQL 那一家给行别名起的 <c>fs</c>）必须从这里过——那一颗内核不知道，而手拼引号就等于在
+/// <see cref="Metadata.IdentifierPolicy"/> 之外多出第二个口径。</param>
+public sealed record UpsertColumns(
+    IReadOnlyList<string> ValueOrder,
+    IReadOnlyList<string> Settable,
+    IReadOnlyList<string> Keys,
+    Func<string, string> Identifier);

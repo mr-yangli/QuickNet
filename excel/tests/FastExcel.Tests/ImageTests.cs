@@ -1,4 +1,5 @@
 using System.IO.Compression;
+using FastExcel.Internal.OpenXml;
 using FastExcel.Tests.Models;
 
 namespace FastExcel.Tests;
@@ -81,5 +82,47 @@ public class ImageTests : IDisposable
         Assert.Equal(8, png.PixelWidth);
         Assert.Equal(6, png.PixelHeight);
         Assert.Equal("image/png", png.ContentType);
+    }
+
+    // Templates ship pre-styled valueless rows (<c s="1"/> with no <v>) to carry borders. They are
+    // blank rows even though the workbook also carries an anchored image.
+    [Fact]
+    public void Styled_Valueless_Rows_Are_Skipped_When_Workbook_Has_Images()
+    {
+        var path = TempPath("blank_rows.xlsx");
+        Excel.SaveAs(path, new List<Photo> { new Photo { Name = "红", Pic = new ExcelImage(Red) } });
+        InjectStyledEmptyRows(path, startRow: 3, count: 4, columns: 2);
+
+        var result = Excel.Import<Photo>(path);
+
+        Assert.Null(result.Exception);
+        Assert.False(result.HasErrors, string.Join("; ", result.Errors));
+        Assert.Single(result.Data);
+        Assert.Equal("红", result.Data[0].Name);
+    }
+
+    private static void InjectStyledEmptyRows(string path, int startRow, int count, int columns)
+    {
+        using var zip = ZipFile.Open(path, ZipArchiveMode.Update);
+        var entry = zip.GetEntry("xl/worksheets/sheet1.xml");
+        Assert.NotNull(entry);
+        string xml;
+        using (var reader = new StreamReader(entry!.Open()))
+            xml = reader.ReadToEnd();
+
+        string rows = "";
+        for (int i = 0; i < count; i++)
+        {
+            int r = startRow + i;
+            string cells = "";
+            for (int c = 0; c < columns; c++)
+                cells += $"<c r=\"{XmlUtility.ColumnLetter(c)}{r}\" s=\"1\"/>";
+            rows += $"<row r=\"{r}\" spans=\"1:{columns}\">{cells}</row>";
+        }
+
+        xml = xml.Replace("</sheetData>", rows + "</sheetData>");
+        entry.Delete();
+        using var writer = new StreamWriter(zip.CreateEntry("xl/worksheets/sheet1.xml").Open());
+        writer.Write(xml);
     }
 }

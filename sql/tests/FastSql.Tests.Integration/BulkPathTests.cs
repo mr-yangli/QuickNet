@@ -20,8 +20,9 @@ namespace FastSql.Tests.Integration;
 /// （自增列与并发列都不在里面）。序号对齐会把第 3 个值写进第 3 列，而每一条都返回成功。
 /// 那一种错只有逐列读回来比才看得见。</para>
 ///
-/// <para><b>这一档今天只有一家接了</b>，所以每条用例第一句都挂 <see cref="ReadyForCopy"/>：
-/// 那不是"本家跑不过"而是"这一档在本家没有对象"，理由写在那一颗里。<b>只插不删</b>与
+/// <para><b>这一档今天接了三家</b>（SQL Server 的 <c>SqlBulkCopy</c>、MySQL 血统的 <c>MySqlBulkCopy</c>、
+/// PG 血统的二进制 COPY），所以每条用例第一句都挂 <see cref="ReadyForCopy"/>：那颗闸门问的是 provider
+/// 交不交得出通道，而不是"本家跑不过"——它跳过的理由是"这一档在本家没有对象"。<b>只插不删</b>与
 /// <see cref="WritePathTests"/> 同一套姿势：每条用例带本次运行独占的标签，人工清理按
 /// <c>LIKE 'fastsql-bulk/%'</c>。</para>
 ///
@@ -31,7 +32,12 @@ namespace FastSql.Tests.Integration;
 /// "列按名字对齐、类型按 binder 归一"。那一格记在 usage 文档的现状段里。</para></summary>
 public sealed class BulkPathTests
 {
-    static FastSqlOrm Orm => Database.Orm;
+    /// <summary>本册那台动装载通道的 ORM：与 <see cref="Database.Orm"/> 同一台实例的配置，只有连接串
+    /// 换成 <see cref="Database.BulkConnectionString"/>（MySQL 一支欠的那颗客户端参数，理由写在那一颗的抬头）。
+    /// <b>刻意不是 <c>Database.Orm</c></b>：裁判那一路要用的仍然是原始串，两台分开才看得见"多出来的只是参数"。</summary>
+    static FastSqlOrm Orm => _bulk ??= Database.BulkOrmWith();
+
+    static FastSqlOrm? _bulk;
 
     /// <summary>本次运行独占的批次前缀：每条用例在它下面再分一个自己的标签，所以重复跑不会因为
     /// "计数变了"变红（与 <see cref="WritePathTests"/> 同一颗理由）。</summary>
@@ -56,18 +62,30 @@ public sealed class BulkPathTests
                    Note = note,
                })];
 
-    /// <summary>本册第一条闸门：装载通道今天只有 SQL Server 一家接。</summary>
+    /// <summary>本册第一条闸门：<b>问 provider，不问家族名</b>。
+    /// §12.1 那一档的判据就是 <c>IBulkStrategy.ResolveCopyChannel()</c> 交不回 null，所以这一句与内核选层
+    /// 用的是同一颗判据；写成"只有某一家"会在下一家接上时变成一句假话（今天交得出通道的三家：
+    /// SQL Server 的 <c>SqlBulkCopy</c>、MySQL 血统的 <c>MySqlBulkCopy</c>、PG 血统的二进制 COPY）。</summary>
     static void ReadyForCopy()
     {
         Database.Ready();
 
-        // §12.1 那一档的判据是 IBulkStrategy.ResolveCopyChannel() 交不回 null。其余几家交回 null，
-        // 于是"请求 CopyChannel"在它们身上会整批退 L3 —— 那时无事可判，而断言会绿在文本层上，
-        // 把"这一家没有通道"伪装成"通道是通的"。缺口按 §13.4 的纪律带理由 skip，不删用例。
-        Assert.SkipWhen(Database.Family != Database.Target.SqlServer,
-            $"装载通道（§12.1 的 L1）今天只有 SQL Server 一家接，本跑是 {Database.Family}：" +
-            "ResolveCopyChannel() 交回 null，WithBulk(CopyChannel) 会整批退回 L3 多值语句，" +
-            "本册判的那件事在这里没有对象（退路本身由离线册 BulkLayerTests 钉住）。");
+        // 交回 null 的那几家（SQLite、Oracle 血统、Gbase8s，以及驱动里没有装载类的任何一支）在这条线上
+        // 会整批退 L3 —— 那时无事可判，而断言会绿在文本层上，把"这一家没有通道"伪装成"通道是通的"。
+        // 缺口按 §13.4 的纪律带理由 skip，不删用例。
+        var channel = Database.Provider.Bulk?.ResolveCopyChannel();
+
+        Assert.SkipWhen(channel is null,
+            $"{Database.Family} 这一家交不出装载通道（ResolveCopyChannel() 为 null：没接，或这一支驱动里没有装载类），" +
+            "WithBulk(CopyChannel) 会整批退回 L3 多值语句，本册判的那件事在这里没有对象" +
+            "（退路本身由离线册 BulkLayerTests 钉住）。");
+
+        // 第二颗闸门是这一家独有的，而且它 skip 的不是"能不能写"而是"本册要的那一台 ORM 配不配得出来"：
+        // LOAD DATA LOCAL 要客户端放行，而本层的 BulkConnectionString 就是补那一颗参数的地方。
+        if (Database.Family == Database.Target.MySql)
+            Assert.SkipUnless(Database.BulkConnectionString.Contains("AllowLoadLocalInfile", StringComparison.OrdinalIgnoreCase),
+                "MySQL 一支的装载通道要连接串放行 AllowLoadLocalInfile，而缝给的原始串里那颗参数补不上" +
+                "（BulkConnectionString 那一段写的就是这一格）。缺它时本册判的仍是退路，不是通道。");
     }
 
     static string Millis(string column) => Database.MillisText(column);
@@ -98,6 +116,81 @@ public sealed class BulkPathTests
             Assert.Equal(one.PaidAt.Value, DateTime.Parse(landed["PaidAt"], CultureInfo.InvariantCulture));
     }
 
+    // ── 连接串那道闸门（今天只有 MySQL 血统欠那一颗参数） ─────────────────
+
+    [Fact]
+    public async Task The_local_infile_gate_moves_the_batch_to_l3_and_names_the_parameter_it_needs()
+    {
+        // 这一条用的是缝给的**原始**那一颗串（不补 AllowLoadLocalInfile），判的是"闸门在选层之前就把这一家
+        // 挪到 L3"，而不是"驱动在执行当场抛 NotSupportedException"（那句是补参数之前对照量具第一趟的红）。
+        // 原始串与补好的串是同一台实例、同一座库、同一批表，差的只有那颗客户端开关 —— 分岔的出处
+        // 写在 Database.BulkConnectionString 的抬头。
+        Database.Ready();
+        Assert.SkipWhen(Database.Family != Database.Target.MySql,
+            $"{Database.Family} 这一家的装载通道不欠连接串参数（MySQL 血统走 LOAD DATA LOCAL 才要客户端放行），" +
+            "这一格在本家没有对象；通道本身由下面那几条判。");
+
+        var note = tag("no-infile");
+        var seen = new List<BulkDegradedEvent>();
+        var aop = new FastSqlAop();
+
+        aop.BulkDegraded = seen.Add;
+
+        var report = await Database.OrmWith(aop).InsertRange(rows(note, 5))
+            .ExecuteBulkAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(BulkMethod.MultiValue, report.Method);
+        // 【2026-10-07 真库读数 —— 这条断言在写下的当天是红的，红在把"闸门"读成了"承诺"】
+        // Auto 没承诺过任何一层，取到阶梯上第一档满足条件的层就是它的定义（§12.2 那条裁决在这里同样成立），
+        // 所以缺那颗参数时它<em>不是</em>降级：Degraded 为假、BulkDegraded 一位不派（事件抬头写的就是
+        // "只在真的降级时派发"）。本条判的因此是"档位挪了、而拒绝的话仍然看得见"，不是"留痕"。
+        Assert.False(report.Degraded);
+        Assert.Equal(5, report.RowCount);
+
+        // 痕不派，但 Reason 必须点名缺的是哪颗参数：只说"走了 L3"会把调优的人支到 provider 那一侧去查，
+        // 而该查的是那一串配置。这一格是这一条用例真正的判据。
+        Assert.Empty(seen);
+        Assert.Contains("AllowLoadLocalInfile", report.Reason, StringComparison.Ordinal);
+        Assert.Contains("LOAD DATA LOCAL", report.Reason, StringComparison.Ordinal);
+
+        // 行必须真进去：降级的是档位，不是"这一批没写"。裁判走原始串读，读的仍是同一张表。
+        Assert.Equal(5, stored(note).Count);
+
+        // 同一条请求在 Never 那一档要响，而且响的话与留痕的那句是同一句（Never 不给"悄悄退一层"留余地）。
+        var refused = await Assert.ThrowsAsync<FastSqlException>(
+            async () => await Database.OrmWith().InsertRange(rows(tag("no-infile-never"), 2))
+                .WithBulk(BulkMethod.CopyChannel, FallbackPolicy.Never)
+                .ExecuteBulkAsync(TestContext.Current.CancellationToken));
+
+        Assert.Contains("AllowLoadLocalInfile", refused.Message, StringComparison.Ordinal);
+        Assert.Empty(stored(tag("no-infile-never")));
+    }
+
+    [Fact]
+    public async Task The_same_batch_lands_on_l1_once_the_connection_string_allows_local_infile()
+    {
+        // 上一条的另一半：补上那颗参数之后同一个请求拿的是 L1，而不是"仍然是 L3 而只是没报错"。
+        // 这一句同时是 BulkConnectionString 那一次改写的验收 —— 参数补错了地方（换库、换表）这里就会红。
+        Database.Ready();
+        Assert.SkipWhen(Database.Family != Database.Target.MySql,
+            $"{Database.Family} 这一家的装载通道不欠连接串参数，这一格问的是欠参数那一家的两种读数。");
+
+        var note = tag("infile");
+        var seen = new List<BulkDegradedEvent>();
+        var aop = new FastSqlAop();
+
+        aop.BulkDegraded = seen.Add;
+
+        var report = await Database.BulkOrmWith(aop).InsertRange(rows(note, 5))
+            .WithBulk(BulkMethod.CopyChannel, FallbackPolicy.Never)
+            .ExecuteBulkAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(BulkMethod.CopyChannel, report.Method);
+        Assert.False(report.Degraded);
+        Assert.Empty(seen);
+        Assert.Equal(5, stored(note).Count);
+    }
+
     // ── 落库与等价（§12.4 的等价性） ────────────────────────────────────
 
     [Fact]
@@ -114,7 +207,8 @@ public sealed class BulkPathTests
 
         // Never 这一档在真库上必须不咬：它是 §12.2 那句"CI 里跑一遍防静默逐条"的现场，
         // 而"跑一遍"的前提是通道在真驱动集里找得到 —— 离线册只能证找不到时的形状。
-        var report = await Database.OrmWith(aop).InsertRange(batch)
+        // 用的是本册那一台补好闸门的 ORM（原始串在 MySQL 血统上会让这一句红在 Never，而那咬的是配置不是形状）。
+        var report = await Database.BulkOrmWith(aop).InsertRange(batch)
             .WithBulk(BulkMethod.CopyChannel, FallbackPolicy.Never)
             .ExecuteBulkAsync(TestContext.Current.CancellationToken);
 
@@ -463,6 +557,10 @@ public sealed class BulkPathTests
             public string Describe => inner.Describe + "（本用例把装载通道换成记录用的替身）";
 
             public IBulkCopyChannel? ResolveCopyChannel() => channel;
+
+            // 换的只有通道那一格：Merged 那颗默认值不转发就会读成"这一家不收多语句批"，
+            // 而替身包的是真 provider，替身不该改判据（同 LowBudgetProvider 那一段的理由）。
+            public bool SupportsMergedStatements => inner.SupportsMergedStatements;
         }
     }
 
@@ -473,6 +571,6 @@ public sealed class BulkPathTests
         var inner = Database.Provider;
         var channel = new SpiedCopyChannel(inner.Bulk!.ResolveCopyChannel()!);
 
-        return (Database.OrmWith(new FastSqlAop(), new SpiedCopyProvider(inner, channel)), channel);
+        return (Database.BulkOrmWith(new FastSqlAop(), new SpiedCopyProvider(inner, channel)), channel);
     }
 }

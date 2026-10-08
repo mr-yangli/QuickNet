@@ -432,7 +432,7 @@ public sealed partial class AdoExecutor
         catch
         {
             if (ownsConnection)
-                connection.Dispose();
+                ConnectionRelease.Release(connection);
             throw;
         }
     }
@@ -545,7 +545,7 @@ public sealed partial class AdoExecutor
         }
         catch
         {
-            await connection.DisposeAsync().ConfigureAwait(false);
+            await ConnectionRelease.ReleaseAsync(connection).ConfigureAwait(false);
             throw;
         }
 
@@ -670,7 +670,7 @@ public sealed partial class AdoExecutor
             // 环境事务那条连接归事务，会话那条连接归会话，语句结束都不能把它还给池 ——
             // 连接上还有一个活着的事务（或还有后面的语句要用它），归还等于把别人的事务交给下一个借用者。
             if (ownsConnection)
-                await Connection.DisposeAsync().ConfigureAwait(false);
+                await ConnectionRelease.ReleaseAsync(Connection).ConfigureAwait(false);
         }
     }
 
@@ -746,3 +746,39 @@ public sealed partial class AdoExecutor
         }
     }
 }
+
+/// <summary>把自己自有的连接交回那一步的<em>唯一写法</em>：<b>先 <see cref="DbConnection.Close"/>，
+/// 再 Dispose</b>（同步或异步那两支都一样）。这不是防御性冗余，是第五族逼出来的一格：
+///
+/// <para><b>虚谷那颗驱动的 <c>Dispose()</c> 与 <c>DisposeAsync()</c> 不把会话还回去，只有 <c>Close()</c> 还</b>。
+/// 四支形状在同一颗进程里用同一条连接串逐支量过（探针 <c>obj/probe-xugu/Program.cs</c>，
+/// 每支都是 OpenAsync 之后只换"还"的写法）：
+/// <c>Close()</c> 单用 ∶ <c>Close()</c> + <c>DisposeAsync()</c> 两支各跑满 3000 轮不红；
+/// <c>Dispose()</c> 单用 ∶ <c>DisposeAsync()</c> 单用两支都<b>正好在第 1000 次 Open 红</b>，
+/// 与第五支"开完根本不还、只交给终结器"红在同一颗数上【实测·obj/logs/v40-xugu-release-shapes.log，
+/// 五支逐支的读数与重跑法都在那份日志里】。
+/// 也就是说这一族的 <c>Dispose</c> 覆写<em>不</em>等价于 <c>Close</c>，会话要等终结器跑过才交回 ——
+/// 于是"有没有 Dispose"这一问在这一家根本不成立，成立的是"有没有 Close"。
+/// 另两道底：同一串累计 7500 次 Open→Close→Dispose 不红，300 条<em>同时</em>在场也不红，
+/// 所以那 1000 限的是"没还回去的会话条数"，既不是登录次数也不是并发条数。</para>
+///
+/// <para><b>为什么这一句写给全部五族而不是开一个第五族的洞</b>：另四族的 <c>Dispose()</c> 里做的本来就是
+/// <c>Close()</c> 那一件事（把连接还给池），先 Close 再 Dispose 对它们是同义反复、不新增语义；
+/// 而"谁自有的连接谁还"这句话因此仍然只有 <see cref="RentedConnection.DisposeAsync"/> 一处，
+/// 只是那一处从此走本类的两个入口。</para></summary>
+internal static class ConnectionRelease
+{
+    public static void Release(DbConnection connection)
+    {
+        connection.Close();
+        connection.Dispose();
+    }
+
+    public static async ValueTask ReleaseAsync(DbConnection connection)
+    {
+        connection.Close();
+
+        await connection.DisposeAsync().ConfigureAwait(false);
+    }
+}
+

@@ -126,10 +126,13 @@ public sealed class Gbase8cDialectTests
     }
 
     [Fact]
-    public void The_capability_mask_is_inherited_verbatim_14_bits_not_one_less_not_one_more()
+    public void The_capability_mask_is_inherited_verbatim_15_bits_not_one_less_not_one_more()
     {
         // 六路链的掩码半：leaf == 瀚高叶 == 两颗分叉叶 == 金仓叶 == 血统。金仓那 14 位里躺着 7 位 VendorDoc
         // 乐观声明，本家今天一位都不翻案也不删减——那七位的收敛是 §4 的账，不是这颗叶子顺手能结的。
+        // 第 15 位是本笔挂上去的 Bulk_Copy，而它是本家那一格"前件是转引来的"的第二次兑现：这一位问的是
+        // "这台驱动里有没有导入器"，而行 905 对驱动只说"与 openGauss 高度相似"——问句要两跳才落到本家头上，
+        // 且两跳之后仍然没有一台活库替它答。
         Assert.Equal(HighgoLeaf.Capabilities, Provider.Capabilities);
         Assert.Equal(OpenGaussLeaf.Capabilities, Provider.Capabilities);
         Assert.Equal(GaussDbLeaf.Capabilities, Provider.Capabilities);
@@ -141,7 +144,7 @@ public sealed class Gbase8cDialectTests
             DbCapabilities.Cte | DbCapabilities.WindowFunctions | DbCapabilities.Count_Over_Window |
             DbCapabilities.Boolean_Type | DbCapabilities.Guid_Raw16 | DbCapabilities.Schemas | DbCapabilities.Json_Type |
             DbCapabilities.CaseSensitive_Identifiers | DbCapabilities.Comment_On_Column |
-            DbCapabilities.Alter_Column_Precision | DbCapabilities.TempTable,
+            DbCapabilities.Alter_Column_Precision | DbCapabilities.TempTable | DbCapabilities.Bulk_Copy,
             Provider.Capabilities);
 
         // 两颗"这一族刻意不声明"在本家同样不翻案：MultiStatement 被 §9.4 点名（扩展协议里一次塞多条

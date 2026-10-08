@@ -29,7 +29,8 @@ namespace FastSql.Query.Filters;
 /// 兑现了这三条链，<b>没有</b>兑现 <c>SaveChanges</c> 与批量那两档 —— 那两档的 <c>WHERE</c> 长在
 /// <c>EntityTracker</c> 上，接过去要先把"被过滤器挡住的行算不算一次并发冲突"这件事定下来（公开语义，见 §14 的 P1 余项那一格）。
 /// 约束 2（<c>IgnoreQueryFilters()</c> 与 <c>mandatory</c>）见 <see cref="AssertIgnorable"/>。
-/// 约束 3（软删改写在 <c>CudBuilding</c>）不在这一只上，机制 v0.18 已经有了，缺的是 <c>Behaviors.SoftDelete</c> 那入口子。
+/// 约束 3（软删改写）不在这一只上，它在 v0.38 第十七笔有了内容（<c>orm.Behaviors.SoftDelete</c>），而落点是 AST 形状而不是
+/// <c>CudBuilding</c> 的文本 —— 判据与两处各管哪一半写在 <c>FastSql.Behaviors.BehaviorRegistry</c> 的类型注释里。
 /// 约束 4（过滤器与用户 lambda 同一个翻译器、启动期失败）见 <see cref="Add{TEntity}"/> 里那次试翻译。</para>
 /// </summary>
 public sealed class FilterRegistry

@@ -173,13 +173,40 @@ static class Database
     ///
     /// <para><paramref name="aop"/> 为 null 时留默认那颗（<c>FastSqlOrmOptions</c> 自己的 <c>new()</c>），
     /// 与前三处从前的行为逐字相同；<paramref name="provider"/> 只给包壳那一种用例用。</para></summary>
-    public static FastSqlOrm OrmWith(FastSqlAop? aop = null, IDbProvider? provider = null)
+    public static FastSqlOrm OrmWith(FastSqlAop? aop = null, IDbProvider? provider = null, string? connectionString = null)
         => new(new FastSqlOrmOptions
         {
             Provider = provider ?? BuildProvider(Driver),
-            ConnectionString = ConnectionString,
+            ConnectionString = connectionString ?? ConnectionString,
             Aop = aop ?? new FastSqlAop(),
         });
+
+    /// <summary>装载通道那一条出口要用的连接串。<b>只有 MySQL 一支与 <see cref="ConnectionString"/> 不同</b>：
+    /// <c>MySqlBulkCopy</c> 走的是 <c>LOAD DATA LOCAL</c>，客户端不放行 <c>AllowLoadLocalInfile</c> 时驱动
+    /// 在执行当场拒（那颗闸门写在 <c>MySqlBulkCopyChannel.UnavailableBecauseOf</c> 的抬头，本层今天有它的
+    /// 真库读数，而那颗 gate 的另一半 —— "没放行时整批退 L3 并留痕" —— 由 <c>BulkPathTests</c> 用
+    /// <em>原始那一颗串</em> 判）。
+    ///
+    /// <para><b>这里补的是一颗客户端开关，不是换一台库</b>：同一实例、同一座 <c>TestDB</c>、同一批表，
+    /// 所以 <see cref="Rows"/> 那一路裁判照旧走 <see cref="ConnectionString"/>，两边读的是同一张表；
+    /// 而"写的那一台用了额外的参数"这件事在本层是可见的（用例第一句就点名），不是暗账。
+    /// 其余各家交回同一颗串：SQL Server 的 <c>SqlBulkCopy</c> 不欠参数，PG 那一支的 binary COPY 也不欠。</para></summary>
+    public static string BulkConnectionString
+        => Family == Target.MySql ? WithLocalInfile(ConnectionString) : ConnectionString;
+
+    static string WithLocalInfile(string value)
+    {
+        if (value.Contains("AllowLoadLocalInfile", StringComparison.OrdinalIgnoreCase)
+            || value.Contains("UseLocalInfile", StringComparison.OrdinalIgnoreCase))
+            return value;
+
+        return value.TrimEnd(';', ' ') + ";AllowLoadLocalInfile=true";
+    }
+
+    /// <summary>要动装载通道的那台 ORM：与 <see cref="OrmWith"/> 同一个组装口，只把连接串换成
+    /// <see cref="BulkConnectionString"/>。</summary>
+    public static FastSqlOrm BulkOrmWith(FastSqlAop? aop = null, IDbProvider? provider = null)
+        => OrmWith(aop, provider, BulkConnectionString);
 
     /// <summary>把 C# 侧的标识符折成<em>这一家目录里存着的那一形</em>，给"逐列比目录"那三句用。
     /// <b>只在虚谷折</b>：那一家的折叠方向是量出来的（写 <c>"PaidAt"</c> 建出来的列，

@@ -110,6 +110,7 @@ internal static class ExcelImporter
 
             // 4. Data rows
             Dictionary<(int, int), ExcelImage>? images = null;
+            HashSet<int>? imageRows = null;
             if (meta.HasImageColumns)
             {
                 var map = pkg.ReadImagesFor(options);
@@ -124,14 +125,14 @@ internal static class ExcelImporter
                             map[rc] = cimg;
                 }
                 images = map;
+                imageRows = new HashSet<int>(map.Keys.Select(k => k.Item1));
             }
             var validationResults = new List<ValidationResult>();
             int dataRows = 0;
             while (ws.Read())
             {
                 if (options.MaxRows > 0 && dataRows >= options.MaxRows) break;
-                bool hasImages = images is { Count: > 0 };
-                if (!ws.HasAny && !hasImages) continue; // blank row
+                if (!ws.HasAny && imageRows?.Contains(ws.RowNumber - 1) != true) continue; // blank row: images float over cells, judge per row
                 dataRows++;
                 result.TotalRows++;
                 int rowNum = ws.RowNumber;

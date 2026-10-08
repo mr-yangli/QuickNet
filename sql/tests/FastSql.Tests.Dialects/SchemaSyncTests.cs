@@ -48,6 +48,9 @@ public sealed class SchemaSyncTests
         Assert.False(result.Executed);
         Assert.Contains("CREATE TABLE", result.Ddl);
         Assert.Contains("SYNC_TEST", result.Ddl);
+
+        // 逐句清单与那一整篇同源（都来自 Tally 记录的那一步），断言它是同一串句子的拆分而不是第二次生成
+        Assert.Contains(result.DdlStatements, s => s.Contains("CREATE TABLE", StringComparison.Ordinal));
     }
 
     [Fact]

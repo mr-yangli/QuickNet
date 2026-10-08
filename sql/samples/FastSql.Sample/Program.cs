@@ -1071,6 +1071,96 @@ else
 }
 
 Console.WriteLine();
+
+// ── 15. 软删（orm.Behaviors.SoftDelete：DELETE 换成置位的 UPDATE） ────────
+Console.WriteLine("═══ 15. 软删改写 ═══");
+Console.WriteLine();
+
+// 册子挂在 orm 实例上，所以这里建两只实例打同一颗文件库：一只没注册、一只注册了。
+// 需要这个对照的理由是这一档的判据不是"少了行"，而是"库里那一格被写了什么"，而它按实体成立 ——
+// 只接一处出口就会留下"同一张表走 A 留住行、走 B 丢行"那个洞，所以下面链式与批量两处都注册在同一次。
+var plain = new FastSqlOrm(new FastSqlOrmOptions
+{
+    Provider = orm.Provider,
+    ConnectionString = $"Data Source={dbFile}",
+});
+
+var soft = new FastSqlOrm(new FastSqlOrmOptions
+{
+    Provider = orm.Provider,
+    ConnectionString = $"Data Source={dbFile}",
+    SchemaSync = SchemaSyncPolicy.Execute,
+    ForceSchemaSync = true,
+});
+
+soft.Behaviors.SoftDelete<SampleTicket>(t => t.Deleted, t => t.DeletedAt);
+
+_ = soft.Select<SampleTicket>();
+_ = await soft.SyncStructureAsync();
+
+// 种子走 plain：那一只没有行为，所以这四行是真 INSERT，而后面每一格读数都有对照。
+await plain.InsertRange(new[]
+{
+    new SampleTicket { Seat = "A1" },
+    new SampleTicket { Seat = "A2" },
+    new SampleTicket { Seat = "B1" },
+    new SampleTicket { Seat = "B2" },
+}).ExecuteAffrowsAsync();
+
+// ① 没注册的那一家：Sql 就是 DELETE，那句自陈说的也是这件事。
+var physical = plain.Delete<SampleTicket>().Where(t => t.Seat == "A1").Explain();
+
+Console.WriteLine($"没注册：{physical.Sql.Text.Split(' ')[0]} ∶ {physical.Reason}");
+
+// ② 注册过的那一家：同一条链、同一个 Where，换的是形状而不是范围——WHERE 一个字没动。
+var rewritten = soft.Delete<SampleTicket>().Where(t => t.Seat == "A1").Explain();
+
+Console.WriteLine($"注册过：{rewritten.Sql.Text.Split(' ')[0]} ∶ {rewritten.Reason}");
+Console.WriteLine($"  整句：{rewritten.Sql.Text}");
+Console.WriteLine($"  Ast 那一棵仍是 {rewritten.Ast.GetType().Name}（调用方要的是删除），Sql 才是库里执行的那句");
+
+// ③ 真跑一次，再跑一次：同一条谓词第二次仍然命中 1 行。
+//    这一格钉的是"这一档刻意没往 WHERE 加『且尚未置位』"——加上去就替"0 行受影响"开出第三种成因，
+//    而那种成因要等一条裁决（被过滤器挡住的行算不算一次并发冲突），这里不自决。
+var firstStrike = await soft.Delete<SampleTicket>().Where(t => t.Seat == "A1").ExecuteAffrowsAsync();
+var secondStrike = await soft.Delete<SampleTicket>().Where(t => t.Seat == "A1").ExecuteAffrowsAsync();
+
+Console.WriteLine($"同一句连跑两次：影响 {firstStrike} 行、又 {secondStrike} 行（重复删除不是 0 行，因为 WHERE 没加「且尚未置位」）");
+
+// ④ 批量那条出口：两行键变成一句置位的 UPDATE，而整批共用一颗时钟。
+var toArchive = await plain.Select<SampleTicket>()
+    .Where(t => t.Seat == "B1" || t.Seat == "B2")
+    .ToListAsync();
+
+var logged = new List<string>();
+soft.Aop.Executed = e => logged.Add($"{e.OperationKind} ∶ {e.Sql.Text.Split(' ')[0]}");
+
+var bulkPlan = soft.DeleteRange(toArchive).Explain();
+
+Console.WriteLine($"批量那一句：{bulkPlan.Commands[0].Text}");
+
+var bulkRun = await soft.DeleteRange(toArchive).ExecuteBulkAsync();
+
+Console.WriteLine($"  执行：{bulkRun.RowCount} 行 / {bulkRun.RoundTrips} 次往返 ∶ 日志里是 {string.Join("、", logged)}");
+
+// ⑤ 裁判走裸连接问库，不走被测的这条链：行一行没少，只是那一格被写了。
+var facts = TicketFacts(dbFile);
+
+Console.WriteLine($"库里：{facts.Total} 行（没少）∶ 置位 {facts.Flagged} 行 ∶ 批量那两行上有 {facts.BulkStamps} 个时刻（一次构建一颗）");
+
+// ⑥ 行为只管"删的那一句长什么样"，不管"读到的集合里有没有已删的行"——后者是 orm.Filters 的活。
+//     两只对象各装一半，这里先只装行为，所以四行全都还看得见。
+Console.WriteLine($"只注册行为时读侧：{await soft.Select<SampleTicket>().CountAsync()} 行可见（库里 {facts.Total} 行都在）");
+
+soft.Filters.Add<SampleTicket>(t => !t.Deleted);
+
+Console.WriteLine($"再注册过滤器之后：{await soft.Select<SampleTicket>().CountAsync()} 行可见，而库里仍是 {facts.Total} 行——过滤器不是删除，它自己不动任何一行");
+
+// 这一档今天演示链式与批量两处出口。第三处（SaveChanges 里被摘掉的行）在这里证不了：本节用的会话
+// 绑的是 DI 那只 orm，在它身上注册行为会回头改前面 §3–§5 那些读数。那一处由真库那册钉，
+// 判据是"报告里 Operations[].Columns 交出 SET 的那两列"，见 tests/FastSql.Tests.Integration/SoftDeletePathTests.cs。
+
+Console.WriteLine();
 Console.WriteLine("═══ 示例完成 ═══");
 
 
@@ -1112,6 +1202,25 @@ static bool HasTable(string file, string table)
 }
 
 static string Head(string text, int take = 64) => text.Length <= take ? text : text[..take] + "…";
+
+// §15 的裁判：同一句"库里现在是什么形状"由裸连接问，不经那只注册了行为的 orm——
+// 被测的那条链说"我置位了"不算证，库里那一格是 1 才算。
+static (int Total, int Flagged, int BulkStamps) TicketFacts(string file)
+{
+    using var connection = new SqliteConnection($"Data Source={file}");
+
+    connection.Open();
+
+    using var command = connection.CreateCommand();
+    command.CommandText =
+        "SELECT COUNT(*), COALESCE(SUM(Deleted), 0), " +
+        "(SELECT COUNT(DISTINCT DeletedAt) FROM SampleTickets WHERE Seat IN ('B1', 'B2')) FROM SampleTickets";
+
+    using var reader = command.ExecuteReader();
+    reader.Read();
+
+    return (reader.GetInt32(0), Convert.ToInt32(reader.GetValue(1)), reader.GetInt32(2));
+}
 
 // ── §14 的那台 SQL Server：连接串、组装、目录那三颗口子 ────────────────────
 

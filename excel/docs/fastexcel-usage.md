@@ -62,7 +62,7 @@
 
 | 特性 | 关键成员（默认值） | 作用 |
 | --- | --- | --- |
-| `ExcelColumnAttribute` | `Name`(=成员名)、`Aliases`(导入接受的额外表头，忽略大小写与空白)、`Order`(1000，小者靠前，同值保持声明序)、`Width`(-1=自动)、`Format`、`Required`、`ColumnIndex`(-1=按名匹配)、`AutoTrim`(true) | 重命名 / 排序 / 定宽 / 定位 / 别名的主开关 |
+| `ExcelColumnAttribute` | `Name`(=成员名)、`Aliases`(导入接受的额外表头，忽略大小写与空白)、`Order`(1000，小者靠前，同值保持声明序)、`Width`(-1=自动)、`Format`、`Required`(默认 false，与 DataAnnotations `[Required]` **取并集**)、`ColumnIndex`(-1=按名匹配)、`AutoTrim`(true) | 重命名 / 排序 / 定宽 / 定位 / 别名的主开关 |
 | `ExcelColumnWidthAttribute` | `Width`（构造参数，Excel 字符单位） | 只设导出列宽 |
 | `ExcelFormatAttribute` | `FormatString`（构造参数，如 `"#,##0.00"`、`"yyyy-MM-dd HH:mm"`） | 数字/日期自定义格式，写进 `xl/styles.xml`（自定义 numFmtId 从 164 起排） |
 | `ExcelIgnoreAttribute` | 无 | 属性/字段既不导出也不导入 |
@@ -186,6 +186,10 @@ public sealed class ImportError
 `ImportErrorKind` 三值：`Conversion`（格文本转不成目标 CLR 类型）、`Validation`（DataAnnotations 或 `IValidatableObject` 规则失败）、`MissingColumn`（必填列整列不在表上，模板对不上）。
 
 想退回"首错即抛"：`ThrowOnError=true`，抛 `FastExcelImportException`，异常携带已收集的全部错误。
+
+**必填列判定也是并集。** 整列缺失才记 `TemplateErrors`，口径是 `ExcelColumn.Required || [Required]` —— 有 `[ExcelColumn]` 却没写 `Required` 时不能把 DataAnnotations 的 `[Required]` 吃掉（属性默认值是 `false`，无法与"未指定"区分，所以只能取并集；要显式免除就在 DTO 上别加 `[Required]`）。
+
+**空行按行判，不按册判。** 无值行（模板为画边框预留的 `<c s="…"/>` 样式空格）跳过、不计 `TotalRows`；只有该行确有浮动图片锚点才算数据行 —— 图片是浮在格上的对象，不能因为册子里有图就把整册空行都当数据读进来。
 
 ### 4.3 类型转换能吃什么
 

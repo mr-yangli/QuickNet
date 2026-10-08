@@ -25,6 +25,12 @@ public sealed class FastSqlAop
     public Action<BulkDegradedEvent>? BulkDegraded;
 
     // ── 改写类：值级改写，按注册顺序串联
+    /// <summary>逐格取值时问一次，两个发射点：<b>插入链的取值段</b>（<c>InsertEngine.Prepare</c>）与
+    /// <b>整行更新链的取值段</b>（<c>UpdateBulkEngine.Prepare</c>，即 <c>orm.UpdateRange(实体集)</c>）。
+    /// 两者靠 <see cref="AuditValueEvent.OperationKind"/> 分派，一条订阅可以同时管创建列与修改列。
+    /// <b>点名式的那条更新链（<c>orm.Update&lt;T&gt;().Set(...).Where(...)</c>）与删除链都不问它</b>：
+    /// 那两条链上没有"整行的值"这个东西可读，在这里跑一次等于凭空写调用方没说的列 ——
+    /// 那一条的改写槽位是 <see cref="ParameterBinding"/>。零成本规则照旧：未订阅就不构造事件对象。</summary>
     public Action<AuditValueEvent>? AuditValue;
     public Action<ParameterBindingEvent>? ParameterBinding;
 
@@ -109,17 +115,24 @@ public sealed class AuditValueEvent : IEquatable<AuditValueEvent>
 {
     readonly Action<object?> _setter;
 
-    internal AuditValueEvent(object entity, ColumnContract column, object? currentValue, Action<object?> setter)
+    internal AuditValueEvent(object entity, ColumnContract column, object? currentValue, string operationKind, Action<object?> setter)
     {
         Entity = entity;
         Column = column;
         CurrentValue = currentValue;
+        OperationKind = operationKind;
         _setter = setter;
     }
 
     public object Entity { get; }
 
     public ColumnContract Column { get; }
+
+    /// <summary>这一格值是为哪一种写操作取的，<c>insert</c> / <c>update</c>，与 <c>ExecutionTag</c>、
+    /// <see cref="CudBuildingEvent.OperationKind"/> 同一个词。<b>它是这一颗事件里唯一能把两条链分开的东西</b>：
+    /// 一条链上是同一只实体、同一批列，而"创建时间只在新行补、修改时间每次改都盖"这类填充恰恰要分这两条链。
+    /// 没有 <c>delete</c> 这一档：删除不取整行的列值，所以它没有可问的格（§10.1 的"没有实体可读的链不跑值钩子"）。</summary>
+    public string OperationKind { get; }
 
     public object? CurrentValue { get; private set; }
 

@@ -166,3 +166,21 @@ public class SyncProbe
     [Column(Precision = 18, Scale = 2, Comment = "金额")]
     public decimal Amount { get; set; }
 }
+
+// ── 软删示范（示例 §15）：一张"行不删、只置位"的表 ──────────────────────────
+
+/// <summary>软删示范表。两张格子就是 <c>orm.Behaviors.SoftDelete</c> 的入参：<see cref="Deleted"/> 必须是
+/// <c>bool</c>（那一格写进去的值恒为 <c>true</c>，所以 <c>0/1</c> 整数标记与 <c>"Y"/"N"</c> 字符标记不是这一档），
+/// <see cref="DeletedAt"/> 认 <c>DateTime</c> 与 <c>DateTime?</c> 两种列。</summary>
+[Table("SampleTickets")]
+public class SampleTicket
+{
+    public int Id { get; set; }
+
+    [Column(Length = 32)]
+    public string? Seat { get; set; }
+
+    public bool Deleted { get; set; }
+
+    public DateTime? DeletedAt { get; set; }
+}

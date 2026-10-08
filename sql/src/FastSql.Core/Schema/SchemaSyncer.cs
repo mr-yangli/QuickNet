@@ -116,6 +116,7 @@ public sealed class SchemaSyncer
                 AppliedComments = [.. tally.Comments],
                 CreatedIndexes = [.. tally.Indexes],
                 DroppedIndexes = [.. tally.Dropped],
+                DdlStatements = [.. tally.Sql],
                 NotJudged = [.. tally.NotJudged],
                 Refused = [.. tally.Refused],
                 SkippedSplitTemplates = [.. skipped],
@@ -162,6 +163,7 @@ public sealed class SchemaSyncer
             AppliedComments = [.. tally.Comments],
             CreatedIndexes = [.. tally.Indexes],
             DroppedIndexes = [.. tally.Dropped],
+            DdlStatements = [.. tally.Sql],
             NotJudged = [.. tally.NotJudged],
             Refused = [.. tally.Refused],
             SkippedSplitTemplates = [.. skipped],
@@ -478,6 +480,12 @@ sealed class Tally
     public List<string> NotJudged { get; } = [];
     public List<string> Refused { get; } = [];
 
+    /// <summary>这一趟发出去（Script 档则是准备发出去）的每一句原文，顺序 = 发送顺序。<b>它与
+    /// <see cref="SchemaSyncResult.DdlStatements"/> 是同一份清单</b>，只是两档的语义不同：Execute 档里
+    /// 这一格是"真发过"，Script 档里是"会发"。收在这一格是因为 DDL 不走 <c>Aop.Executing</c>
+    /// （那条钩子只管带参数的语句，而这一趟连的是同步自己那条连接），调用方要看见发了什么只有这一处。</summary>
+    public List<string> Sql { get; } = [];
+
     /// <summary>这一趟真发出去过至少一句。<see cref="SchemaSyncResult.Executed"/> 读的是这一格，
     /// 而它说的不是"连了库"——一趟只读的同步连了库、判了所有档、一个字节没发，那一格必须是 false。</summary>
     public bool Changed { get; private set; }
@@ -485,6 +493,8 @@ sealed class Tally
     public void Record(Statement statement)
     {
         Changed = true;
+
+        Sql.Add(statement.Sql);
 
         switch (statement.Kind)
         {
@@ -513,8 +523,9 @@ sealed class Tally
 
 /// <summary><c>SyncStructure</c> 的产物：这一趟发了什么、判不了什么、拒了什么，
 /// 以及（Script 模式下的）完整 DDL 文本。</summary>
-/// <remarks><see cref="Ddl"/> 在 Execute 模式下为空字符串（DDL 已逐条发掉，不回存）；
-/// 在 Script 模式下包含全部 <c>CREATE TABLE</c> 与备注语句，可直接交给 DBA 审批后手动执行。</remarks>
+/// <remarks><see cref="Ddl"/> 在 Execute 模式下为空字符串（那一档的原文在
+/// <see cref="DdlStatements"/> 里，逐句一条）；在 Script 模式下包含全部 <c>CREATE TABLE</c> 与备注语句，
+/// 可直接交给 DBA 审批后手动执行。</remarks>
 public sealed record SchemaSyncResult(
     IReadOnlyList<string> CreatedTables,
     bool Executed,
@@ -539,6 +550,12 @@ public sealed record SchemaSyncResult(
     /// 即便开了也不在这里（它进 <see cref="Refused"/>，因为 <c>DROP INDEX</c> 删不动约束）。
     /// 非空就是"库里现在少了几条索引"——那些查询从这一刻起走全表扫，这一格要有人看。</summary>
     public IReadOnlyList<string> DroppedIndexes { get; init; } = [];
+
+    /// <summary>这一趟的 DDL 原文，逐句一条，顺序 = 发送顺序。<b>Execute 档里它是"真发过的那几句"</b>
+    /// （<see cref="Ddl"/> 在那一档是空串，而 DDL 又不经过 <c>Aop.Executing</c> 那条日志钩子——
+    /// 同步自己连的是另一条连接，所以调用方要在日志里看见发了什么，只有这一格是给得出的）；
+    /// Script 档里它是"会发的那几句"，与 <see cref="Ddl"/> 同内容、只是没拼成一整篇。</summary>
+    public IReadOnlyList<string> DdlStatements { get; init; } = [];
 
     /// <summary>这一家<em>读不出</em>所以判不了的档，逐条指名。<b>它非空就是"这一趟有几档根本没同步过"</b>：
     /// 六家在补齐读侧之前各有一串这样的名字，而一句"同步完成"盖不住它们（§12.2 那句不假装）。</summary>

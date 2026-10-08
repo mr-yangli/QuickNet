@@ -207,7 +207,7 @@ sealed class InsertEngine<T> : IInsert<T> where T : class
         if (requested is BulkMethod.Auto or BulkMethod.CopyChannel)
         {
             var channel = provider.Bulk?.ResolveCopyChannel();
-            var refusal = Refusal(provider, channel, preparation.Columns);
+            var refusal = Refusal(provider, channel, preparation.Columns, WriteConnectionString(preparation));
 
             if (refusal is null)
             {
@@ -225,7 +225,8 @@ sealed class InsertEngine<T> : IInsert<T> where T : class
             }
 
             // 请求过装载通道而拿不到：Never 不许退（§12.2 那句"唯一能防住静默逐条的手段"）。
-            // Auto 不算降级 —— 它没有承诺过任何一层，取到阶梯上第一档满足条件的层就是它的定义。
+            // Auto 不算降级 —— 它没有承诺过任何一层，取到阶梯上第一档满足条件的层就是它的定义，
+            // 于是留痕位也不派发（BulkDegradedEvent 的抬头写的就是"只在真的降级时派发"）。
             if (requested == BulkMethod.CopyChannel)
             {
                 if (_fallback == FallbackPolicy.Never)
@@ -237,7 +238,14 @@ sealed class InsertEngine<T> : IInsert<T> where T : class
                 }, null);
             }
 
-            return new BulkDecision(TextReport(preparation, requested, BulkMethod.MultiValue, degraded: false), null);
+            // 不降级不等于不解释：<b>那句拒绝要进 Reason</b>。判窄成"整批静默走 L3"会让调优的人去查 provider
+            // 那一侧，而现场缺的常常是一颗连接串参数（MySQL 血统的 AllowLoadLocalInfile 就是第一颗）——
+            // Reason 里点名拒的是哪一层、为什么，是 Auto 那条"没承诺"唯一的可见面。措辞用"取第一档满足条件的层"，
+            // 不用"退回"：那个词在这一格里只属于承诺过而没拿到的档。
+            return new BulkDecision(TextReport(preparation, requested, BulkMethod.MultiValue, degraded: false) with
+            {
+                Reason = $"{refusal} → Auto 取阶梯上第一档满足条件的层。{TextReason(preparation, BulkMethod.MultiValue)}",
+            }, null);
         }
 
         return new BulkDecision(TextReport(preparation, requested, requested, degraded: false), null);
@@ -246,7 +254,11 @@ sealed class InsertEngine<T> : IInsert<T> where T : class
     /// <summary>这一家能不能整批进装载通道的判据，<b>交回的是话而不是布尔</b>：拒绝的理由要进
     /// <see cref="BulkReport.Reason"/> 给现场读，也要进 <see cref="FallbackPolicy.Never"/> 那句异常，
     /// 两处同一份文本。null = 可以进。</summary>
-    static string? Refusal(IDbProvider provider, IBulkCopyChannel? channel, ColumnContract[] columns)
+    /// <remarks>第三道闸门（连接串）交回的话由通道自己编：<b>哪颗参数放行哪一家的装载，是驱动侧的事实，
+    /// 内核不认识任何一家的连接串键名</b>（§1.2 原则 3 的同一族纪律）。<b>这一句读的是 <see cref="ConnectionSources"/>
+    /// 上写集群那条串</b>：DbContext 会话经工厂给连接时串可能另有来路，那种现场下闸门按在册那条判——
+    /// 判宽了装载当场抛（驱动的话，可行动），判窄了退 L3（慢而不错），两种都比拿连接对象猜便宜。</remarks>
+    static string? Refusal(IDbProvider provider, IBulkCopyChannel? channel, ColumnContract[] columns, string connectionString)
     {
         if (channel is null)
             return $"{provider.Kind} 没有可用的装载通道（IBulkStrategy.ResolveCopyChannel() 交回 null：这一家没接，或这一支驱动里没有装载类）";
@@ -257,8 +269,13 @@ sealed class InsertEngine<T> : IInsert<T> where T : class
             if (!channel.SupportsColumn(column))
                 return $"{column.ColumnName}（CLR {column.ClrType.Name}）不在 {provider.Kind} 装载通道收下的类型里";
 
-        return null;
+        return channel.UnavailableBecauseOf(connectionString);
     }
+
+    /// <summary>写侧那一条串：装载通道落在哪座集群，闸门就问哪一座的主库串（写永远是主库那一格，
+    /// 判据在 <c>AdoExecutor.RentAsync</c>，这里只跟着它点名过的同一座读，不另立一套）。</summary>
+    string WriteConnectionString(Preparation preparation)
+        => _orm.Sources.PrimaryConnectionString(DataSourceRouting.ClusterOf(preparation.Contract.Table));
 
     BulkReport TextReport(Preparation preparation, BulkMethod requested, BulkMethod method, bool degraded)
         => new(requested, method, _rows.Length, Trips(preparation, method), ChunkRows(preparation, method), degraded, TextReason(preparation, method));
@@ -600,7 +617,7 @@ sealed class InsertEngine<T> : IInsert<T> where T : class
                     continue;
                 }
 
-                var @event = new AuditValueEvent(entity, columns[column], value, written => schema.SetValue(entity, ordinal, written));
+                var @event = new AuditValueEvent(entity, columns[column], value, "insert", written => schema.SetValue(entity, ordinal, written));
 
                 // 改写类钩子的异常直接向上失败（硬规则 3）：吞掉等于写出一份"填充没发生"的行。
                 audit(@event);

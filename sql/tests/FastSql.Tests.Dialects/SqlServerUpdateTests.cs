@@ -301,7 +301,103 @@ public sealed class SqlServerUpdateTests
 
         // 插入链的取值段会逐格问 AuditValue；这两条链上没有"整行的值"这个东西可读，
         // 所以钩子一次都不该跑。跑一次就是"凭空往库里写了调用方没说的列"。
+        // 分界不是"读侧 vs 写侧"，也不是"Update 这个类名"，而是<em>这条链手上有没有整行实体</em>：
+        // 有整行的那条（orm.UpdateRange(实体集)）跑，见 The_row_update_chain_runs_the_value_hook_once_per_cell。
         Assert.Equal(0, fired);
+    }
+
+    // ── §10.1 的钩子规则：UpdateRange 那条链的取值段 ───────────────────
+
+    /// <summary><see cref="Order"/> 契约 8 列，<c>Id</c> 是自增主键 ⇒ 整行更新写出去 7 列、
+    /// 定位用 1 列。审计触发次数与 SET 清单都挂在这个数上，与 <c>SqlServerInsertTests</c> 同一把尺。</summary>
+    const int Written = 7;
+
+    static readonly DateTime Moment = new(2026, 3, 4, 5, 6, 7, 890);
+
+    static Order row(int n) => new()
+    {
+        Id = n,
+        CustomerName = "客户" + n,
+        CustomerId = n,
+        Amount = 10m + n,
+        State = OrderState.Paid,
+        CreatedAt = Moment,
+        Note = "旧备注",
+    };
+
+    static Order[] rows(int count) => [.. Enumerable.Range(1, count).Select(row)];
+
+    [Fact]
+    public void The_row_update_chain_runs_the_value_hook_once_per_cell_across_both_texts()
+    {
+        var fired = 0;
+        var aop = new FastSqlAop();
+
+        aop.AuditValue = _ => fired++;
+
+        // 与插入链同一条地基（§12.4 第 4 项）：AuditValue 会写实体，一批实体只能算一次列值。
+        // 这里读三个出口——两次文本加一次换档后的文本，格子仍然是那一份。
+        var bulk = ormWith(aop).UpdateRange(rows(3));
+
+        bulk.Explain();
+        bulk.Explain();
+        bulk.WithBulk(BulkWriteMethod.SingleRow).Explain();
+
+        Assert.Equal(3 * Written, fired);
+    }
+
+    [Fact]
+    public void A_value_filled_on_the_row_update_reaches_the_entity_the_parameter_and_the_replay()
+    {
+        var stamp = new DateTime(2026, 9, 21, 1, 2, 3, 456);
+        var aop = new FastSqlAop();
+
+        // 修改时间这一族的真实写法：调用方没填（Year==1）就补上，填过就不动。
+        aop.AuditValue = e =>
+        {
+            if (e.Column.MemberName == "PaidAt" && e.CurrentValue is null)
+                e.SetValue(stamp);
+        };
+
+        var order = row(1);
+        var plan = ormWith(aop).UpdateRange([order]).Explain();
+
+        Assert.Equal(stamp, order.PaidAt);
+
+        var parameters = plan.Commands[0].Parameters;
+        Assert.Equal(stamp, parameters.Single(p => p.Hint?.MemberName == "PaidAt").Value);
+
+        // 回放里看得见这一步，且它排在发射段那几步之前（取值段先跑，§10.1 硬规则 1）。
+        var trace = Assert.Single(plan.HookReplay);
+
+        Assert.Equal("AuditValue", trace.HookName);
+        Assert.Equal(HookCategory.Rewrite, trace.Category);
+        Assert.Equal(0, trace.Step);
+        Assert.StartsWith("PaidAt = ", trace.Before);
+        Assert.Equal($"PaidAt = {stamp.ToString(System.Globalization.CultureInfo.InvariantCulture)}", trace.After);
+    }
+
+    [Fact]
+    public void The_two_row_shaped_chains_ask_the_same_columns_and_differ_only_by_kind()
+    {
+        var update = new List<string>();
+        var insert = new List<string>();
+        var aopUpdate = new FastSqlAop();
+        var aopInsert = new FastSqlAop();
+
+        aopUpdate.AuditValue = e => update.Add($"{e.OperationKind}/{e.Column.MemberName}");
+        aopInsert.AuditValue = e => insert.Add($"{e.OperationKind}/{e.Column.MemberName}");
+
+        // 两条有整行实体的链各问一遍。种类是唯一能把它们分开的东西（抬头那一句），
+        // 而列清单与顺序逐字相同——筛列的判据在两条链上是同一套：主键、库里给值的、并发列都不问。
+        ormWith(aopUpdate).UpdateRange([row(1)]).Explain();
+        ormWith(aopInsert).Insert(row(1)).ToSql();
+
+        Assert.Equal(Written, update.Count);
+        Assert.All(update, entry => Checks.Has("update/", entry));
+        Assert.DoesNotContain("update/Id", update);
+        Assert.All(insert, entry => Checks.Has("insert/", entry));
+        Assert.Equal(insert.Select(name => name.Split('/')[1]), update.Select(name => name.Split('/')[1]));
     }
 
     // ── §10.1 硬规则 1：改写要能在 Explain() 里回放 ───────────────────
@@ -365,9 +461,12 @@ public sealed class SqlServerUpdateTests
     {
         var reason = orm().Delete<Order>().Where(o => o.Id == 1).Explain().Reason;
 
-        // §10.7 的软删改写还没接线，所以"看起来该是 UPDATE"的项目里，这句话是唯一的提示点。
+        // 这一格自陈的是"这一句发的是 DELETE"，而它必须同时说清另一件事：想让删除置位的人该去哪里开
+        //（§10.7 约束 3 的那入口子 v0.38 第十七笔落了，所以这句话的出处从"还没有落地"换成了"在册时会换成 UPDATE"）。
+        // 判据按文本而不是按订阅：一个人没开软删时读到"行不在了"才是对的。
         Checks.Has("物理删除", reason);
-        Checks.Has("§10.7", reason);
+        Checks.Has("orm.Behaviors.SoftDelete 在册时这一句会被换成 UPDATE 置位", reason);
+        Checks.Has("订一颗 CudBuilding", reason);
     }
 
     [Fact]

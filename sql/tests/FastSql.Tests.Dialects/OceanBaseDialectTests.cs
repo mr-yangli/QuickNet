@@ -94,9 +94,12 @@ public sealed class OceanBaseDialectTests
 
         Assert.Equal(
             DbCapabilities.Paging_LimitOffset | DbCapabilities.Schemas | DbCapabilities.Guid_Char36 |
-            DbCapabilities.Comment_On_Column | DbCapabilities.Alter_Column_Precision,
+            DbCapabilities.Comment_On_Column | DbCapabilities.Alter_Column_Precision | DbCapabilities.Bulk_Copy,
             Provider.Capabilities);
 
+        // 第六颗同样是本笔随血统基类继承的 Bulk_Copy，而它在本家多压一层这一家独有的前件（"先问模式"）：
+        // LOAD DATA 那一条在 OceanBase 上是不是也在 MySQL 模才成立，今天连推断都排不到——它比 tidb 那本
+        // 更接近"位是继承来的、问句还没被问"。本家照旧没加一颗没丢一颗，只是那颗数从今天起是六。
         // 四位"库里大概有而这一家不声明"在 OceanBase 一家都不翻案：判据与 MySqlProviderBase 类注释逐条同源，
         // 而这一家还压着前两家没有的一层"先问模式"——连"按 MySQL 文档翻案"的资格都要排在连接级确认之后。
         Assert.False(Provider.Capabilities.HasFlag(DbCapabilities.Boolean_Type));

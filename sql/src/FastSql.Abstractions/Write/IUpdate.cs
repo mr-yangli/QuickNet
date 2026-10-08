@@ -74,11 +74,16 @@ public sealed record UpdatePlan(
 }
 
 /// <summary>DELETE 链（§5.4 写侧的第三条、§6 示例里那句 <c>orm.Delete&lt;Cart&gt;().Where(...)</c>）。
-/// <b>没人订阅 <c>CudBuilding</c> 时它是物理删除</b>：§10.7 约束 3 那个改写点 v0.18 就接上了（它现在真的会改文本），
-/// 而库里预置的改写者 <c>orm.Behaviors.SoftDelete</c> 还没有，所以今天<em>默认那一支</em>删的是行本身 ——
-/// <see cref="DeletePlan.Reason"/> 每次都按<em>最终文本</em>自陈落在哪一支，不靠"有没有人订阅"猜。
+/// <b>这一句发出去的是 <c>DELETE</c> 还是 <c>UPDATE</c>，看这张表上有没有在册的软删行为</b>：
+/// <c>orm.Behaviors.SoftDelete(...)</c>（§10.7 约束 3，v0.38 第十七笔）注册过的实体，这一句在 AST 层就被换成
+/// 「置位那一格写 true + 时间那一格记一颗」的 UPDATE，<c>WHERE</c> 逐字不动；没注册的仍发 DELETE。
+/// 两条都发得动这件事不许靠猜：<see cref="DeletePlan.Reason"/> 每一支都按<em>实际发出去的那一句</em>自陈
+/// （三支：物理删除 / 本库软删改写 / 被调用方的 <c>CudBuilding</c> 改写过）。
+/// <b>库里预置的那一颗只改形状，不占文本改写的口子</b>：调用方自己的 <c>CudBuilding</c> 订阅者看到的是
+/// 改写后的整句文本，仍能接着改。
 /// <b>这一句的 <c>WHERE</c> 从 v0.26 起可能不止调用方写的那几句</b>：<c>orm.Filters</c> 上在册的
-/// 全局过滤器会叠进来（§10.7 约束 1 的写侧那一半），叠了几条也写在 <see cref="DeletePlan.Reason"/> 里。</summary>
+/// 全局过滤器会叠进来（§10.7 约束 1 的写侧那一半），叠了几条也写在 <see cref="DeletePlan.Reason"/> 里。
+/// 软删<em>不</em>往 WHERE 里加「且尚未置位」那一支，加了就要先有人裁"被挡住的行算不算一次并发冲突"（§14 的 P1 余项）。</summary>
 public interface IDelete<T> where T : class
 {
     /// <summary>条件。<b>不能没有</b>：一次 <c>Where</c> 都不叠的 DELETE 在构建时抛，理由同 UPDATE
@@ -103,9 +108,14 @@ public interface IDelete<T> where T : class
     Task<int> ExecuteAffrowsAsync(CancellationToken ct = default);
 }
 
-/// <summary>一次 DELETE 的决策记录。<see cref="Reason"/> 必须自陈两件事：<b>最终文本落在"物理删除"还是
-/// "已被 CudBuilding 改写"那一支</b>，以及<b>这一句的 <c>WHERE</c> 里叠了几条全局过滤器</b> ——
-/// 因为这条链在开了软删或多租户的项目里<em>看起来</em>应该产出 UPDATE、而且它的命中范围比调用方写的那几句窄。</summary>
+/// <summary>一次 DELETE 的决策记录。<see cref="Reason"/> 必须自陈两件事：<b>最终文本落在"物理删除"、
+/// "本库的软删改写"还是"已被 CudBuilding 改写"哪一支</b>，以及<b>这一句的 <c>WHERE</c> 里叠了几条全局过滤器</b> ——
+/// 因为这条链在开了软删或多租户的项目里<em>看起来</em>应该产出 UPDATE、而且它的命中范围比调用方写的那几句窄。
+/// <remarks><b><see cref="Ast"/> 是这条链<em>要的那一句</em>（永远是 DELETE），<see cref="Sql"/> 是<em>真正发出去的那一句</em>
+/// —— 两者只在软删在册时不一致，而那一格是这一档的语义而不是 bug：调用方说的是"删掉这些行"，
+/// 库里执行的是"把这些行的那一格置位"。<c>Reason</c> 必须把这一件事说明白，读日志的人才有能对得上库的那一句。
+/// 要在改写后的形状上做文章（比如按列名核对置位对不对）请读 <c>Sql.Text</c> 或订 <c>CudBuilding</c>，
+/// 而不是猜 <c>Ast</c> 有没有被换过。</remarks></summary>
 public sealed record DeletePlan(
     DeleteStatement Ast,
     DialectSql Sql,

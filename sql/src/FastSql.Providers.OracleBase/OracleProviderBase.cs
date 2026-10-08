@@ -138,7 +138,17 @@ public abstract class OracleProviderBase : IDbProvider
     /// 报大了会得到真库上一句"参数过多"，报小了只是多几次往返 —— 两者的成本差一个量级，所以先取兜底，
     /// 抬到真库上限的那次实测与判据记在 §14。<b>v0.31 起这一支有第二个住户</b>：<c>XuguProvider.Bulk</c>
     /// 同样交回 null（两档出处里既没有参数个数上限、64K 那一档又是<em>行</em>的预算），
-    /// 于是"没有可报数字"这一档从孤例变成两族，而 <c>DialectParityTests</c> 的块数账因此出现两个 50。</para></summary>
+    /// 于是"没有可报数字"这一档从孤例变成两族，而 <c>DialectParityTests</c> 的块数账因此出现两个 50。</para>
+    ///
+    /// <para><b>【本笔表态 —— §12.1 批量阶梯铺开时这一家刻意不接，三条理由按薄厚排】</b>
+    /// ① 这一族真实存在一个 L1 形状的候选（ODP.NET 的数组绑定：一次往返交整列值），但它的回包给不出
+    /// "这一批真进去几行"可数的数（<c>ExecuteArray</c> 一族的返回口径本次一页厂商文档都没读到），
+    /// 而 §12.1 那句"报不出行数的通道宁可没有"是三家用同一把尺立起来的；② 这颗程序集（清单上 Oracle /
+    /// DmProvider / Oscar 三份名）从未在一台机器上解析成功过，反射面连"类型在不在"都无从验；
+    /// ③ 本机没有任何一台授权实例。<b>重开条件</b>：三缺一不行——先要有实例，再要有能读出"行数口径"的
+    /// 厂商页，两者都到场才谈接线；在那之前这一格保持 null，阶梯从 L3 起。Merged 档同走默认 false：
+    /// 这一家连一条多语句批的现场读数都没有，与 <c>IBulkStrategy.SupportsMergedStatements</c> 抬头那句
+    /// "Oracle 血统连一颗有出处的驱动读数都没有"同一句话的两个读者。</para></summary>
     public virtual IBulkStrategy? Bulk => null;
 
     /// <summary>Oracle 血统不支持传统意义上的 <c>CREATE DATABASE</c>（Oracle 的"库"是实例级 PDB，

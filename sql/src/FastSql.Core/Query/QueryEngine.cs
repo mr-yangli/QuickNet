@@ -190,9 +190,56 @@ sealed class QueryEngine
         if (Model.Plan is not EntityProjection)
             throw new FastSqlException("投影之后不能再排序：投影列没有列契约，补出来的序会指向错列。把 OrderBy 挪到 Select 之前，或在源查询上排好序再投影。");
 
-        var order = new OrderExpression(Orm.Expressions.Visit(key.Body, Binding(key)), descending);
+        return Append(new OrderExpression(Orm.Expressions.Visit(key.Body, Binding(key)), descending), append);
+    }
 
-        return Derive(append ? Model.AddOrdering(order) : Model with { Ordering = [order] });
+    /// <summary>按成员名排序（v0.38 第二十笔）。<b>这一条不经过表达式翻译</b>：字符串只用来在契约上认列，
+    /// 认出来的是 <see cref="ColumnContract"/>，发出去的是那一颗列加方言引号 —— 所以"传进来的文本进了 SQL"
+    /// 这一形在这里没有对应的代码路径，不是一个要靠过滤堵住的风险面。闸门与 lambda 那一条共用
+    /// <see cref="Append"/>，两条口对同一个投影形状给同一句话。</summary>
+    public QueryEngine Order(string memberName, bool descending, bool append)
+    {
+        if (Model.Plan is not EntityProjection)
+            throw new FastSqlException("投影之后不能再排序：投影列没有列契约，补出来的序会指向错列。把 OrderBy 挪到 Select 之前，或在源查询上排好序再投影。");
+
+        var contract = Model.Root.Contract
+            ?? throw new FastSqlException($"根表位 {Model.Root.Table.Name} 没有实体契约，按成员名排不出序：认列靠的就是那份契约。用 lambda 形态，或把这条链的表源换成一张实体表。");
+
+        return Append(new OrderExpression(new ColumnExpression(Model.Root, Column(contract, memberName)), descending), append);
+    }
+
+    /// <summary>把一颗序落到模型上。<b>追加还是替换由这一处决定</b>：契约上 <c>OrderBy</c> 之后再
+    /// <c>OrderBy</c> 是替换前一串（那是 LINQ 的口径），而链式对象上那两颗口各自把 <paramref name="append"/>
+    /// 写死，所以两种形态（lambda 与成员名）不会各写一套叠加规则。</summary>
+    QueryEngine Append(OrderExpression order, bool append)
+        => Derive(append ? Model.AddOrdering(order) : Model with { Ordering = [order] });
+
+    /// <summary>成员名 → 列。<b>三档，逐字节优先</b>：先属性名、再列名、最后大小写不敏感的<em>唯一</em>命中
+    /// （HTTP 查询串上过来的是 <c>createTime</c> 那一形，实体上写的是 <c>Create_time</c> 或 <c>CreateTime</c>，
+    /// 大小写这一档是给它的，不是给通配的）。认不出与认得多颗都当场抛，<b>没有"原样发出去"的退路</b>：
+    /// 那一路的产物是一条看起来合理的错句，而排序键错了在页面上读得出来的只有顺序，没人会为此报修。</summary>
+    static ColumnContract Column(EntityContract contract, string memberName)
+    {
+        if (string.IsNullOrWhiteSpace(memberName))
+            throw new FastSqlException($"{contract.Table.Name} 的排序成员名是空的：按名字排只认这一张表上的列，请把要排的那一列的属性名或列名给出来。");
+
+        if (contract.ByMember.TryGetValue(memberName, out var byMember)) return byMember;
+        if (contract.ByColumn.TryGetValue(memberName, out var byColumn)) return byColumn;
+
+        var matches = contract.Columns
+            .Where(c => string.Equals(c.MemberName, memberName, StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(c.ColumnName, memberName, StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+
+        if (matches.Length == 0)
+            throw new FastSqlException($"{contract.Table.Name} 没有名为 {memberName} 的列：按名字排只认这张表上映射过的列（属性名或列名），" +
+                "导航属性、投影列与 SQL 片段都不认。要排别的表那一侧的列请先联表，再用 lambda 形态（§5.2）。");
+
+        if (matches.Length > 1)
+            throw new FastSqlException($"{contract.Table.Name} 上能对上 {memberName} 的列不止一颗（{string.Join(" / ", matches.Select(m => m.MemberName))}）：" +
+                "大小写不敏感这一档撞在了两张列上，而本家不替调用方挑一颗。按逐字节的写法命中（属性名或列名写全），或改用 lambda 形态。");
+
+        return matches[0];
     }
 
     /// <summary><c>Skip</c> 只落偏移位、<c>Take</c> 只落行数位，都不在这一步检查序（§9.4）：

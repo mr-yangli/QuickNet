@@ -8,7 +8,7 @@ namespace FastSql.Providers.PostgreSqlBase;
 /// 一份 <c>QuoteSqlName</c>"在这一家尤其要紧：双引号一漏，<c>FastSqlOrder</c> 就变成 <c>fastsqlorder</c>，
 /// 建出来的表与查的表不是同一张）。P0 只产出文本与黄金样本比对，<b>不执行</b>。
 ///
-/// 四处与 T-SQL 不同，每处都不是换个关键字：
+/// 五处与 T-SQL 不同，每处都不是换个关键字：
 /// <list type="bullet">
 /// <item>默认模式是 <c>public</c> 而不是 <c>dbo</c>。</item>
 /// <item>没有 <c>CLUSTERED</c>：这一家的聚簇是建表时的 <c>WITH (fillfactor)</c> 加 <c>CLUSTER</c> 命令，
@@ -18,6 +18,9 @@ namespace FastSql.Providers.PostgreSqlBase;
 /// 所以要独立一句。两侧用 <c> ; </c> 串起来与索引那一段同一个形状 —— 运行时执行器要么按语句拆，
 /// 要么走 §9.5 那条"生产默认走脚本"的路子（这一家没声明 <c>MultiStatement</c>，§9.4）。</item>
 /// <item>列注释是原生语法：<c>COMMENT ON COLUMN</c>，不需要 <c>sp_addextendedproperty</c> 那种存储过程调用。</item>
+/// <item><c>DROP INDEX</c> 吃的是<em>带模式的索引名</em>而不是"索引 + 表"两个名字（这一家的索引是独立对象，
+/// 有自己的 <c>pg_class</c> 行）。所以这一句里没有 <c>ON</c>，而索引名必须与建它时同一套模式限定，
+/// 否则在 <c>search_path</c> 不等于 <c>public</c> 的会话上会删不掉、或删到同名另一张。</item>
 /// </list></summary>
 public class PostgreSqlCodeFirst(PostgreSqlTypes types) : ICodeFirstDialect
 {
@@ -114,6 +117,18 @@ public class PostgreSqlCodeFirst(PostgreSqlTypes types) : ICodeFirstDialect
         return true;
     }
 
+    /// <summary><c>COMMENT ON TABLE</c> 本身就是"设值"而不是"追加"，所以第二趟重发不会撞"属性已存在"
+    /// （§9.5 那颗幂等要求在这一家是免费的），而写空串等于把备注清掉 —— 与列注释那一句同一个语义。</summary>
+    public bool TryEmitTableComment(SqlWriter writer, TableInfo table, string? comment)
+    {
+        writer.Append("COMMENT ON TABLE ");
+        EmitTable(writer, table);
+        writer.Append(" IS ");
+        writer.AppendStringLiteral(comment ?? string.Empty, unicode: false);
+
+        return true;
+    }
+
     public void EmitCreateIndex(SqlWriter writer, TableInfo table, IndexContract index)
     {
         // 聚簇在这一家不是索引的一种而是一条命令（CLUSTER），所以 NonClustered/Clustered 都落成普通索引；
@@ -136,6 +151,21 @@ public class PostgreSqlCodeFirst(PostgreSqlTypes types) : ICodeFirstDialect
         }
 
         writer.Append(" )");
+    }
+
+    /// <summary>索引名按<em>它所在的那个模式</em>限定，读回来的是 <c>pg_class.relname</c>（不带模式），
+    /// 所以这里补上 <c>EmitTable</c> 那一格同一个默认值。不带 <c>ON 表名</c>：这一家的索引不挂在表上，
+    /// 它是目录里的独立对象（T-SQL 那一家的 <c>DROP INDEX … ON …</c> 在这儿是语法错）。
+    /// <b>唯一约束不走这一句</b>：它的<em>支撑索引</em>与约束同名，而 <c>DROP INDEX</c> 删同名索引会失败
+    /// （那是约束的对象），所以计划层把 <see cref="SchemaIndex.IsConstraint"/> 那一条单独归进"要人工"。
+    /// 这里不做二次判断，是因为判断已经在上游做完了一次，在这儿再判一遍只会变成两条可能分岔的规则。</summary>
+    public bool TryEmitDropIndex(SqlWriter writer, TableInfo table, SchemaIndex index)
+    {
+        writer.Append("DROP INDEX ");
+        writer.Append(Identifiers.Quote(table.Schema ?? "public")).Append('.');
+        writer.Append(Identifiers.Quote(index.Name));
+
+        return true;
     }
 
     string Definition(ColumnContract column)

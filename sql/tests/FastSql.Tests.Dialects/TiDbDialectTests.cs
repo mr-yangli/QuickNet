@@ -91,9 +91,12 @@ public sealed class TiDbDialectTests
 
         Assert.Equal(
             DbCapabilities.Paging_LimitOffset | DbCapabilities.Schemas | DbCapabilities.Guid_Char36 |
-            DbCapabilities.Comment_On_Column | DbCapabilities.Alter_Column_Precision,
+            DbCapabilities.Comment_On_Column | DbCapabilities.Alter_Column_Precision | DbCapabilities.Bulk_Copy,
             Provider.Capabilities);
 
+        // 六位里有五位有离线文本，第六位是本笔随血统基类一起继承下来的 Bulk_Copy——它到本家<em>不改写一个字</em>
+        // （继承的就是那颗反射口），而本家的 LOAD DATA 侧今天连驱动解析都没跑过，位因此与 mysql 本家同档不同因：
+        // 那一家有驱动API 的真库读数而这一家一份都没有，"没加一颗没丢一颗"这一句照旧成立，只是它现在量的是六颗。
         // 四位"库里大概有而这一家不声明"在 TiDB 一家都不翻案：判据与 MySqlProviderBase 类注释逐条同源，
         // 而 BOOLEAN / 大小写敏感两位在 TiDB 侧的处境【推断：MySQL 兼容层】比 MySQL 本尊更不会翻。
         Assert.False(Provider.Capabilities.HasFlag(DbCapabilities.Boolean_Type));

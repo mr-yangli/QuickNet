@@ -113,7 +113,8 @@ internal static class TypeMetadataCache
             ColumnIndex = col?.ColumnIndex ?? -1,
             Width = ResolveWidth(col, widthAttr),
             FormatString = col?.Format ?? fmt?.FormatString,
-            Required = col?.Required ?? validation.OfType<RequiredAttribute>().Any(),
+            // Attribute Required defaults to false, so it must not hide the DataAnnotations [Required] contract.
+            Required = (col?.Required ?? false) || validation.OfType<RequiredAttribute>().Any(),
             IsImage = isImage,
             AutoTrim = col?.AutoTrim ?? true,
             ImageOptions = imgAttr,
