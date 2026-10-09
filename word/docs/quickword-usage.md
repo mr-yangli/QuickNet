@@ -22,7 +22,7 @@
 | --- | --- | --- |
 | TFM | `net10.0`；`LangVersion preview`、`Nullable enable`、`ImplicitUsings enable` | `word/Directory.Build.props` |
 | XML 文档 | `GenerateDocumentationFile` | `QuickWord.csproj` |
-| NuGet 包 | 无（src 零包；CPM `word/Directory.Packages.props` 只钉测试四件套） | `word/Directory.Packages.props` |
+| NuGet 包 | 有：`QuickWord` `0.1.0-beta.1`（版本/许可/作者在此，CPM 那份仍只钉测试四件套） | `word/Directory.Build.props` |
 | 引用 | 无：`ProjectReference` / `PackageReference` 均无（纯 BCL） | `QuickWord.csproj` |
 
 QuickWord 自带全套列特性（`[WordColumn]` 一族），不需要、也不会牵入 QuickExcel：

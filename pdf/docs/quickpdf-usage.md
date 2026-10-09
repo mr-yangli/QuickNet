@@ -20,7 +20,7 @@
 | --- | --- | --- |
 | TFM | `net10.0`；`LangVersion preview`、`Nullable enable`、`ImplicitUsings enable` | `pdf/Directory.Build.props` |
 | XML 文档 | `GenerateDocumentationFile` | `QuickPdf.csproj` |
-| NuGet 包 | 无（src 零包；CPM `pdf/Directory.Packages.props` 只钉测试四件套） | `pdf/Directory.Packages.props` |
+| NuGet 包 | 有：`QuickPdf` `0.1.0-beta.1`（版本/许可/作者在此，CPM 那份仍只钉测试四件套） | `pdf/Directory.Build.props` |
 | 引用 | 无：`ProjectReference` / `PackageReference` 均无（纯 BCL） | `QuickPdf.csproj` |
 
 ```xml
