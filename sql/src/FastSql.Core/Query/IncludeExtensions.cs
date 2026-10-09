@@ -1,6 +1,6 @@
+using FastSql.Query.Model;
 using System.Diagnostics.CodeAnalysis;
 using System.Linq.Expressions;
-using FastSql.Query.Model;
 
 namespace FastSql.Query;
 
@@ -49,6 +49,51 @@ public static class IncludeExtensions
             : throw new FastSqlException(
                 $"Include/ThenInclude 只能用在 FastSql 的链式查询上（orm.Select&lt;T&gt;() 返回的对象）。" +
                 $"当前查询类型是 {query.GetType().Name}，不是 FastSql 的内部实现。");
+
+    /// <summary>在已有的集合加载（<c>IncludeMany</c>）上再往下一层挂集合导航（§5.7）。链式的深度由
+    /// <see cref="IIncludableCollectionQuery{T, TItem}"/> 携带的最后一颗节点决定，与 <see cref="ThenInclude"/>
+    /// 同一套读法。<b>下一层的父端是上一层刚缝出来的那一批子实体</b>，所以这一档不碰主查询：
+    /// <c>IncludeMany(t =&gt; t.Groups).ThenIncludeMany(g =&gt; g.Details)</c> 在库端是三张表、主查询一条加子查询两条。
+    /// 再往上一层的 <c>IncludeMany</c> 不接在这颗后面 —— 那颗永远从<em>根契约</em>起算，要挂回根就照 EF 那一句
+    /// 重起一段链。</summary>
+    public static IIncludableCollectionQuery<T, TProp> ThenIncludeMany<T, TItem, TProp>(
+        this IIncludableCollectionQuery<T, TItem> query,
+        Expression<Func<TItem, IEnumerable<TProp>>> navigation)
+    {
+        if (query is not FastSqlIncludableManyQuery<T, TItem> fq)
+            throw new FastSqlException(
+                $"ThenIncludeMany 只能用在 FastSql 的 IncludeMany/ThenIncludeMany 链式对象上。当前类型是 {query.GetType().Name}。");
+
+        var engine = fq.Engine;
+        var node = engine.ThenIncludeMany(fq.LastIncludeManyNode, navigation);
+        return new FastSqlIncludableManyQuery<T, TProp>(engine, node);
+    }
+
+    /// <summary>在已有的集合加载（<c>IncludeMany</c> / <c>ThenIncludeMany</c>）上，给<em>这一层的子实体</em>
+    /// 再挂一根引用导航（§5.7）：<c>IncludeMany(o =&gt; o.Items).ThenInclude(i =&gt; i.Material)</c> ——
+    /// 明细带出来之后，每一只明细手里那一份物资也一起带出来，整条链不需要再另起一句。
+    ///
+    /// <para><b>形状与 <c>ThenIncludeMany</c> 同一条纪律：主查询一个字符不变</b>，多出来的只是执行期的一条
+    /// <c>SELECT ... WHERE 物资.主键 IN (这一批明细的外键值)</c>，然后逐只缝回明细的导航属性 —— 发出去的那条
+    /// 与 <c>AsSplitQuery()</c> 那一档共用同一颗加载器，所以同一根边在两条路上长成同一个答案。
+    /// 集合导航在这颗口上当场拒（那是 <see cref="ThenIncludeMany"/> 的射程）。</para>
+    ///
+    /// <para><b>返回的还是原来那一家</b>（<c>TItem</c> 不变），所以重复调用是在<em>同一层</em>并列多挂几根
+    /// 引用边（<c>.ThenInclude(i =&gt; i.Material).ThenInclude(i =&gt; i.Warehouse)</c>），<c>ThenIncludeMany</c>
+    /// 也还是往<em>下一层集合</em>走。往引用导航的第二层（物资的类别）今天没出口 —— 那一档只有
+    /// <c>Include</c>/<c>ThenInclude</c> 那条 JOIN 链（或 <c>AsSplitQuery()</c>）走得到。</para></summary>
+    public static IIncludableCollectionQuery<T, TItem> ThenInclude<T, TItem, TProp>(
+        this IIncludableCollectionQuery<T, TItem> query,
+        Expression<Func<TItem, TProp>> navigation)
+    {
+        if (query is not FastSqlIncludableManyQuery<T, TItem> fq)
+            throw new FastSqlException(
+                $"ThenInclude 只能用在 FastSql 的 IncludeMany/ThenIncludeMany 链式对象上。当前类型是 {query.GetType().Name}。");
+
+        fq.Engine.ThenInclude(fq.LastIncludeManyNode, navigation);
+
+        return fq;
+    }
 }
 
 /// <summary><see cref="IIncludableQuery{T, TProp}"/> 的内部实现。携带最后加载的 <see cref="IncludeNode"/>，
@@ -60,4 +105,17 @@ sealed class FastSqlIncludableQuery<T, TProp>(QueryEngine engine, IncludeNode la
     where T : class
 {
     public IncludeNode LastIncludeNode { get; } = lastIncludeNode;
+}
+
+/// <summary><see cref="IIncludableCollectionQuery{T, TItem}"/> 的内部实现。携带最后一颗
+/// <see cref="IncludeManyNode"/>，供 <c>ThenIncludeMany</c> 往下一层挂集合、<c>ThenInclude</c> 往旁边挂引用。与
+/// <see cref="FastSqlIncludableQuery{T, TProp}"/> 的差别只在一颗：这一家<em>不派生新引擎</em>，
+/// 因为两档节点都挂在本颗集合节点的 <see cref="IncludeManyNode.Children"/> 与
+/// <see cref="IncludeManyNode.References"/> 上，模型的清单里不添条目。</summary>
+[RequiresUnreferencedCode(TranslationCost.Message)]
+[RequiresDynamicCode(TranslationCost.Message)]
+sealed class FastSqlIncludableManyQuery<T, TItem>(QueryEngine engine, IncludeManyNode lastIncludeManyNode)
+    : FastSqlQuery<T>(engine), IIncludableCollectionQuery<T, TItem>
+{
+    public IncludeManyNode LastIncludeManyNode { get; } = lastIncludeManyNode;
 }

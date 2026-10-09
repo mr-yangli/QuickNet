@@ -1,5 +1,7 @@
 using System.Globalization;
+using FastSql.Aop;
 using FastSql.Metadata;
+using FastSql.Query;
 using FastSql.Sql;
 using FastSql.TestInfra;
 using FastSql.Tracking;
@@ -435,6 +437,148 @@ public sealed class CascadePathTests
         Assert.Equal(0, Count("[dbo].[FastSqlShelfSlot]", "[Bin] = @bin", ("@bin", slotBin)));
         Assert.Equal(0, Count("[dbo].[FastSqlSlotHook]", "[Name] = @name", ("@name", slate("钩一"))));
         Assert.Equal(1, Count("[dbo].[FastSqlStorageRack]", "[Id] = @id", ("@id", rackId)));
+    }
+
+    /// <summary>链式集合加载（<c>IncludeMany(…).ThenIncludeMany(…)</c>，§5.7）判在真库上：架→位一层、位→钩二层，
+    /// 一条链三张表。
+    ///
+    /// <para><b>为什么单独一条，不并进上面那道两门的用例</b>：那条判的是"两道门各认得第二档点名的边"
+    /// （架→位走 <c>IncludeMany</c>、位→钩走 <c>Load</c>），缝完位还要另起一句才够得着钩；这一条判的是
+    /// <em>一句表达得完</em> —— 同一批行、同一根边、同一个第二档（<c>[ForeignKey]</c> 点名），
+    /// 两条路读回来的值必须一致，否则"链能往下走"就只是一句编译器的承诺。</para>
+    ///
+    /// <para><b>用独立一台 ORM 而不是会话</b>：<c>IncludeMany</c> 往会话登记<em>子型</em>时不建档那一格是
+    /// 已记名的缺口（上面那条用例为此先摸一句 <c>Set&lt;ShelfSlot&gt;()</c> 才走得通），而这里要判的是链本身，
+    /// 两层都躲开那格；顺带 <c>Aop.Executing</c> 读回的三句文本也只属于这一次读取，不串到同场其他用例。</para></summary>
+    [Fact]
+    public async Task A_chained_include_many_loads_two_collection_levels()
+    {
+        Database.Ready();
+        var ct = TestContext.Current.CancellationToken;
+
+        EnsureTable(typeof(Rack));
+        EnsureTable(typeof(ShelfSlot));
+        EnsureTable(typeof(SlotHook));
+
+        var db = Session();
+        var rack = new Rack
+        {
+            Id = 0,
+            Label = slate("链架"),
+            Slots =
+            [
+                new ShelfSlot { Bin = slate("链位甲"), Hooks = [new SlotHook { Name = slate("甲一") }, new SlotHook { Name = slate("甲二") }] },
+                new ShelfSlot { Bin = slate("链位乙"), Hooks = [new SlotHook { Name = slate("乙一") }] },
+            ],
+        };
+
+        db.Add(rack);
+
+        await db.SaveChangesAsync(ct);
+
+        var rackId = rack.Id;
+        var sent = new List<(string Text, int Parameters)>();
+        var aop = new FastSqlAop();
+
+        aop.Executing = e => sent.Add((e.Sql.Text, e.Sql.Parameters.Count));
+
+        var shelf = Assert.Single(await Database.OrmWith(aop)
+            .Select<Rack>()
+            .IncludeMany(r => r.Slots!)
+            .ThenIncludeMany(s => s.Hooks!)
+            .Where(r => r.Id == rackId)
+            .ToListAsync(ct));
+
+        // 三句：主查询、架→位、位→钩。第二层的 IN 里躺的是刚缝出来的那两只位的键（两颗参数），
+        // 不是架的键 —— 那一格错了的话钩会整批挂错父，而文本看不出来，所以参数个数也钉住。
+        Assert.Equal(3, sent.Count);
+        Assert.Contains("FastSqlStorageRack", sent[0].Text);
+        Assert.Contains("FastSqlShelfSlot", sent[1].Text);
+        Assert.Contains("FastSqlSlotHook", sent[2].Text);
+        Assert.Equal(1, sent[1].Parameters);
+        Assert.Equal(2, sent[2].Parameters);
+
+        var first = shelf.Slots!.Single(s => s.Bin == slate("链位甲"));
+        var second = shelf.Slots!.Single(s => s.Bin == slate("链位乙"));
+
+        Assert.Equal(2, shelf.Slots!.Count);
+        Assert.Equal([slate("甲一"), slate("甲二")], first.Hooks!.Select(h => h.Name).OrderBy(x => x, StringComparer.Ordinal).ToArray());
+        Assert.Equal(slate("乙一"), Assert.Single(second.Hooks!).Name);
+    }
+
+    /// <summary>链上「旁边那一根」（<c>IncludeMany(…).ThenInclude(…)</c>，§5.7 引用那一档）判在真库上：
+    /// 托盘一句把明细带出来，明细手里那一份物资也一起带出来 —— 三张表、三句，主查询只有第一句。
+    ///
+    /// <para><b>为什么钉第三句的参数个数</b>：那一句的 IN 里躺的是那批明细的<em>外键值</em>，而四只明细
+    /// 只有三种键（两只同物资、一只另一只、一只没有物资＝键 <c>0</c>）。发出去的是三颗参数而不是四颗：
+    /// 这一句按键去重。"没去重"在结果里完全看不出来（缝对了就是缝对了），只在库多读一次、多绑一颗，
+    /// 所以参数个数是唯一量得到它的读数。</para>
+    ///
+    /// <para><b>没物资的那一行必须留在结果里、导航留空</b>：<c>MaterialId = 0</c> 在库里配不到任何一行，
+    /// 引用那一档按主键配，配不到就是 <c>null</c> —— 而不是把这只明细筛掉（与 §5.6 那条裁定同向：
+    /// 可选边为空不是删行的理由）。</para></summary>
+    [Fact]
+    public async Task A_reference_leg_on_a_collection_level_loads_the_target()
+    {
+        Database.Ready();
+
+        EnsureTable(typeof(Pallet));
+        EnsureTable(typeof(PalletLine));
+        EnsureTable(typeof(Material));
+
+        var db = Session();
+        var kept = new Material { Spec = slate("物资甲") };
+        var sold = new Material { Spec = slate("物资乙") };
+
+        db.Add(kept);
+        db.Add(sold);
+
+        await db.SaveChangesAsync(ct);
+
+        var pallet = new Pallet
+        {
+            Id = 0,
+            Label = slate("托盘"),
+            Lines =
+            [
+                new PalletLine { Name = slate("行一"), MaterialId = kept.Id },
+                new PalletLine { Name = slate("行二"), MaterialId = kept.Id },
+                new PalletLine { Name = slate("行三"), MaterialId = sold.Id },
+                new PalletLine { Name = slate("行四"), MaterialId = 0 },
+            ],
+        };
+
+        db.Add(pallet);
+
+        await db.SaveChangesAsync(ct);
+
+        var palletId = pallet.Id;
+        var sent = new List<(string Text, int Parameters)>();
+        var aop = new FastSqlAop();
+
+        aop.Executing = e => sent.Add((e.Sql.Text, e.Sql.Parameters.Count));
+
+        var stack = Assert.Single(await Database.OrmWith(aop)
+            .Select<Pallet>()
+            .IncludeMany(p => p.Lines!)
+            .ThenInclude(l => l.Material)
+            .Where(p => p.Id == palletId)
+            .ToListAsync(ct));
+
+        // 三句：主查询、托盘→明细、明细→物资。第二句的 IN 里是一颗托盘键，第三句是三种明细键。
+        Assert.Equal(3, sent.Count);
+        Assert.Contains("FastSqlPallet", sent[0].Text);
+        Assert.Contains("FastSqlPalletLine", sent[1].Text);
+        Assert.Contains("FastSqlMaterial", sent[2].Text);
+        Assert.Equal(1, sent[1].Parameters);
+        Assert.Equal(3, sent[2].Parameters);
+
+        Assert.Equal(4, stack.Lines!.Count);
+
+        Assert.Equal(slate("物资甲"), stack.Lines!.Single(l => l.Name == slate("行一")).Material?.Spec);
+        Assert.Equal(slate("物资甲"), stack.Lines!.Single(l => l.Name == slate("行二")).Material?.Spec);
+        Assert.Equal(slate("物资乙"), stack.Lines!.Single(l => l.Name == slate("行三")).Material?.Spec);
+        Assert.Null(stack.Lines!.Single(l => l.Name == slate("行四")).Material);
     }
 
     static void EnsureTable(Type clrType) => Database.EnsureTable(clrType);

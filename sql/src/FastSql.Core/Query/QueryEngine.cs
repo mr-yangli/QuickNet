@@ -599,7 +599,7 @@ sealed class QueryEngine
     /// <summary>解析集合导航属性并构造 IncludeManyNode。不改写主查询 SQL，执行层发两条查询再缝合。
     /// FK 发现：先在子实体契约的 Relationships 里找指向父类型的边，找不到时按约定匹配
     /// （<c>{父类型名}Id</c> / <c>{父类型名}{PK列名}</c>）。</summary>
-    public QueryEngine IncludeMany(LambdaExpression navigation)
+    public IncludeManyNode IncludeMany(LambdaExpression navigation)
     {
         if (Model.Plan is not EntityProjection rootProjection)
             throw new FastSqlException("IncludeMany 只能在实体查询上使用，投影之后不能再加载集合导航。把 IncludeMany 放到 Select 之前。");
@@ -609,6 +609,68 @@ sealed class QueryEngine
         var parentContract = rootTable.Contract
             ?? throw new FastSqlException($"表位 {rootTable.Alias} 没有实体契约，无法解析集合导航。");
 
+        return NewIncludeManyNode(parentContract, memberName);
+    }
+
+    /// <summary>把根上的那一颗集合节点加进模型（追加到 IncludeManys 列表）。子节点走
+    /// <see cref="ThenIncludeMany"/>，不入这张清单 —— 它挂在本节点的 <see cref="IncludeManyNode.Children"/> 上。</summary>
+    public QueryEngine AddIncludeMany(IncludeManyNode node)
+        => Derive(Model with { IncludeManys = [.. Model.IncludeManys, node] });
+
+    /// <summary>在已有集合节点上再挂一层集合导航（<c>ThenIncludeMany</c>，§5.7）。父端是<em>上一层刚缝出来的
+    /// 那一批子实体</em>，所以这一档不需要表位、也不动 <c>QueryModel</c> —— 主查询 SQL 一个字符不变，
+    /// 多出来的只是执行层的一条 SELECT。判"这一层能不能挂"的是父节点子型的契约上有没有那根集合边。</summary>
+    public IncludeManyNode ThenIncludeMany(IncludeManyNode parent, LambdaExpression navigation)
+    {
+        var parentContract = Orm.Schemas.Contract(parent.ChildType);
+        var node = NewIncludeManyNode(parentContract, ExtractMemberName(navigation.Body));
+
+        parent.Children.Add(node);
+
+        return node;
+    }
+
+    /// <summary>在已有集合节点上再挂一层<em>引用</em>导航（<c>ThenInclude</c>，§5.7）。父端还是上一层刚缝出来的
+    /// 那一批子实体，所以这一档与 <see cref="ThenIncludeMany"/> 同一条纪律：<b>不动 <c>QueryModel</c>、不发主查询
+    /// 的任何东西</b>，节点记在本节点的 <see cref="IncludeManyNode.References"/> 上，执行期另发一条
+    /// <c>SELECT ... WHERE 目标.PK IN (那一批的 FK 值)</c> 再逐只缝回 —— 走的是 <c>AsSplitQuery</c> 那一档
+    /// 已有的那颗加载器，一条引用边在两条路上必须长成同一个答案。
+    /// 集合导航在这一档当场拒：它有自己的那颗口（<see cref="ThenIncludeMany"/>），按引用那一档发出去只缝得上
+    /// 集合里的最后一只，而"只少一只"这种错在结果里看不出形状。</summary>
+    public IncludeNode ThenInclude(IncludeManyNode parent, LambdaExpression navigation)
+    {
+        var memberName = ExtractMemberName(navigation.Body);
+        var parentContract = Orm.Schemas.Contract(parent.ChildType);
+
+        if (parentContract.Collections.Any(c => c.MemberName == memberName))
+            throw new FastSqlException(
+                $"实体 {parentContract.ClrType.Name} 上的 {memberName} 是集合导航：这一档只走引用导航，" +
+                $"集合换 ThenIncludeMany（它按外键把那一批全挂上）。用 ThenInclude 挂集合只会剩下最后一只。");
+
+        var relationship = FindRelationship(parentContract, memberName);
+
+        // 两侧表位的索引都取 0：这一颗不进 FROM，执行期那条独立 SELECT 自己现取别名（与拆分加载同一处理）。
+        // ON 仍按全仓库共用的那一颗现造 —— 它今天不被发射，但它是"这根边的键对不对得上"唯一的判据，
+        // 让它在链上就响，比在执行期缝出一只空导航、没人知道为什么好。
+        var sourceTable = Orm.NewTableRef(parentContract.ClrType, 0);
+        var targetTable = Orm.NewTableRef(relationship.TargetType, 0);
+
+        var node = new IncludeNode
+        {
+            NavigationMemberName = memberName,
+            Relationship = relationship,
+            TargetTable = targetTable,
+            OnCondition = BuildJoinCondition(sourceTable, relationship, targetTable),
+        };
+
+        parent.References.Add(node);
+
+        return node;
+    }
+
+    /// <summary>两层共用的一颗节点构造：从父契约上按属性名取集合元素类型，再发现外键。</summary>
+    IncludeManyNode NewIncludeManyNode(EntityContract parentContract, string memberName)
+    {
         var navProperty = parentContract.ClrType.GetProperty(memberName)
             ?? throw new FastSqlException(
                 $"实体 {parentContract.ClrType.Name} 上没有名为 {memberName} 的属性。");
@@ -620,14 +682,12 @@ sealed class QueryEngine
         var childContract = Orm.Schemas.Contract(childType);
         var fkColumns = DiscoverFkColumns(parentContract, childContract, memberName);
 
-        var node = new IncludeManyNode
+        return new IncludeManyNode
         {
             NavigationMemberName = memberName,
             ChildType = childType,
             ChildFkColumnNames = fkColumns,
         };
-
-        return Derive(Model with { IncludeManys = [.. Model.IncludeManys, node] });
     }
 
     /// <summary>从子实体契约上发现指向父实体 PK 的外键列。先查显式关系（子端有引用导航回父），
@@ -858,7 +918,9 @@ sealed class QueryEngine
 
     /// <summary>IncludeMany 的两条查询执行（§5.7）。先执行主查询拿父实体，再发第二条查询拿子实体
     /// （WHERE FK IN (@parentPks)），最后在内存里把子实体缝回父实体的集合属性。
-    /// 父实体为空时跳过子查询（避免生成空 IN 子句）。</summary>
+    /// 父实体为空时跳过子查询（避免生成空 IN 子句）。链上挂了 <c>ThenIncludeMany</c> 就往下一层递归，
+    /// 挂了 <c>ThenInclude</c> 就在这一层的子实体上另发一条拆分加载（§5.7 的引用那一档），
+    /// 一条链发一串 SELECT：根一条、每一层各一条、每一层旁边每根引用导航再一条。</summary>
     [RequiresUnreferencedCode("IncludeMany 按运行期 Type 反射读取主键值与设置集合导航属性。")]
     [RequiresDynamicCode("IncludeMany 按运行期 Type 反射读取主键值与设置集合导航属性。")]
     async Task<List<TResult>> ListWithIncludeManyAsync<TResult>(QueryModel model, CancellationToken ct)
@@ -879,15 +941,37 @@ sealed class QueryEngine
             foreach (var p in parents)
                 parentObjects.Add(p!);
 
-            await LoadChildrenAsync(parentObjects, parentContract, includeMany, ct).ConfigureAwait(false);
+            await LoadChainAsync(parentObjects, parentContract, includeMany, ct).ConfigureAwait(false);
         }
 
         return parents;
     }
 
+    /// <summary>逐层往下缝：本层刚捞出的子实体就是下一层的父端。上一层没行就直接停 —— 下一颗节点没有
+    /// 可当 IN 值的键，而这一档不发空 IN（旁边那一档引用导航同理，它收的也是这一批子实体）。</summary>
     [RequiresUnreferencedCode("IncludeMany 按运行期 Type 反射读取主键值与设置集合导航属性。")]
     [RequiresDynamicCode("IncludeMany 按运行期 Type 反射读取主键值与设置集合导航属性。")]
-    async Task LoadChildrenAsync(
+    async Task LoadChainAsync(List<object> parents, EntityContract parentContract, IncludeManyNode node, CancellationToken ct)
+    {
+        var children = await LoadChildrenAsync(parents, parentContract, node, ct).ConfigureAwait(false);
+
+        if (children.Count == 0)
+            return;
+
+        var childContract = Orm.Schemas.Contract(node.ChildType);
+
+        // 旁边那一档：这一批子实体各自手里的引用导航。父端就是刚缝出来的这一批，所以直接把拆分加载器
+        // 递过去 —— 它收的本来就是"一批任意实体 + 它们身上的引用边"，与根实体没有半句约定。
+        if (node.References.Count > 0)
+            await LoadSplitIncludeNodesAsync(children, childContract, node.References, ct).ConfigureAwait(false);
+
+        foreach (var child in node.Children)
+            await LoadChainAsync(children, childContract, child, ct).ConfigureAwait(false);
+    }
+
+    [RequiresUnreferencedCode("IncludeMany 按运行期 Type 反射读取主键值与设置集合导航属性。")]
+    [RequiresDynamicCode("IncludeMany 按运行期 Type 反射读取主键值与设置集合导航属性。")]
+    async Task<List<object>> LoadChildrenAsync(
         List<object> parents, EntityContract parentContract,
         IncludeManyNode node, CancellationToken ct)
     {
@@ -1007,6 +1091,8 @@ sealed class QueryEngine
 
         if (_tracker is not null)
             _tracker.TrackAll(children, node.ChildType);
+
+        return children;
     }
 
     /// <summary>拆分查询执行（§5.7）。引用导航不走 LEFT JOIN：先执行主查询拿根实体，再为每个 Include 节点

@@ -377,7 +377,7 @@ var q = orm.Select<Order>()
 - 谓词/投影/排序：`Where`（可多条，左到右折成一个 AND 链）、`OrderBy`/`OrderByDescending`/`ThenBy`/`ThenByDescending`、`Select<TResult>`（实体、匿名、构造器 DTO 三种）
 - 分页：`Skip`/`Take`，或一次到位 `ToPagedAsync(int page, int size, PagedOptions? = null, CancellationToken)` → `PagedResult<T> { Items, Page, Size, Total, HasNext, TotalPages }`；计数控件是 `PagedOptions(CountMethod CountMethod = Auto, bool StripOrderingForCount = true, string? CacheKey = null)`，`CountMethod` 五值 `Auto`/`CountStar`/`CountOverWindow`/`SkipTotal`/`SeparateTransaction` —— 后两档里 `CountOverWindow` 与 `SeparateTransaction` 今天**直接抛**（§4.3 第 4 条那格），可点的只有前三颗
 - 联表：arity 递增的 `LeftJoin<T2>(on)` / `InnerJoin<T2>(on)`，形参按 FROM 位置解析，产出 `IQuery<T1, T2>`（再到 `IQuery<T1, T2, T3>`），其后 `Select((a, b) => ...)`
-- 导航：`Include<TProp>`、`IncludeMany<TDetail>`、`AsSplitQuery(int navigateBatchSize = 20)`；**另加 v0.39 起"不点名也带"的那一档** —— 在谓词 / 投影 / 排序键里读到一条**引用**导航的**成员**，库按契约自动补 `LEFT JOIN`，不用 `Include`、也不用自己写 `LeftJoin`（下面那一格）
+- 导航：`Include<TProp>` 与它那一条链上的 `ThenInclude<TProp>`（每层一张 `LEFT JOIN`）、`IncludeMany<TDetail>`（v0.39 第三笔起可以再往<em>下一层</em>挂：`ThenIncludeMany<TProp>`；第四笔起同一层<em>旁边</em>还能挂一根引用：`ThenInclude<TProp>` —— 两颗都见下面"集合导航可以一层一层挂上去"那一格）、`AsSplitQuery(int navigateBatchSize = 20)`；**另加 v0.39 起"不点名也带"的那一档** —— 在谓词 / 投影 / 排序键里读到一条**引用**导航的**成员**，库按契约自动补 `LEFT JOIN`，不用 `Include`、也不用自己写 `LeftJoin`（下面那一格）
 - 其它：`As(string alias)`、`Distinct()`、`AsNoTracking()`、`IgnoreQueryFilters()`、`IgnoreQueryFilter<TFilter>()`（按注册键点名，可叠；见上面「全局过滤器」那一格）、`WithCache(string, TimeSpan)`、`WithSql(string sql, object? args = null)`（把 FROM 那一段换成你自己写的 SELECT，外面一层仍归库；见下面"表源那一格"）
 - 出口：`ToListAsync`/`FirstOrDefaultAsync`/`CountAsync`/`ToAsyncEnumerable(int batchSize)`，以及同步的 `ToList`/`FirstOrDefault`/`Count`；类型本身还是 `IAsyncEnumerable<T>`。计数一族（`Count`/`LongCount`/`Any` 与它们的异步对照）遇到分组、`Distinct` 或带 `Skip/Take` 的链时，会把整句包成派生表内层再数（上面那一段与下面"表源那一格"），不会照着原模型换一个 `COUNT(*)`。这一族的后四颗（`AnyAsync`/`LongCountAsync`/`Any`/`LongCount`）到 v0.38 第十九笔才真的长在 `IQuery<T>` 上，`Any` 发的仍是同一条 `COUNT(*)`，`COUNT(*) > 0` 在 CLR 侧判，`WHERE EXISTS(…)` 反形还没有入口
 
@@ -407,6 +407,29 @@ var rows = await orm.Select<Order>()
 - **`Explain()` 里读得出这条边**：它进的是模型的 `Joins`，不是编译期才补的一层，所以"这一句联了谁"在模型文本里就能看（`JOIN Left FastSqlCustomer AS t1 ON (t0.CustomerId = t1.Id)`）
 - **成本**：扁平实体（契约里一条关系都没有）连探测现场都不建，一次数组拷贝也不付；有关系的链是每查询 +8 B、每谓词 +16 B（门禁读数与归属在设计文档 §12.8 那一格 v0.39 那两段）
 - **见证**：离线册 `tests/FastSql.Tests.Dialects/NavigationAutoJoinTests.cs` **18** 颗（自动联的形状、跨算子复用、`Explain()`、分页在联表之后、子查询内层、`Guid` 外键那条边用自己的列、上面四格拒绝各一颗），基线 `golden/sqlserver/navigation-auto-join-projection.sql`，真库那一颗是集成册 `ReadPathTests.A_navigation_read_lands_a_left_join_without_being…`
+
+**集合导航可以一层一层挂上去，每一层旁边还挂得上引用导航（v0.39 第三笔 ∶ 第四笔，规格 §5.7 那两条落地记录）。**
+
+```csharp
+// 模板 → 分组 → 明细：三张表、三条 SELECT，而主查询与"只挂一层"时逐字节相同
+var template = await orm.Select<ExamTemplate>()
+    .IncludeMany(t => t.Groups!)                  // 第二条：SELECT … FROM ExamGroup  WHERE TemplateId IN (@p0)
+    .ThenIncludeMany(g => g.Details!)             // 第三条：SELECT … FROM ExamDetail WHERE GroupId   IN (@p0, @p1)
+    .ThenInclude(d => d.Material)                 // 第四条：SELECT … FROM Material   WHERE Id        IN (@p0, @p1, @p2)
+    .Where(t => t.Id == id)
+    .FirstOrDefaultAsync();
+```
+
+- **`Include`/`ThenInclude` 那一条链是引用导航专用的，不接受集合**：要集合就用 `IncludeMany`。两家的产物不同 —— 前者往主查询加 `LEFT JOIN` 与扩展列（每层一张表），后者<em>一个字都不加</em>，另发查询再内存缝合
+- **`ThenIncludeMany` 的形参是<em>一只</em>上一层的子实体**：`g => g.Details` 里 `g` 是 `ExamGroup` 而不是 `List<ExamGroup>`（与 `Include(…).ThenInclude(…)` 同形）。下一层挂在谁的契约上由类型系统在编译期定死，认错父端接不上去
+- **深度就是查询的条数**：根一条 + 每一层一条，两层链 = 三句；第二句 `IN` 里躺的是上一层刚缝出来的那一批父键，不是根表主键。上一层没行就当场停，所以空集拿不到第二句、更不会有空 `IN`
+- **外键怎么找（每一层各判一次，三档逐字节优先）**：子实体上指向父类型的回指关系 → 集合成员上点名的 `[ForeignKey("列名")]` → 约定 `{父类型名}Id`；三档都命不中当场抛，不猜
+- **投影之后不能挂**：`IncludeMany` 与 `ThenIncludeMany` 拒的是同一句话（"把 `IncludeMany` 放到 `Select` 之前"）
+- **`ThenInclude` 挂的是<em>旁边</em>那一根，不是<em>下面</em>那一层**：形参还是这一层的<em>一只</em>子实体（`d => d.Material` 里 `d` 是一只 `ExamDetail`），挂的是它<em>手里</em>那根引用导航。重复调用是在同一层并列多挂几根（`.ThenInclude(d => d.Material).ThenInclude(d => d.Warehouse)`），而 `ThenIncludeMany` 仍然往下一层集合走 —— 那颗 `ThenInclude` 返回的是原来那一家，类型参数 `TItem` 不变。<b>再往引用导航的第二层（物资的类别）今天没有出口</b>，那一形走 `Include`/`ThenInclude` 那条 JOIN 链或 `AsSplitQuery()`
+- **那一根的查询形状**：`SELECT 目标各列 FROM 目标 WHERE 主键 IN (这一批子实体手里的外键值)` —— 方向与集合那一档相反（集合按父键筛子行，引用按子键捞目标），<b>按键去重</b>（四只明细只有三种键值就只绑三颗参数），而配不到行的那一只<em>留在结果里、导航为 `null`</em>，不会被筛掉
+- **集合边不能打进 `ThenInclude`**：那一格当场响并指名换 `ThenIncludeMany` —— 编译期看不出来（`List<SlotHook>` 是一只完全合法的返回值），放过去的话执行层按主键缝引用，一根集合边只会剩下最后一只
+- **`AsSplitQuery()` 与 `IncludeMany` 现在不要混在同一句里**：两者同时在场时分派按拆分那一支先赢，集合那一家今天会被静默丢掉（规格 §5.7 第四笔那条"没给的三件"里记着）
+- **会话跟踪要知道的那一格**：`IncludeMany` 缝上来的子实体<em>不会自己在会话里建档</em>（今天这是一格已记名的缺口，规格 §8.2），所以"改完子实体再 `SaveChanges`、由会话落库"这条路对链上的子实体不成立 —— 要写这批子行走 `Update`/级联那一档，或在读之前先摸一句 `db.Set<ExamGroup>()` 建上档
 
 **分组（`GroupBy`/`Having`）走的是另一条类型链，出口只有 `Select`。**
 

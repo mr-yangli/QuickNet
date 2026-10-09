@@ -135,7 +135,16 @@ public interface IQuery<T> : IAsyncEnumerable<T>
 
     IQuery<TResult> Select<TResult>(Expression<Func<T, TResult>> projector);
 
-    IQuery<T> IncludeMany<TDetail>(Expression<Func<T, IEnumerable<TDetail>>> navigation);
+    /// <summary>急切加载<em>集合</em>导航属性（to-many，§5.7）。与 <see cref="IIncludableQuery{T, TLastProp}"/>
+    /// 那一家（<c>Include</c>）分得很开，理由是形状不同：<c>Include</c> 是一条 LEFT JOIN 把整只<em>引用</em>实体
+    /// 随主查询带回来，而把同一写法用在集合边上会<em>按明细行数复制每一行主表</em> —— 页码、行数与聚合一起改语义。
+    /// 所以这一颗不动主查询 SQL：主查询执行完再发一条 <c>SELECT ... WHERE 外键 IN (父端主键集合)</c>，
+    /// 在内存里缝回父实体的集合属性。父端为空时那条子查询整个跳过（不发空 IN）。
+    /// 返回 <see cref="IIncludableCollectionQuery{T, TDetail}"/>，所以可以再往下一层挂
+    /// <c>ThenIncludeMany</c>（<c>IncludeMany(t =&gt; t.Groups).ThenIncludeMany(g =&gt; g.Details)</c> 三张表两条子查询，
+    /// 下一层的父端就是上一层刚缝出来的那一批）。外键发现按<em>约定</em>三档：子实体上指向父类型的引用导航、
+    /// 集合边上点名的 <c>[ForeignKey]</c>、列名 <c>{父类型名}Id</c>。</summary>
+    IIncludableCollectionQuery<T, TDetail> IncludeMany<TDetail>(Expression<Func<T, IEnumerable<TDetail>>> navigation);
 
     /// <summary>显式别名，取代按形参名找表（§5.1）。</summary>
     IQuery<T> As(string alias);

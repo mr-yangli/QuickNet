@@ -115,8 +115,11 @@ public class FastSqlQuery<T> : IQuery<T>, IEngineCarrier
 
     // ── P1：接口里有、实现还没有，所以直接抛，不给"看起来能用"的假象 ──────────
 
-    public IQuery<T> IncludeMany<TDetail>(Expression<Func<T, IEnumerable<TDetail>>> navigation)
-        => new FastSqlQuery<T>(Engine.IncludeMany(navigation));
+    public IIncludableCollectionQuery<T, TDetail> IncludeMany<TDetail>(Expression<Func<T, IEnumerable<TDetail>>> navigation)
+    {
+        var node = Engine.IncludeMany(navigation);
+        return new FastSqlIncludableManyQuery<T, TDetail>(Engine.AddIncludeMany(node), node);
+    }
 
     public IQuery<T> AsSplitQuery(int navigateBatchSize = 20)
         => new FastSqlQuery<T>(Engine.SplitQuery());
