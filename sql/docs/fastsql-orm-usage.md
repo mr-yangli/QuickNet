@@ -409,6 +409,25 @@ var rows = await orm.Select<Order>()
 - **见证**：离线册 `tests/FastSql.Tests.Dialects/NavigationAutoJoinTests.cs` **23** 颗（自动联的形状、跨算子复用、`Explain()`、分页在联表之后、子查询内层、`Guid` 外键那条边用自己的列、上面四格拒绝各一颗，另有六颗是共用那一张那一族：`Include` 前后两序各一颗、三形派生句子一颗、两层链各一张一颗、没人读时照旧发一颗、集合边不并一颗），基线 `golden/sqlserver/navigation-auto-join-projection.sql`，真库那一颗是集成册 `ReadPathTests.A_navigation_read_lands_a_left_join_without_being…`
 - **可重跑**：`samples/FastSql.Sample` 的 §16（谓词/序+投影读导航 → `Include` 与读导航共用一张（句子与 `Explain()` 各数一次）→ 集合读法被拒那一句 → `Include` 两层两张 → `AsSplitQuery` 那一形不发扩展列而谓词那张照发 → `IncludeMany`＋旁边引用边＋下一层集合一句链端出四条 `SELECT`），跑在 SQLite 上，读的是句子与行数不是厂商库
 
+**CLR 自己插的转换节点：哪四形放行、哪两形仍发 `CAST`（规格 §12.9 那一格的延伸）。**
+
+```csharp
+OrderState? state = OrderState.Paid;                              // 枚举列 ↔ 可空枚举量
+await orm.Select<Order>().Where(o => o.State == state).ToListAsync();   // `State` = @p0，两侧都不包 CAST
+
+short? small = 7;                                                 // int 列 ↔ short? 量（加宽）
+await orm.Select<RepresentationProbe>().Where(p => p.Id == small).ToListAsync();   // `Id` = @p0
+
+await orm.Select<RepresentationProbe>().Where(p => (short)p.Id == 3).ToListAsync(); // 收窄：CAST(`Id` AS SMALLINT)，故意留着
+```
+
+- **放行判据是 `ExpressionTranslator.RepresentationOnly`（`src/FastSql.Core/Translation/ExpressionTranslator.cs:452`）**：一律先看穿一层 `Nullable`，再认三形 —— ①任一侧是枚举，②两侧同一个 CLR 型（`T ↔ T?`），③整型**安全加宽**（位宽 8∶16∶32∶64 严格变大，且 `ulong` 单独排除：CLR 里没有比它更宽而又不改符号语义的整型）。加上调用点那颗装箱豁免（`:425` 的 `node.Type == typeof(object)`，最常从 `string.Concat(object, object)` 里冒出来），一共四形不进 SQL
+- **只放宽、不收紧**：这一判据不能顺手把旧豁免收回去。曾写过"枚举只许转到自己的 `Enum.GetUnderlyingType`"那一版，短血统枚举（`enum ShortState : short`）反而更坏 —— 提升比较转到的是 `Int32?` 而不是 `Int16?`，于是 CAST 套到了**列**那一侧
+- **真转换仍发 `CAST`，那是裁定不是漏**：收窄（`Int32 → Int16` 会真丢值）与 `char`（列是 `CHAR(1)` 存文本，拿数值比字符是库级静默的字符串↔数字降级）都不豁免，让它们响，比静默错行好。看得见的代价是列被包进函数 ⇒ 那一侧索引作废
+- **为什么这一格以前是硬错而不是难看**：`CAST` 的目标型名取自 `Provider.StoreTypeOf`，那是**DDL 建表型名**（`MySqlTypes.cs:123` 给 `int` → `INT`、`:121` 给 `short` → `SMALLINT`），而 MySQL 的 `CAST` 不认 `INT`，整条句子被库拒（真库反证 `1064 near 'INT)'`）。"型名取自 DDL 那一张表"这件事本身仍是一格欠（`decimal` → `DECIMAL(18,4)` 恰好能用而 `SMALLINT` 不能），**而规格里今天还没有它的名字**（`fastsql-orm-design.md` 里 `StoreTypeOf` 一词命中 0），所以这一格不在上面那条判据的射程内，也别当成已经修过
+- **顺带够得着的一格语义**：可空枚举量取 `null` 时那一格折成 `IS NULL`（`:349` 那道折法）—— 豁免之前那颗 `Convert` 正挡在中间，折不到，所以这不是观感问题
+- **见证**：离线册 `tests/FastSql.Tests.Dialects/NullableValueComparisonTests.cs` **6** 颗（裸绑定、短血统与两档加宽、列侧加宽后索引还在、`IS NULL`、反向探针一颗钉"收窄与 `char` 仍发 CAST"、SQL Server 同判据逐字同形只换引号）。探针表 `FastSqlRepresentationProbe` 只放列不放关系，为的是不动 `Order` 的列清单（黄金册里每张 `SELECT` 列表都挂着它）。活库那一颗在集成册（`ReadPathTests.A_nullable_value_compared_directly_returns_the_same_r…`：非空那一档筛出一行、与点明非空的写法逐行相同、`null` 那一档折成 `IS NULL` 后筛出零行）—— **它在 SQL Server 上判的是"新判据没把语义改坏"，不是那颗 `1064`**：老句子（带 `CAST`）在这一家照样发得出、跑得通，`1064` 只有配上 `FASTSQL_MYSQL_CONNECTION` 才重跑得了，而本机在册的只有一座 SQL Server
+
 **集合导航可以一层一层挂上去，每一层旁边还挂得上引用导航（v0.39 第三笔 ∶ 第四笔，规格 §5.7 那两条落地记录）。**
 
 ```csharp

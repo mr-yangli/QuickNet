@@ -530,6 +530,36 @@ public class ReadPathTests
         Assert.Equal(all.Skip(1).Take(2), page);
     }
 
+    /// <summary>可空值<em>直接</em>比较在真库上的那一半（§12.9 那一格延伸出去的读数）：离线册钉的是"两侧都不包
+    /// <c>CAST</c>"，这一颗钉的是"库认这句、行级答案与点明非空那一档逐行相同"，外加 <c>null</c> 那一档折成
+    /// <c>IS NULL</c> 之后筛出零行（夹具的 <c>State</c> 列整张表不可空，所以这里的正确答案是 0 而不是"全表"）。
+    /// <b>这一格在 SQL Server 上比在 MySQL 上弱</b>：老句子（带 <c>CAST</c>）在这一家照样发得出、跑得通，
+    /// 所以它判的是新判据没把语义改坏，那颗 <c>1064</c> 只有配上 <c>FASTSQL_MYSQL_CONNECTION</c> 才重跑得了
+    /// —— 本机在册的那一条是 SQL Server，那一档今天没有实例。</summary>
+    [Fact]
+    public async Task A_nullable_value_compared_directly_returns_the_same_rows_as_the_explicit_one()
+    {
+        Database.Ready();
+
+        var ct = TestContext.Current.CancellationToken;
+
+        OrderState? paid = OrderState.Paid;
+
+        var boxed = await Tagged().Where(o => o.State == paid).ToListAsync(ct);
+
+        Assert.Single(boxed);
+        Assert.Equal(OrderState.Paid, boxed[0].State);
+
+        // 同一件事的另一种写法（点明非空那一档）逐行对照：两形一个答案，对不上就是豁免猜错了语义。
+        var explicitValue = await Tagged().Where(o => o.State == OrderState.Paid).ToListAsync(ct);
+
+        Assert.Equal(explicitValue.Select(o => o.Id), boxed.Select(o => o.Id));
+
+        OrderState? none = null;
+
+        Assert.Equal(0, await Tagged().Where(o => o.State == none).CountAsync(ct));
+    }
+
     /// <summary>流式出口：一次只有一行在内存里（§12.7 E），中途 <c>break</c> 由 DisposeAsync 归还连接。
     /// 分两半跑（先 break 再全量）是为了让"提前退出把连接留在事务里"这类问题变成可复现的红。</summary>
     [Fact]

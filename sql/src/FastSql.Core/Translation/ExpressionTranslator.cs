@@ -422,7 +422,7 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
                 // enum ↔ int、T ↔ T?、装箱成 object 只是 CLR 的表示差异，不进 SQL。
                 // 装箱这条最常从 string.Concat(object, object) 里冒出来：C# 把 a + "/" + i 编成它，
                 // 而 CONCAT 本来就会把数字转成文本 —— 补一个 CAST 既没有目标类型可填，也是多余的。
-                if (node.Operand.Type.IsEnum || node.Type.IsEnum || node.Type == typeof(object) || IsSameColumnar(node.Operand.Type, node.Type))
+                if (node.Type == typeof(object) || RepresentationOnly(node.Operand.Type, node.Type))
                     return operand;
 
                 var storeType = Provider.StoreTypeOf(Nullable.GetUnderlyingType(node.Type) ?? node.Type);
@@ -439,6 +439,37 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
 
     static bool IsSameColumnar(Type from, Type to)
         => (Nullable.GetUnderlyingType(from) ?? from) == (Nullable.GetUnderlyingType(to) ?? to);
+
+    /// <summary>这一颗 Convert 只是 CLR 的表示差异、不改变落进库的值，因此不发射 SQL 转换。
+    /// 判据一律看穿一层 <see cref="Nullable"/>，且不收紧原有豁免只放宽：
+    /// <c>enum == enum?</c> 与 <c>int 列 == short? 量</c> 这类比较，C# 长出的是提升到 <c>Int32?</c>/<c>Int64</c>
+    /// 的转换，两侧各裹一层 Nullable 就让 <c>IsEnum</c> 读成 false、<c>IsSameColumnar</c> 比出不同型，
+    /// 于是落到 <c>StoreTypeOf</c> —— 那里取到的是 DDL 建表型名（MySQL 给 "INT"），
+    /// 发出去成 <c>CAST(@p0 AS INT)</c>，而 MySQL 的 CAST 不认 INT，整条句子语法错。
+    /// 整型之间只豁免加宽（16→32、32→64）：整数加宽不改变值，两侧进库是同一颗比较，
+    /// 且免掉列侧的 CAST 才守得住索引；收窄会真丢值，留着 CAST 让它响。
+    /// <c>char</c> 不进整型表：它的列是 CHAR(1) 存文本，拿数值去比字符是库级静默降级，比报错更坏。</summary>
+    static bool RepresentationOnly(Type from, Type to)
+    {
+        var source = Nullable.GetUnderlyingType(from) ?? from;
+        var target = Nullable.GetUnderlyingType(to) ?? to;
+
+        if (source.IsEnum || target.IsEnum || IsSameColumnar(from, to))
+            return true;
+
+        var width = IntegerWidth(source);
+        return width > 0 && width < IntegerWidth(target) && source != typeof(ulong);
+    }
+
+    /// <summary>整型的位宽；不在表上的（含 <c>char</c>、decimal、引用型）回 0，表示这一族不讨论加宽。</summary>
+    static int IntegerWidth(Type type)
+    {
+        if (type == typeof(sbyte) || type == typeof(byte)) return 8;
+        if (type == typeof(short) || type == typeof(ushort)) return 16;
+        if (type == typeof(int) || type == typeof(uint)) return 32;
+        if (type == typeof(long) || type == typeof(ulong)) return 64;
+        return 0;
+    }
 
     // ── 方法调用 ──────────────────────────────────────────────────────
 
