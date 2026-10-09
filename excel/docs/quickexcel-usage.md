@@ -24,9 +24,9 @@
 | 语言版本 | `preview`；`Nullable enable`、`ImplicitUsings enable` | `excel/Directory.Build.props` |
 | unsafe | `AllowUnsafeBlocks`（仅本体需要） | `QuickExcel.csproj` |
 | XML 文档 | `GenerateDocumentationFile true`，`NoWarn` 抑制 `CS1591` | `QuickExcel.csproj` |
-| NuGet 包 | 有：`QuickExcel` `0.1.0-beta.1`（运行期零依赖；版本/许可/作者归上提的 props，csproj 只留 `PackageId`） | `excel/Directory.Build.props` |
+| NuGet 包 | 有：`QuickExcel` `0.1.0-beta.1`（版本在此，作者/许可在仓库根 `Directory.Build.props`；运行期零依赖，csproj 只留 `PackageId`） | `excel/Directory.Build.props` + 根 `Directory.Build.props` |
 
-子树根有独立的 `Directory.Build.props`（上面四颗公共设置上提于此）与 `Directory.Packages.props`（CPM：测试四件套与基准的 MiniExcel 版本钉在那里；src 零依赖不入账）。与 `sql/` 子树的差异是刻意的：这里**不开** `TreatWarningsAsErrors` 与 trim/AOT 分析器 —— QuickExcel 大量用反射与表达式树，过了那道闸门会当场红；两本账的边界见各自 props 头注。
+子树根有独立的 `Directory.Build.props`（上面四颗公共设置上提于此；它再 `<Import>` 仓库根那一棵，那里放着四家共用的作者/许可/仓库地址）与 `Directory.Packages.props`（CPM：测试四件套与基准的 MiniExcel 版本钉在那里；src 零依赖不入账）。与 `sql/` 子树的差异是刻意的：这里**不开** `TreatWarningsAsErrors` 与 trim/AOT 分析器 —— QuickExcel 大量用反射与表达式树，过了那道闸门会当场红；两本账的边界见各自 props 头注。
 
 ### 1.2 引用
 

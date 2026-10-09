@@ -1,0 +1,19 @@
+<Project>
+
+  <!-- 仓库根这一棵只管一件事：四家共用的 NuGet 打包身份（作者 / 许可 / 工程页 / 仓库地址）。
+       刻意不管 TFM、语言版本、可空性、警告闸门 —— 那些是子树自己的口径（sql 开 TreatWarningsAsErrors
+       与 trim/AOT 分析器，另三家刻意不开，理由见 excel/Directory.Build.props 头注）。
+       也刻意不管版本号：0.39.0-beta.1 是 QuickSql 跟着规格册的账，0.1.0-beta.1 是三家姊妹库自己的起点，
+       两个序列不该被一根绳子绑在一起。
+
+       MSBuild 只会自动导入"向上找到的第一棵" Directory.Build.props，所以下面四棵子树 props 必须
+       显式 Import 回本文件，且要写在各自设置之前（后写的子树值盖住继承来的）。 -->
+  <PropertyGroup>
+    <Authors>YANGLI</Authors>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://gitee.com/mr_yangli/fast-net</PackageProjectUrl>
+    <RepositoryType>git</RepositoryType>
+    <RepositoryUrl>https://gitee.com/mr_yangli/fast-net.git</RepositoryUrl>
+  </PropertyGroup>
+
+</Project>

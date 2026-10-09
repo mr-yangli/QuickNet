@@ -1,5 +1,8 @@
 <Project>
 
+  <!-- 接回仓库根那一棵（作者 / 许可 / 工程页 / 仓库地址四家共用）；顺序不能反过来。 -->
+  <Import Project="..\Directory.Build.props" />
+
   <!-- excel/ 子树闸门。与 sql/Directory.Build.props 同形状（TFM / 语言 / 可空性），
        但刻意不带 sql 那套 TreatWarningsAsErrors + trim/AOT 分析器：QuickExcel 本体大量用
        反射与表达式树（TypeMetadataCache / DataAnnotations / Activator 回退），开警告即错误
@@ -11,15 +14,10 @@
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
 
-  <!-- NuGet 打包元数据。版本口径与 sql/ 那一份不同：v0.39 是 QuickSql 规格册的账，本库没有在册的
-       版本序列，所以从 0.1.0-beta.1 起（预发布档，不进消费方默认解析）。 -->
+  <!-- NuGet 打包元数据里本子树独有的那三颗。版本口径与 sql/ 那一份不同：v0.39 是 QuickSql 规格册的账，
+       本库没有在册的版本序列，所以从 0.1.0-beta.1 起（预发布档，不进消费方默认解析）。 -->
   <PropertyGroup>
     <Version>0.1.0-beta.1</Version>
-    <Authors>YANGLI</Authors>
-    <PackageLicenseExpression>MIT</PackageLicenseExpression>
-    <PackageProjectUrl>https://gitee.com/mr_yangli/fast-net</PackageProjectUrl>
-    <RepositoryType>git</RepositoryType>
-    <RepositoryUrl>https://gitee.com/mr_yangli/fast-net.git</RepositoryUrl>
     <PackageReadmeFile>quickexcel-usage.md</PackageReadmeFile>
     <PackageTags>excel;xlsx;spreadsheet;import;export</PackageTags>
   </PropertyGroup>

@@ -1,5 +1,8 @@
 <Project>
 
+  <!-- 接回仓库根那一棵（作者 / 许可 / 工程页 / 仓库地址四家共用）；顺序不能反过来。 -->
+  <Import Project="..\Directory.Build.props" />
+
   <!-- word/ 子树闸门。与 sql/ 同形状的公共设置；刻意不带 sql 的
        TreatWarningsAsErrors + trim/AOT 分析器（理由见 excel/Directory.Build.props 头注）。 -->
   <PropertyGroup>
@@ -9,14 +12,10 @@
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
 
-  <!-- NuGet 打包元数据。版本从 0.1.0-beta.1 起，理由见 excel/Directory.Build.props 那一段注释。 -->
+  <!-- NuGet 打包元数据里本子树独有的那三颗。版本从 0.1.0-beta.1 起，理由见 excel/Directory.Build.props
+       那一段注释。 -->
   <PropertyGroup>
     <Version>0.1.0-beta.1</Version>
-    <Authors>YANGLI</Authors>
-    <PackageLicenseExpression>MIT</PackageLicenseExpression>
-    <PackageProjectUrl>https://gitee.com/mr_yangli/fast-net</PackageProjectUrl>
-    <RepositoryType>git</RepositoryType>
-    <RepositoryUrl>https://gitee.com/mr_yangli/fast-net.git</RepositoryUrl>
     <PackageReadmeFile>quickword-usage.md</PackageReadmeFile>
     <PackageTags>word;docx;table;export</PackageTags>
   </PropertyGroup>
