@@ -57,6 +57,30 @@ public class OrderItem
     public int Quantity { get; set; }
 
     public decimal Price { get; set; }
+
+    /// <summary>集合导航：一根明细行拆成几个包裹 —— 示例 §16 那颗 <c>ThenIncludeMany</c> 的第三层。
+    /// <b><c>[NoCascade]</c> 是这一格的前提，不是装饰</b>：级联缺省开，而 §4 那几段删明细时看不见包裹，
+    /// 按"可达才删、捞不到就响"会在 §4.4 当场拒。这一句只说写入不带人，
+    /// 不影响 <c>IncludeMany</c>/<c>ThenIncludeMany</c> 按外键把那一批捞出来。</summary>
+    [NoCascade]
+    public List<Parcel>? Parcels { get; set; }
+}
+
+/// <summary>包裹：示例 §16 的第三层靶子，外键 OrderItemId 指向 OrderItem.Id。
+/// 它存在的唯一理由是让集合链长出下一层 —— 这一族的实体原本只到明细为止，
+/// <c>ThenIncludeMany</c> 在没有下一层集合边的实体上没法被跑出来给人看。</summary>
+[Table("Parcels")]
+public class Parcel
+{
+    public int Id { get; set; }
+
+    public int OrderItemId { get; set; }
+
+    /// <summary>引用导航：Parcel → OrderItem 的外键边。§16 用它演示集合链旁边再接一根引用边。</summary>
+    public OrderItem? OrderItem { get; set; }
+
+    [Column(Length = 32)]
+    public string? TrackingNo { get; set; }
 }
 
 /// <summary>分组查询的 DTO 投影目标（示例 §8.3）：分组链上的 <c>Select</c> 与不分组时用的是同一套投影翻译，

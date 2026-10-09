@@ -10,7 +10,8 @@ namespace FastSql.Tests.Dialects;
 ///
 /// <para>这一档翻掉了 v0.x 记过的一条裁定（"不做隐式导航 join"），所以这一册钉的都是<em>语义位</em>而不是
 /// 实现细节：发的是 LEFT 而不是 INNER（外格为空时主表行必须还在）、ON 用的是 Include 那一份同一个建造口
-/// （一条导航全仓库只许有一个答案）、同一根边在一条链上只联一张（lambda 内两处、跨算子两处都算）、
+/// （一条导航全仓库只许有一个答案）、同一根边在一条链上只联一张（lambda 内两处、跨算子两处都算、
+/// <c>Include</c> 那一颗表位也算 —— 两个方向都收养，见下面那一族 <c>An_included_edge_*</c>），
 /// 链分出的两个分支各拿各的清单，以及<em>没有</em>这一档的那些场合（集合导航、写侧、显式 join 的 ON）仍然当场拒。</para></summary>
 public sealed class NavigationAutoJoinTests
 {
@@ -252,18 +253,121 @@ public sealed class NavigationAutoJoinTests
     }
 
     [Fact]
-    public void An_included_edge_and_a_navigation_read_are_two_joins_not_a_reused_one()
+    public void An_included_edge_and_a_navigation_read_share_one_join()
     {
         var sql = orm().Select<Order>()
             .Include(o => o.Customer)
             .Where(o => o.Customer!.City == "上海")
             .ToSql();
 
-        // 已裁的形状：两张而不是复用 Include 那一颗。理由是 Include 的 LEFT JOIN 只在"实体投影且没拆查"
-        // 才真的进这一句（QueryCompiler.UsesIncludeJoins），按它复用会造出一句引用不存在的表的话。
-        // 多一张表在 MySQL/SQL Server 上都不改变结果，这一条是贵的而不是错的。
-        Assert.Equal(2, Checks.Occurrences(sql, "LEFT JOIN"));
+        // 已改判的形状（v0.39 那一格钉的是两张）：同一根边在一条链上只有一张 JOIN。Include 那一颗表位被自动联表
+        // 收养，而<em>收养落成的是模型里的真 JOIN</em>，不是照抄 Include 那一条 —— Include 的那一条只在
+        // "实体投影且没拆查"时才进这一句（QueryCompiler.UsesIncludeJoins），照抄过去，下面那三条派生句子
+        // （投影、拆查、count 自己包的内层）都会把它从 FROM 里摘掉，而欠着它的谓词还在。
+        Assert.Equal(1, Checks.Occurrences(sql, "LEFT JOIN"));
+        Checks.Has("LEFT JOIN [FastSqlCustomer] AS [t1] ON [t0].[CustomerId] = [t1].[Id]", sql);
+        Checks.Has("WHERE [t1].[City] = @p0", sql);
+
+        // 扩展列照旧发：物化按位置读（IncludeNode.ColumnOffset），读不出这一列由哪一条 JOIN 送进来。
         Checks.Has("[t1].[Remark]", sql);
-        Checks.Has("WHERE [t2].[City] = @p0", sql);
+    }
+
+    [Fact]
+    public void The_shared_join_survives_every_shape_that_drops_the_include_join()
+    {
+        // 这一条钉的就是当初判"两张而不是复用"的那半句理由：复用会引用一张没进 FROM 的表。三形各量一遍。
+        var split = orm().Select<Order>()
+            .Include(o => o.Customer)
+            .AsSplitQuery()
+            .Where(o => o.Customer!.City == "上海")
+            .ToSql();
+
+        Assert.Equal(1, Checks.Occurrences(split, "LEFT JOIN"));
+        Checks.Has("WHERE [t1].[City] = @p0", split);
+
+        // 拆查不发扩展列：整只实体是主查询之后那一条 SELECT 的事。
+        Checks.Absent("[t1].[Remark]", split);
+
+        var projected = orm().Select<Order>()
+            .Include(o => o.Customer)
+            .Where(o => o.Customer!.City == "上海")
+            .Select(o => new { o.Id, City = o.Customer!.City })
+            .ToSql();
+
+        Assert.Equal(1, Checks.Occurrences(projected, "LEFT JOIN"));
+        Checks.Has("SELECT [t0].[Id], [t1].[City] FROM", projected);
+        Checks.Absent("[t1].[Remark]", projected);
+
+        var shanghaiOrders = orm().Select<Order>()
+            .Include(o => o.Customer)
+            .Where(o => o.Customer!.City == "上海");
+
+        var counted = orm().Select<Customer>().Where(c => shanghaiOrders.Count() > 2).ToSql();
+
+        // 内层那句换的是投影计划（COUNT），Include 那一条 JOIN 在这一形本来不发 —— 收养下来的那一条跟着模型走，
+        // 所以内层的读导航有着落，而不是发出一句引用不存在表位的话。号不钉：捕获的子查询自己从 t1000 起编号，
+        // 这一条要钉的是"联的那一张 = 谓词引的那一张"这一对，不是那一个数。
+        Assert.Equal(1, Checks.Occurrences(counted, "LEFT JOIN"));
+        Checks.Has("LEFT JOIN [FastSqlCustomer] AS [t1001] ON [t1000].[CustomerId] = [t1001].[Id] WHERE [t1001].[City] = @p0", counted);
+    }
+
+    [Fact]
+    public void An_include_after_the_navigation_read_adopts_the_join_that_is_already_there()
+    {
+        var sql = orm().Select<Order>()
+            .Where(o => o.Customer!.City == "上海")
+            .Include(o => o.Customer)
+            .ToSql();
+
+        // 反过来的那一序同样是一张：Include 收养已经进 FROM 的那一颗表位，而不是再新造一张 Customer。
+        // 两个方向都要办，否则"一根边一张 JOIN"只在一序上成立，而调用方写哪一序不是库能挑的。
+        Assert.Equal(1, Checks.Occurrences(sql, "LEFT JOIN"));
+        Checks.Has("WHERE [t1].[City] = @p0", sql);
+        Checks.Has("[t1].[Remark]", sql);
+    }
+
+    [Fact]
+    public void A_deeper_included_chain_shares_each_edge_with_its_own_navigation_read()
+    {
+        var sql = orm().Select<SelfRef>()
+            .Include(s => s.Manager!)
+            .ThenInclude(m => m.Manager)
+            .Where(s => s.Manager!.Manager!.ManagerId == 3)
+            .ToSql();
+
+        // 一层一张、谁也没借谁：深层 Include 的宿主是父节点那一颗表位，收养按宿主的位置配，
+        // 配错一级就联成另一条边（自联表这一形尤其读得出来）。
+        Assert.Equal(2, Checks.Occurrences(sql, "LEFT JOIN"));
+        Checks.Has("LEFT JOIN [FastSqlSelfRef] AS [t1] ON [t0].[ManagerId] = [t1].[Id]", sql);
+        Checks.Has("LEFT JOIN [FastSqlSelfRef] AS [t2] ON [t1].[ManagerId] = [t2].[Id]", sql);
+        Checks.Has("WHERE [t2].[ManagerId] = @p0", sql);
+    }
+
+    [Fact]
+    public void An_included_edge_that_nobody_reads_lands_the_join_it_always_landed()
+    {
+        // 没有回归的那一半：只 Include、不读导航时句子与改判前逐字相同 —— JOIN 仍然来自 Include 那一家
+        // 而不是模型里的那一条，所以黄金样本 filter-include-on-clause 那一族不经过这一格。
+        var sql = orm().Select<Order>().Include(o => o.Customer).ToSql();
+
+        Assert.Equal(1, Checks.Occurrences(sql, "LEFT JOIN"));
+        Checks.Has("LEFT JOIN [FastSqlCustomer] AS [t1] ON [t0].[CustomerId] = [t1].[Id]", sql);
+        Checks.Has("[t1].[Remark]", sql);
+    }
+
+    [Fact]
+    public void An_included_edge_and_a_collection_read_still_stay_apart()
+    {
+        // Include 与自动联表并到一张，只在<em>同一根引用边</em>上成立。集合导航那一档没有自动联表
+        // （§5.2 那一格第五颗），IncludeMany 走的是另发的 SELECT，主查询一个字符不变。
+        var sql = orm().Select<Order>()
+            .Include(o => o.Customer)
+            .IncludeMany(o => o.Items!)
+            .ToSql();
+
+        Assert.Equal(1, Checks.Occurrences(sql, "LEFT JOIN"));
+        Checks.Has("[t1].[Remark]", sql);
+        Checks.Absent("[FastSqlOrderItem]", sql);
     }
 }
+

@@ -113,7 +113,7 @@ sealed class QueryEngine
     NavigationJoinScout? Scout(QueryModel model)
         => model.Tables is [var only] && only.Contract?.Relationships is { Count: 0 }
             ? null
-            : new NavigationJoinScout(_navigation, model.Tables.Count, Orm.TableRefFactory);
+            : new NavigationJoinScout(_navigation, model.Tables.Count, Orm.TableRefFactory, model);
 
     /// <summary>把这一颗 lambda 欠下的自动联表落地，并把它记进链级那份清单。
     /// <b>两处要一起改</b>：只落模型则下一颗 lambda 认不出"已经联过"而联第二张；只记清单则这一颗的 ON
@@ -475,7 +475,12 @@ sealed class QueryEngine
 
         var memberName = ExtractMemberName(navigation.Body);
         var relationship = FindRelationship(rootContract, memberName);
-        var targetTable = Orm.NewTableRef(relationship.TargetType, Model.Tables.Count);
+
+        // 先读导航、后 Include 那一序：这一根边已经作为模型里的真 JOIN 进 FROM 了（§5.2 的自动联表），
+        // Include 就收养那一颗而不是再新造一张 —— 与 NavigationJoinScout.AdoptedInclude 同一条裁决的两个方向，
+        // 合起来才是"一根边一张 JOIN"。
+        var targetTable = Joined(rootTable, memberName)
+                          ?? Orm.NewTableRef(relationship.TargetType, Model.Tables.Count);
         var onCondition = BuildJoinCondition(rootTable, relationship, targetTable);
 
         return new IncludeNode
@@ -496,7 +501,8 @@ sealed class QueryEngine
 
         var memberName = ExtractMemberName(navigation.Body);
         var relationship = FindRelationship(parentContract, memberName);
-        var targetTable = Orm.NewTableRef(relationship.TargetType, Model.Tables.Count);
+        var targetTable = Joined(parent.TargetTable, memberName)
+                          ?? Orm.NewTableRef(relationship.TargetType, Model.Tables.Count);
         var onCondition = BuildJoinCondition(parent.TargetTable, relationship, targetTable);
 
         var node = new IncludeNode
@@ -512,18 +518,41 @@ sealed class QueryEngine
         return node;
     }
 
-    /// <summary>将顶级 IncludeNode 加入模型（追加到 Includes 列表 + 追加目标表位）。</summary>
+    /// <summary>将顶级 IncludeNode 加入模型（追加到 Includes 列表 + 追加目标表位）。
+    /// 表位<em>可能已经在场</em>：这一根边先被自动联表补进 FROM、<see cref="Include"/> 收养它的那一序
+    /// （<see cref="Joined"/>），那时候不能再添第二份，否则 <c>Tables</c> 里同一种表出现两次，
+    /// 而按位置绑形参的那道（<c>Scope.Bound</c>）会把 arity≥2 的 lambda 错配一格。</summary>
     public QueryEngine AddInclude(IncludeNode node)
         => Derive(Model with
         {
             Includes = [.. Model.Includes, node],
-            Tables = [.. Model.Tables, node.TargetTable],
+            Tables = WithTable(Model.Tables, node.TargetTable),
         });
 
     /// <summary>将 ThenInclude 的子节点的目标表位加入模型。节点已经在父节点的 Children 里，
     /// 不需要再追加到 Includes 列表。</summary>
     public QueryEngine AddIncludeTable(IncludeNode node)
-        => Derive(Model with { Tables = [.. Model.Tables, node.TargetTable] });
+        => Derive(Model with { Tables = WithTable(Model.Tables, node.TargetTable) });
+
+    static IReadOnlyList<TableRef> WithTable(IReadOnlyList<TableRef> tables, TableRef table)
+    {
+        foreach (var existing in tables)
+            if (existing.Index == table.Index)
+                return tables;
+
+        return [.. tables, table];
+    }
+
+    /// <summary>这条链上那一根边（宿主表位的这一格成员）是不是已经联过，是就交回那一张表位。
+    /// 判据与 <see cref="NavigationJoin"/> 同一把尺：按宿主表位的<em>位置</em>加成员名，不按实例。</summary>
+    TableRef? Joined(TableRef host, string member)
+    {
+        foreach (var join in _navigation)
+            if (join.HostIndex == host.Index && join.Member == member)
+                return join.Table;
+
+        return null;
+    }
 
     /// <summary><c>AsSplitQuery()</c> 的落点：引用导航不走 LEFT JOIN，改在主查询之后单独发查询再内存缝合。
     /// 模型里只置一个位，真正改写法的是编译器（跳过 Include 列收集）与执行层（<c>ListWithSplitIncludesAsync</c>）。</summary>

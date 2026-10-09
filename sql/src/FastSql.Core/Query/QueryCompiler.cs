@@ -50,7 +50,7 @@ public sealed class QueryCompiler(IDbProvider provider)
             var includeColumns = new List<Projection>();
             var offset = columns.Count;
 
-            CollectIncludeColumns(model.Includes, includeJoins, includeColumns, ref offset);
+            CollectIncludeColumns(model.Includes, model.Joins, includeJoins, includeColumns, ref offset);
 
             allJoins = [.. model.Joins, .. includeJoins];
             columns = [.. columns, .. includeColumns];
@@ -229,9 +229,14 @@ public sealed class QueryCompiler(IDbProvider provider)
     }
 
     /// <summary>深度优先遍历 Include 树，为每个节点生成 LEFT JOIN 与扩展列。
-    /// 列偏移按遍历顺序递增，物化器按同一顺序读取。</summary>
+    /// 列偏移按遍历顺序递增，物化器按同一顺序读取。
+    /// <b>已经作为真 JOIN 在场的那一颗不再追加</b>（<paramref name="joined"/>）：这一根边被 §5.2 的自动联表
+    /// 收养过时，那条 <c>LEFT JOIN</c> 已经在 <see cref="QueryModel.Joins"/> 里（它比这一颗活得久 ——
+    /// 投影、拆查与 count 内层都带着它），这里再加一条就是把同一张表联第二遍。扩展列照旧发：
+    /// 物化按位置读（<see cref="IncludeNode.ColumnOffset"/>），读不出这一列的表位是哪一颗 JOIN 送进来的。</summary>
     static void CollectIncludeColumns(
         IReadOnlyList<IncludeNode> includes,
+        IReadOnlyList<JoinClause> joined,
         List<JoinClause> joins,
         List<Projection> columns,
         ref int offset)
@@ -240,7 +245,8 @@ public sealed class QueryCompiler(IDbProvider provider)
         {
             include.ColumnOffset = offset;
 
-            joins.Add(new JoinClause(JoinKind.Left, new SourceTable(include.TargetTable), include.OnCondition));
+            if (!IsJoined(joined, include.TargetTable))
+                joins.Add(new JoinClause(JoinKind.Left, new SourceTable(include.TargetTable), include.OnCondition));
 
             var contract = include.TargetTable.Contract!;
 
@@ -250,8 +256,20 @@ public sealed class QueryCompiler(IDbProvider provider)
             offset += contract.Columns.Length;
 
             if (include.Children.Count > 0)
-                CollectIncludeColumns(include.Children, joins, columns, ref offset);
+                CollectIncludeColumns(include.Children, joined, joins, columns, ref offset);
         }
+    }
+
+    /// <summary>那颗表位是不是已经在 FROM 里联过。判据取 <see cref="TableRef.Index"/> 而不是实例：
+    /// 收养走的是同一颗实例，而分表那条换实例的路（<see cref="Shard"/>）本来就在"有 JOIN 或有 Include 就拒"
+    /// 那一格外面。</summary>
+    static bool IsJoined(IReadOnlyList<JoinClause> joined, TableRef table)
+    {
+        foreach (var join in joined)
+            if (join.Source.Ref.Index == table.Index)
+                return true;
+
+        return false;
     }
 
     SqlExpression Aggregate(AggregateProjection aggregate)

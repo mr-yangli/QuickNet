@@ -62,13 +62,17 @@
          在 Linux 构建主机上它照样拷（拷进去一颗 PE），真正要的 libxugusql.so 反而一颗都不到。
          厂商文档（驱动安装一节）与实测字节两头都对上了这个分岔：Windows 载荷 = XuguClient.dll + xugusql.dll，
          Linux 载荷 = XuguClient.dll + libxugusql.so，且 x86_64 与 aarch64 各一颗（sha256 互不相同）。
-         顺带一颗本笔量出来的事实：Driver/windows/ 目录里躺着的是 libxugusql.so / _static.a / .h，
-         三颗的 magic 全数过 —— 那颗 .so 是 ELF64 x86-64（e_machine 0x3e），不是 Windows 载荷；
-         真正的 Windows 原生同伴是根上那颗 xugusql.dll（MZ/PE）。windows/ 那一档本版起只按"厂商原样交付的字节"存，
-         不再被任何拷贝规则引用。macOS 与其他 CPU 架构没有厂商载荷，三条分支之外 drivers/ 里就只有托管那一份：
+         厂商交付的字节如今按平台分三格躺：Driver/windows/、Driver/linux-x86_64/、Driver/linux-aarch64/，
+         三格各带自己那颗原生同伴（sha256 互不相同，Linux 那两颗连架构都不同），托管那一份 XuguClient.dll
+         在根上不分平台。下面四行因此一一对齐：win 那档取 windows/xugusql.dll（MZ/PE），X64 与 Arm64
+         各取自己那一格的 libxugusql.so（ELF64）。
+         顺带记一笔订正：Driver/windows/ 里曾经还躺着 libxugusql.so / _static.a / .h 三颗，magic 全数过
+         才发现是厂商把 ELF64 x86-64 的载荷放错了目录（e_machine 0x3e，不是 Windows 载荷），72d9256 已把那三颗删掉；
+         这一句的 Include 也曾跟着那次整理一并断了，今天重新接上 —— 三档从此同构。
+         macOS 与其他 CPU 架构没有厂商载荷，三条分支之外 drivers/ 里就只有托管那一份：
          照 bare 那颗反证的形状，Open 才炸 —— 那种红从此有了名字。 -->
     <None Include="..\..\src\FastSql.Providers.Xugu\Driver\XuguClient.dll" Link="drivers\XuguClient.dll" CopyToOutputDirectory="PreserveNewest" />
-    <None Include="..\..\src\FastSql.Providers.Xugu\Driver\xugusql.dll" Link="drivers\xugusql.dll" CopyToOutputDirectory="PreserveNewest" Condition="'$(XuguHostPlatform)' == 'win'" />
+    <None Include="..\..\src\FastSql.Providers.Xugu\Driver\windows\xugusql.dll" Link="drivers\xugusql.dll" CopyToOutputDirectory="PreserveNewest" Condition="'$(XuguHostPlatform)' == 'win'" />
     <None Include="..\..\src\FastSql.Providers.Xugu\Driver\linux-x86_64\libxugusql.so" Link="drivers\libxugusql.so" CopyToOutputDirectory="PreserveNewest" Condition="'$(XuguHostPlatform)' == 'X64'" />
     <None Include="..\..\src\FastSql.Providers.Xugu\Driver\linux-aarch64\libxugusql.so" Link="drivers\libxugusql.so" CopyToOutputDirectory="PreserveNewest" Condition="'$(XuguHostPlatform)' == 'Arm64'" />
   </ItemGroup>

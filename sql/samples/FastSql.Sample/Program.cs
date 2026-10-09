@@ -1160,6 +1160,146 @@ Console.WriteLine($"再注册过滤器之后：{await soft.Select<SampleTicket>(
 // 绑的是 DI 那只 orm，在它身上注册行为会回头改前面 §3–§5 那些读数。那一处由真库那册钉，
 // 判据是"报告里 Operations[].Columns 交出 SET 的那两列"，见 tests/FastSql.Tests.Integration/SoftDeletePathTests.cs。
 
+// ── 16. 导航读取：自动联表（§5.2）∶ Include 链（§5.6）∶ IncludeMany 链（§5.7）──
+Console.WriteLine("═══ 16. 导航读取：自动联表与急切加载 ═══");
+Console.WriteLine();
+
+// 这一节自己播种，读数才钉得住：§7 那五笔之外，§11 还往 cA 名下塞了一千笔批量订单，
+// 所以下面每一条链都带一个 Note 谓词把自己圈在示范的那几行里。
+// 那笔"客户不存在"的订单（CustomerId 指着一张没有的行）是 LEFT 那一格的证人：谓词读不到它，
+// 而投影与 Include 必须带着它 —— 换 INNER 就少这一行，而少行在投影结果里读不出形状。
+_ = orm.Select<Parcel>();
+
+var layerSync = await orm.SyncStructureAsync();
+
+Console.WriteLine($"第三层那张表：本次新建 {string.Join("、", layerSync.CreatedTables)}（{layerSync.CreatedTables.Count} 张）");
+
+var navCustomer = new Customer { Name = "导航示范", City = "苏州" };
+navCustomer.Id = (int)await orm.Insert(navCustomer).ExecuteIdentityAsync();
+
+var navOrder = new Order { CustomerId = navCustomer.Id, Amount = 777m, CreatedAt = new DateTime(2026, 4, 1), Note = "nav-demo" };
+navOrder.Id = (int)await orm.Insert(navOrder).ExecuteIdentityAsync();
+
+var orphanOrder = new Order { CustomerId = 0, Amount = 888m, CreatedAt = new DateTime(2026, 4, 2), Note = "nav-demo" };
+orphanOrder.Id = (int)await orm.Insert(orphanOrder).ExecuteIdentityAsync();
+
+var navItem = new OrderItem { OrderId = navOrder.Id, Sku = "NAV-A", Quantity = 2, Price = 388m };
+navItem.Id = (int)await orm.Insert(navItem).ExecuteIdentityAsync();
+
+var orphanItem = new OrderItem { OrderId = orphanOrder.Id, Sku = "NAV-B", Quantity = 1, Price = 888m };
+orphanItem.Id = (int)await orm.Insert(orphanItem).ExecuteIdentityAsync();
+
+await orm.InsertRange(
+[
+    new Parcel { OrderItemId = navItem.Id, TrackingNo = "TRK-A1" },
+    new Parcel { OrderItemId = navItem.Id, TrackingNo = "TRK-A2" },
+    new Parcel { OrderItemId = orphanItem.Id, TrackingNo = "TRK-B1" },
+]).ExecuteAffrowsAsync();
+
+// 语句计数走观察位，不走"链自己说发了几条"：下面每一格数的是库里实际跑掉的句子。
+var said = new List<string>();
+orm.Aop.Executed = e => said.Add(e.Sql.Text);
+
+// ── 16.1 谓词里读一根 to-one 边的某一格：库按契约里那根边自己补 LEFT JOIN（§5.2）。
+//        调用方既不写 Include 也不写 join —— 这一格翻掉了旧册子上"不会为导航属性自动联表"那一句。
+var inSuzhou = orm.Select<Order>().Where(o => o.Note == "nav-demo" && o.Customer!.City == "苏州");
+
+Console.WriteLine($"谓词读导航发的那句：{inSuzhou.ToLogSql()}");
+Console.WriteLine($"  LEFT JOIN {CountOf(inSuzhou.ToLogSql(), "LEFT JOIN")} 张 ∶ 读回 {await inSuzhou.CountAsync()} 笔（没有客户那一笔进不来，它那一格是 NULL）");
+
+// ── 16.2 排序键与投影读同一根边：JOIN 还是那一条，而 ORDER BY 指的是联进来的那张表位。
+var byCity = orm.Select<Order>()
+    .Where(o => o.Note == "nav-demo")
+    .OrderBy(o => o.Customer!.City)
+    .ThenBy(o => o.Id)
+    .Select(o => new { o.Id, City = o.Customer!.City });
+
+Console.WriteLine($"序 + 投影读同一根边：{byCity.ToLogSql()}");
+
+foreach (var row in await byCity.ToListAsync())
+    Console.WriteLine($"  订单 {row.Id}：城市 {(row.City ?? "（空：LEFT 留住的那一笔）")}");
+
+// ── 16.3 Include 之后再读同一根边：一张 JOIN，不是两张。
+//        收养落成的是<em>模型里那条真 JOIN</em>，不是照抄 Include 那一条 —— Include 的那一条只在
+//        "实体投影且没拆查"时才发，照抄过去，投影、AsSplitQuery、count 自己包的那层内行都会把它从 FROM 里摘掉，
+//        而欠着它的谓词还在（那是一句引用了不存在表位的话，不是能靠改名救回来的别名冲突）。
+var shared = orm.Select<Order>().Include(o => o.Customer).Where(o => o.Note == "nav-demo" && o.Customer!.City == "苏州");
+
+var sharedSql = shared.ToLogSql();
+
+Console.WriteLine($"Include + 读同一条边：LEFT JOIN {CountOf(sharedSql, "LEFT JOIN")} 张 ∶ {sharedSql}");
+Console.WriteLine($"  模型里也数得到同一条：{CountOf(shared.Explain().ModelText, "JOIN Left")} 条（进的是模型的 Joins，不是编译期临时补的）");
+
+foreach (var row in await shared.ToListAsync())
+    Console.WriteLine($"  缝好的整只客户：{row.Customer?.Name}／{row.Customer?.City}（同一句 SELECT 里带回来，不必再发第二条）");
+
+// ── 16.4 集合导航没有这一档，而且当场拒：一根 IEnumerable 边联进 FROM 会把主表行按明细行数复制，
+//        那是页码、行数、聚合三处一起改语义的事，所以消息把两档分开说。
+try
+{
+    _ = orm.Select<Order>().Select(o => new { o.Id, Rows = o.Items!.Count }).ToSql();
+}
+catch (FastSqlException ex)
+{
+    Console.WriteLine($"集合读法仍然被拒：{Head(ex.Message, 150)}");
+}
+
+// ── 16.5 Include 链：一层一张 JOIN，第二层的宿主是第一层那一颗表位（§5.6）。
+var stacked = orm.Select<OrderItem>()
+    .Include(i => i.Order!)
+    .ThenInclude(o => o.Customer)
+    .Where(i => i.Sku == "NAV-A");
+
+var stackedSql = stacked.ToLogSql();
+
+Console.WriteLine($"Include 两层：LEFT JOIN {CountOf(stackedSql, "LEFT JOIN")} 张 ∶ {stackedSql}");
+
+foreach (var row in await stacked.ToListAsync())
+    Console.WriteLine($"  明细 {row.Sku} × {row.Quantity} → 订单 {row.Order?.Id} → 客户 {row.Order?.Customer?.City}");
+
+// ── 16.6 同一根边换 AsSplitQuery：主查询不发扩展列，整只客户是主查询之后那一条 SELECT 的事。
+//        谓词那一条 JOIN 照发 —— 它来自模型的 Joins，与拆不拆查无关（16.3 的收养为什么落成一条真 JOIN 就在这里读得出来）。
+var apart = orm.Select<Order>().Include(o => o.Customer).AsSplitQuery().Where(o => o.Note == "nav-demo" && o.Customer!.City == "苏州");
+
+var apartSql = apart.ToLogSql();
+
+said.Clear();
+
+var apartRows = await apart.ToListAsync();
+
+Console.WriteLine($"拆查：主查询 {apartSql}");
+Console.WriteLine($"  投影清单里不含客户那几列：{CountOf(apartSql[..apartSql.IndexOf("FROM", StringComparison.Ordinal)], "\"t1\"")} 次 ∶ 实际端出 {said.Count} 条 SELECT ∶ 缝回 {apartRows.Count} 笔，客户 {apartRows[0].Customer?.City}");
+
+// ── 16.7 IncludeMany 那一家：主查询一个字符不变，往下每一层各发一条 SELECT，旁边每根引用导航再一条（§5.7）。
+//        这一条链把三档挂在一起：集合一层、集合旁边那根引用边、再往下一层集合。
+var many = orm.Select<Order>()
+    .IncludeMany(o => o.Items!)
+    .ThenInclude(i => i.Order!)
+    .ThenIncludeMany(i => i.Parcels!)
+    .Where(o => o.Note == "nav-demo");
+
+var manySql = many.ToLogSql();
+
+Console.WriteLine($"集合链端出去的主查询：{manySql}");
+Console.WriteLine($"  明细与包裹都不在这一句里：{CountOf(manySql, "OrderItems")} 次、{CountOf(manySql, "Parcels")} 次");
+
+said.Clear();
+
+var manyRows = await many.ToListAsync();
+
+Console.WriteLine($"  一句链发出 {said.Count} 条 SELECT：根一条、往下每层一条、旁边那根引用边再一条");
+
+foreach (var line in said.Skip(1))
+    Console.WriteLine($"    子查询：{WherePart(line)}");
+
+foreach (var row in manyRows)
+{
+    Console.WriteLine($"  订单 {row.Id}：{row.Items!.Count} 行明细");
+
+    foreach (var line in row.Items!)
+        Console.WriteLine($"    明细 {line.Sku}：包裹 {string.Join("、", line.Parcels?.Select(p => p.TrackingNo) ?? [])} ∶ 缝回来的父订单 Note={line.Order?.Note}");
+}
+
 Console.WriteLine();
 Console.WriteLine("═══ 示例完成 ═══");
 
@@ -1202,6 +1342,18 @@ static bool HasTable(string file, string table)
 }
 
 static string Head(string text, int take = 64) => text.Length <= take ? text : text[..take] + "…";
+
+// §16 的读数尺：一句里某个记号出现几次。这一节的判据是"一根边一张 JOIN"，
+// 而 SQL 文本上数得出来的只有计数 —— 模型侧那一份判据由方言册钉，示例只给人看句子。
+static int CountOf(string text, string token) => (text.Length - text.Replace(token, string.Empty).Length) / token.Length;
+
+// 集合链那几条子查询要给人看的是 WHERE 那一段（IN 的键清单）：前面那一串列名在几条里长得一样。
+static string WherePart(string sql, int take = 72)
+{
+    var at = sql.IndexOf("WHERE", StringComparison.Ordinal);
+
+    return at < 0 ? "（这一条没有 WHERE 段）" : Head(sql[at..], take);
+}
 
 // §15 的裁判：同一句"库里现在是什么形状"由裸连接问，不经那只注册了行为的 orm——
 // 被测的那条链说"我置位了"不算证，库里那一格是 1 才算。
