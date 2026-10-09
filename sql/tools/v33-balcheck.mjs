@@ -16,7 +16,7 @@ import cp from 'node:child_process';
 
 const chars = [['（', '（'], ['）', '）'], ['「', '「'], ['」', '」'], ['【', '【'], ['】', '】'], ['BT', '`'], ['PIPE', '|'], ['**', '*']];
 const DOCi = process.argv.indexOf('--doc');
-const DOC = DOCi > 0 ? process.argv[DOCi + 1] : 'docs/fastsql-orm-design.md';
+const DOC = DOCi > 0 ? process.argv[DOCi + 1] : 'docs/quicksql-orm-design.md';
 const BASE = 'tools/balcheck-baseline.json';
 
 const count = (t, ch) => t.split(ch).length - 1;

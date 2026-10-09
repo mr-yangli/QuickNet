@@ -22,8 +22,8 @@
 # through `powershell -File`, comma arrays do NOT survive argv binding (measured: `-Arg a,b` arrives
 # as ONE token "a,b"), so pass the whole command line as ONE quoted string with real spaces:
 #
-#   powershell -NoProfile -File scripts/run-and-log.ps1 -Exe tests/FastSql.Tests.Dialects/bin/Release/net10.0/FastSql.Tests.Dialects.exe -Log obj/logs/v33-dialects-3.log
-#   powershell -NoProfile -File scripts/run-and-log.ps1 -Exe dotnet -Arg "build FastSql.slnx -c Release --no-incremental" -Log obj/logs/v33-build-3.log
+#   powershell -NoProfile -File scripts/run-and-log.ps1 -Exe tests/QuickSql.Tests.Dialects/bin/Release/net10.0/QuickSql.Tests.Dialects.exe -Log obj/logs/v33-dialects-3.log
+#   powershell -NoProfile -File scripts/run-and-log.ps1 -Exe dotnet -Arg "build QuickSql.slnx -c Release --no-incremental" -Log obj/logs/v33-build-3.log
 
 param(
     [Parameter(Mandatory = $true)] [string] $Exe,

@@ -1,2 +1,0 @@
-
-ALTER TABLE "FastSqlOrder" ADD COLUMN "Note" TEXT NULL

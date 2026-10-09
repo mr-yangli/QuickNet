@@ -27,7 +27,7 @@ const leaky = t => /(Password=)(?!\*\*\*)[^;\s"']/.test(t) || /:\/\/[^/\s:@]*:(?
 const scrub = t => t.replace(/(Password=)(?!\*\*\*)[^;\s"']+/gi, "$1***").replace(/(\/\/[^/\s:@]*:)(?!\*\*\*)[^@\s]+@/g, "$1***@");
 
 // 原值只在本进程内存里比对，不落任何输出
-const secretFiles = fs.readdirSync('.').filter(f => /^fastsql-test.*connection.*\.local\.txt$/.test(f));
+const secretFiles = fs.readdirSync('.').filter(f => /^quicksql-test.*connection.*\.local\.txt$/.test(f));
 const secrets = [];
 for (const f of secretFiles) {
   const t = fs.readFileSync(f, 'latin1');

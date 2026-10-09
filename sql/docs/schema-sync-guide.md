@@ -6,10 +6,10 @@ v0.37 第九笔新增了结构同步功能，可以按配置自动或手动同�
 
 ## 配置项
 
-在 `FastSqlOrmOptions` 中新增两个配置项：
+在 `QuickSqlOrmOptions` 中新增两个配置项：
 
 ```csharp
-public sealed class FastSqlOrmOptions
+public sealed class QuickSqlOrmOptions
 {
     // ... 其他配置 ...
     
@@ -28,7 +28,7 @@ public sealed class FastSqlOrmOptions
 不自动同步。要手动调用 `SyncStructure()` 并自行决定执行方式。
 
 ```csharp
-var orm = new FastSqlOrm(new FastSqlOrmOptions
+var orm = new QuickSqlOrm(new QuickSqlOrmOptions
 {
     Provider = provider,
     ConnectionString = connectionString,
@@ -47,7 +47,7 @@ var result = orm.SyncStructure();
 // Development 环境
 Environment.SetEnvironmentVariable("DOTNET_ENVIRONMENT", "Development");
 
-var orm = new FastSqlOrm(new FastSqlOrmOptions
+var orm = new QuickSqlOrm(new QuickSqlOrmOptions
 {
     Provider = provider,
     ConnectionString = connectionString,
@@ -63,7 +63,7 @@ orm.SyncStructure();
 // Production 环境
 Environment.SetEnvironmentVariable("DOTNET_ENVIRONMENT", "Production");
 
-var orm = new FastSqlOrm(new FastSqlOrmOptions
+var orm = new QuickSqlOrm(new QuickSqlOrmOptions
 {
     Provider = provider,
     ConnectionString = connectionString,
@@ -79,7 +79,7 @@ orm.SyncStructure();
 只生成 DDL 脚本，不执行。返回的 `SchemaSyncResult` 包含完整 DDL 文本，可交给 DBA 审批后手动执行。**这是生产环境的推荐做法**（§9.5）。
 
 ```csharp
-var orm = new FastSqlOrm(new FastSqlOrmOptions
+var orm = new QuickSqlOrm(new QuickSqlOrmOptions
 {
     Provider = provider,
     ConnectionString = connectionString,
@@ -192,7 +192,7 @@ orm.SyncStructure();
 // Program.cs
 var builder = WebApplication.CreateBuilder(args);
 
-var orm = new FastSqlOrm(new FastSqlOrmOptions
+var orm = new QuickSqlOrm(new QuickSqlOrmOptions
 {
     Provider = SqlServer.Provider(SqliteFactory.Instance),
     ConnectionString = builder.Configuration.GetConnectionString("Default"),
@@ -216,7 +216,7 @@ app.Run();
 
 ```csharp
 // Program.cs
-var orm = new FastSqlOrm(new FastSqlOrmOptions
+var orm = new QuickSqlOrm(new QuickSqlOrmOptions
 {
     Provider = SqlServer.Provider(SqliteFactory.Instance),
     ConnectionString = builder.Configuration.GetConnectionString("Default"),
@@ -249,6 +249,6 @@ if (!result.IsEmpty)
 - Execute 模式只在 Development 环境有效，降低开发成本
 
 这与 §9.5 的交付形态对齐：
-- `fastsql doctor`：探测驱动、连接、字符集、量纲
-- `fastsql migrate diff`：只读结构比对，输出差异
-- `fastsql migrate script`：生成脚本，生产默认走脚本
+- `quicksql doctor`：探测驱动、连接、字符集、量纲
+- `quicksql migrate diff`：只读结构比对，输出差异
+- `quicksql migrate script`：生成脚本，生产默认走脚本

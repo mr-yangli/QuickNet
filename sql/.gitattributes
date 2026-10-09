@@ -7,7 +7,7 @@
 # 理由可重数：xugusql.h 那颗是 CRLF 文本，按上面那条会被归一成 LF —— 交付物与仓库里的字节就差开了；
 # 其余 .dll / .so / _static.a 是二进制，归一没意义、三方合并更没意义。
 # 判据同口令那一条：这一串里不写驱动内部出现过的任何字面串。
-src/FastSql.Providers.Xugu/Driver/** binary
+src/QuickSql.Providers.Xugu/Driver/** binary
 
 # 见证物归档位（v0.38 第三笔裁决：走 §14 那格的两条路里第一条，证据自此住长期位而不是 scratch）。
 # 这一条要的是"没被改"，与厂商那一条同一性质而判据不同：归档件按字节比对，台账引的是里面的行数与

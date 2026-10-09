@@ -12,6 +12,24 @@
     <InvariantGlobalization>false</InvariantGlobalization>
   </PropertyGroup>
 
+  <!-- NuGet 打包元数据：一颗版本跟着规格册的 v0.39 口径，发的是预发布档（-beta.1 不进消费方默认解析）。
+       这一组只喂 dotnet pack，编译期行为一个字不改；非库工程（tests / benchmarks / samples）各自在
+       csproj 里标 IsPackable=false，所以 dotnet pack Quick.slnx 出的是 22 颗库包。 -->
+  <PropertyGroup>
+    <Version>0.39.0-beta.1</Version>
+    <Authors>YANGLI</Authors>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://gitee.com/mr_yangli/fast-net</PackageProjectUrl>
+    <RepositoryType>git</RepositoryType>
+    <RepositoryUrl>https://gitee.com/mr_yangli/fast-net.git</RepositoryUrl>
+    <PackageReadmeFile>quicksql-orm-usage.md</PackageReadmeFile>
+    <PackageTags>orm;sql;linq;ado.net;source-generator</PackageTags>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="$(MSBuildThisFileDirectory)docs/quicksql-orm-usage.md" Pack="true" PackagePath="/" Visible="false" />
+  </ItemGroup>
+
   <!-- §12.7：库项目自始就开 trim/AOT 分析器，警告即错误。 -->
   <PropertyGroup Condition="'$(IsTestProject)' != 'true' and '$(OutputType)' != 'Exe'">
     <IsAotCompatible>true</IsAotCompatible>

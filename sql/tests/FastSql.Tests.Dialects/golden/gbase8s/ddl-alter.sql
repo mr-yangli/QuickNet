@@ -1,2 +1,0 @@
-
-ALTER TABLE "FastSqlOrder" ADD ("Note" CLOB NULL) ; ALTER TABLE "FastSqlOrder" MODIFY ("Amount" DECIMAL(18,4) NOT NULL)

@@ -9,4 +9,20 @@
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
 
+  <!-- NuGet 打包元数据。版本从 0.1.0-beta.1 起，理由见 excel/Directory.Build.props 那一段注释。 -->
+  <PropertyGroup>
+    <Version>0.1.0-beta.1</Version>
+    <Authors>YANGLI</Authors>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://gitee.com/mr_yangli/fast-net</PackageProjectUrl>
+    <RepositoryType>git</RepositoryType>
+    <RepositoryUrl>https://gitee.com/mr_yangli/fast-net.git</RepositoryUrl>
+    <PackageReadmeFile>quickword-usage.md</PackageReadmeFile>
+    <PackageTags>word;docx;table;export</PackageTags>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="$(MSBuildThisFileDirectory)docs/quickword-usage.md" Pack="true" PackagePath="/" Visible="false" />
+  </ItemGroup>
+
 </Project>

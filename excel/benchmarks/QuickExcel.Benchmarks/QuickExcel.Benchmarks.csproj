@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <!-- TFM/LangVersion/Nullable/ImplicitUsings 见 excel/Directory.Build.props -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 版本钉在 excel/Directory.Packages.props（CPM）：对照组只出现在 benchmarks/ -->
+    <PackageReference Include="MiniExcel" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\QuickExcel\QuickExcel.csproj" />
+  </ItemGroup>
+
+</Project>

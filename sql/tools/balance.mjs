@@ -14,7 +14,7 @@
 // 用法：node tools/balance.mjs [lo] [hi] —— 不给参数就扫全文；只报标出的行号与差额。
 import fs from 'node:fs';
 
-const lines = fs.readFileSync('docs/fastsql-orm-design.md', 'utf8').split(/\r?\n/);
+const lines = fs.readFileSync('docs/quicksql-orm-design.md', 'utf8').split(/\r?\n/);
 const lo = +(process.argv[2] ?? 1);
 const hi = +(process.argv[3] ?? lines.length);
 

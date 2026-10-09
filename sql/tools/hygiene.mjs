@@ -10,7 +10,7 @@
 //   无 git —— 直接遍历工作树自产文本，判据是绝对的（零 BOM ∶ 零 CRLF ∶ 零 TAB ∶ 有行尾），
 //             这比"只看改动过的"更强，因为无 git 时没有"改动"可读，只有整棵树
 // 两种模式共用同一条边界：.gitignore 写着不算交付物的，这里也不算（不靠硬编码的跳目录名单猜），
-// 外加 §13.17 ① 的厂商字节例外 src/FastSql.Providers.Xugu/Driver/。
+// 外加 §13.17 ① 的厂商字节例外 src/QuickSql.Providers.Xugu/Driver/。
 // 用法：node tools/hygiene.mjs [--ext .cs] [--ext .md] …   不给 --ext 就只查 .cs
 //       node tools/hygiene.mjs --worktree …   绕过 git 那一半，判整棵自产文本（刚 commit 完 git 模式是空集）
 //       node tools/hygiene.mjs --fix …   把判据里"行尾"那一半改过来：去 BOM ∶ CRLF→LF ∶ 补末行换行；
@@ -21,7 +21,7 @@ import path from 'node:path';
 import cp from 'node:child_process';
 
 const HARD_SKIP = new Set(['bin', 'obj', '.vs', 'TestResults', 'drivers', 'node_modules', '.git', '.vscode', 'artifacts']);
-const VENDOR = 'src/FastSql.Providers.Xugu/Driver/'; // 厂商字节按 §13.17 ① 的例外保真，不判"没被改"为"不该改"
+const VENDOR = 'src/QuickSql.Providers.Xugu/Driver/'; // 厂商字节按 §13.17 ① 的例外保真，不判"没被改"为"不该改"
 
 // 无 git 时"自产文本"没有 `git ls-files` 可问，就照仓库根那份 .gitignore 划界：
 // 它写着什么，什么就不算交付物。支持的形只有三种（这一份文件里在场的就这三种）：

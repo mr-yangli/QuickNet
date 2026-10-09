@@ -26,7 +26,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-const DOC = 'docs/fastsql-orm-design.md';
+const DOC = 'docs/quicksql-orm-design.md';
 const OUT = 'docs/evidence';
 const DIRS = [OUT, 'obj/logs', 'obj'];
 const NAME_RE = /\bv\d\d-[A-Za-z0-9._-]+\.(?:log|txt)\b/g;
@@ -45,7 +45,7 @@ const text = onlyLine ? (lines[onlyLine - 1] ?? '') : lines.join('\n');
 const cited = [...new Set(text.match(NAME_RE) ?? [])].sort();
 
 // ---------- 口令：原值只在本进程内存里比对，不落任何输出 ----------
-const secretFiles = fs.readdirSync('.').filter(f => /^fastsql-test.*connection.*\.local\.txt$/.test(f));
+const secretFiles = fs.readdirSync('.').filter(f => /^quicksql-test.*connection.*\.local\.txt$/.test(f));
 const secrets = [];
 for (const f of secretFiles) {
   const t = fs.readFileSync(f, 'latin1');

@@ -12,7 +12,7 @@ import fs from 'node:fs';
 //       node tools/v32-cellscan.mjs --tables                 新形：全篇按每张表自己的分隔行判
 // 退出码：0 没有错格 ∶ 4 有错格（判不了的表另报一颗数，不升格成违规）∶ 3 一张表都没找到（空比不算绿灯）
 // 两形共用同一颗单位：`| a | b |` 数出来是 3（两格加行首那一颗竖线），分隔行 `|---|---|` 也数成 3。
-const lines = fs.readFileSync('docs/fastsql-orm-design.md', 'utf8').split('\n');
+const lines = fs.readFileSync('docs/quicksql-orm-design.md', 'utf8').split('\n');
 const from = Number(process.argv[2] || 1640);
 const to = Number(process.argv[3] || 1700);
 const want = Number(process.argv[4] || 4);

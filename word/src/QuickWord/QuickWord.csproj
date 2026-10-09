@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- TFM/LangVersion/Nullable/ImplicitUsings 见 word/Directory.Build.props -->
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+
+    <PackageId>QuickWord</PackageId>
+    <Description>Streaming, zero-dependency .docx table export and read-back for .NET 10. Standalone: carries its own column model, no reference to QuickExcel. Export memory is O(1) in row count.</Description>
+    <PackageTags>word;docx;export;import;performance;dotnet10</PackageTags>
+    <RepositoryType>git</RepositoryType>
+  </PropertyGroup>
+
+</Project>

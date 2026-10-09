@@ -5,9 +5,9 @@ TestResults/
 BenchmarkDotNet.Artifacts/
 
 # 真库连接串（含口令）——只允许被测试读，永不进版本库
-fastsql-test.connection.local.txt
-fastsql-test.xugu.connection.local.txt
-fastsql-test.postgres.connection.local.txt
-fastsql-test.mysql.connection.local.txt
+quicksql-test.connection.local.txt
+quicksql-test.xugu.connection.local.txt
+quicksql-test.postgres.connection.local.txt
+quicksql-test.mysql.connection.local.txt
 
 *.user

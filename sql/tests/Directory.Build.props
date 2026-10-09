@@ -16,6 +16,7 @@
     <IsAotCompatible>false</IsAotCompatible>
     <EnableTrimAnalyzer>false</EnableTrimAnalyzer>
     <EnableSingleFileAnalyzer>false</EnableSingleFileAnalyzer>
+    <IsPackable>false</IsPackable>
     <EnableAotAnalyzer>false</EnableAotAnalyzer>
 
     <!-- xunit.v3 走 Microsoft.Testing.Platform，而 .NET 10 SDK 的 dotnet test 已不再支持 VSTest 目标：

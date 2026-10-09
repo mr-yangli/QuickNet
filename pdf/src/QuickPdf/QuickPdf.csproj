@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- TFM/LangVersion/Nullable/ImplicitUsings 见 pdf/Directory.Build.props -->
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+
+    <PackageId>QuickPdf</PackageId>
+    <Description>Zero-dependency PDF report/table export for .NET 10 with runtime-embedded system TrueType fonts (CJK-safe). Standalone: carries its own column model, no reference to QuickExcel.</Description>
+    <PackageTags>pdf;export;report;font-embedding;dotnet10</PackageTags>
+    <RepositoryType>git</RepositoryType>
+  </PropertyGroup>
+
+</Project>

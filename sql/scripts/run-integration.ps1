@@ -11,7 +11,7 @@
 # does not; this keeps CJK readable in the log.
 #
 #   powershell -NoProfile -File scripts/run-integration.ps1 -Log obj/logs/v19-int-localdb-1.log
-#   $env:FASTSQL_TEST_CONNECTION='...'  # set it to hit LocalDB; leave it unset for the repo-root file
+#   $env:QUICKSQL_TEST_CONNECTION='...'  # set it to hit LocalDB; leave it unset for the repo-root file
 
 param(
     [Parameter(Mandatory = $true)] [string] $Log,
@@ -21,7 +21,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $root = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
-$exe = Join-Path $root 'tests/FastSql.Tests.Integration/bin/Debug/net10.0/FastSql.Tests.Integration.exe'
+$exe = Join-Path $root 'tests/QuickSql.Tests.Integration/bin/Debug/net10.0/QuickSql.Tests.Integration.exe'
 
 if (-not (Test-Path -LiteralPath $exe)) {
     throw "test host not built: $exe"
@@ -38,12 +38,12 @@ $stream = [System.IO.File]::Open($logPath, [System.IO.FileMode]::Create)
 $writer = New-Object System.IO.StreamWriter($stream, (New-Object System.Text.UTF8Encoding($false)))
 
 function Write-Stamp {
-    $cs = $env:FASTSQL_TEST_CONNECTION
+    $cs = $env:QUICKSQL_TEST_CONNECTION
     $source = 'env'
 
     if ([string]::IsNullOrWhiteSpace($cs)) {
-        $file = Join-Path $root 'fastsql-test.connection.local.txt'
-        if (-not (Test-Path -LiteralPath $file)) { throw "no connection source: unset FASTSQL_TEST_CONNECTION and no $file" }
+        $file = Join-Path $root 'quicksql-test.connection.local.txt'
+        if (-not (Test-Path -LiteralPath $file)) { throw "no connection source: unset QUICKSQL_TEST_CONNECTION and no $file" }
         $cs = ([System.IO.File]::ReadAllLines($file) | Where-Object { $_ -match '^[A-Za-z]' } | Select-Object -First 1)
         $source = 'file'
     }
