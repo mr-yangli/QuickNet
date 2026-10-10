@@ -17,11 +17,13 @@
   </PropertyGroup>
 
   <!-- NuGet 打包元数据里"本 subtree 独有"的那三颗：一颗版本跟着规格册的 v0.39 口径，发的是预发布档
-       （-beta.1 不进消费方默认解析）、README 挂哪一份册子、Tags 说什么。作者与许可在根上。
+       （预发布档不进消费方默认解析）、README 挂哪一份册子、Tags 说什么。作者与许可在根上。
+       每重打一次包升一颗 beta：同版本号不同内容的两颗包，消费方全局缓存里那颗会压住新打的 —— 还原照样绿，
+       拿到的却是旧二进制（2026-10-10 在应用侧实测过这一格）。
        这一组只喂 dotnet pack，编译期行为一个字不改；非库工程（tests / benchmarks / samples）各自在
        csproj 或本目录的 props 里标 IsPackable=false，所以 dotnet pack Quick.slnx 出的是 22 颗库包。 -->
   <PropertyGroup>
-    <Version>0.39.0-beta.1</Version>
+    <Version>0.39.0-beta.2</Version>
     <PackageReadmeFile>quicksql-orm-usage.md</PackageReadmeFile>
     <PackageTags>orm;sql;linq;ado.net;source-generator</PackageTags>
   </PropertyGroup>

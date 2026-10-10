@@ -7,28 +7,8 @@
   <ItemGroup>
     <!-- 驱动包只出现在 tests/，src/ 下的 provider 一律不编译期引用（§1.2 原则 3） -->
     <PackageVersion Include="Microsoft.Data.SqlClient" Version="7.1.0" />
-
-    <!-- 同一格纪律的第二颗：这颗不在 tests/ 之外出现过，版本与探针那四十多轮用的是同一颗
-         （现场读回 assembly version 9.0.0.0、引擎 sqlite_version() 3.46.1，见 FastSqlDrivers.json 本家注）。
-         引擎门槛（RETURNING 3.35+ / IS DISTINCT FROM 3.39+）由这颗包带的原生库决定，
-         而 DbCapabilities 里没有"库版本"那一格 —— 那一格记 §14。 -->
     <PackageVersion Include="Microsoft.Data.Sqlite" Version="9.0.0" />
-
-    <!-- 同一格纪律的第三颗，也是这份清单上 Npgsql 那一行的第一次解析成功（2026-09-29 现场：
-         61.157.37.243:14432/TestDB，version() = PostgreSQL 18.3 on x86_64-pc-linux-musl，UTF8 + en_US.utf8）。
-         这颗仍然只出现在 tests/：src/ 下的 PG 血统 provider 编译期不认识它（§1.2 原则 3），
-         运行期由 DriverRegistry 按清单里 "postgresql" 那一行解析。 -->
     <PackageVersion Include="Npgsql" Version="10.0.3" />
-
-    <!-- 同一格纪律的第四颗，也是这份清单上 "mysql" 那一行的第一次解析成功（2026-09-29 现场：
-         192.168.0.228:3306/TestDB，SELECT VERSION() = 8.4.8，@@version_comment = MySQL Community Server - GPL，
-         utf8mb4 / utf8mb4_0900_ai_ci / lower_case_table_names=0，见 obj/logs/v37-my-recon-1.log 的 S 段）。
-         这颗同样只出现在 tests/：src/ 下的 MySqlBase 与那颗叶子编译期都不认识它（§1.2 原则 3），
-         运行期由 DriverRegistry 按清单里 "mysql" 那一行解析 —— 而那一行<em>不写</em> factoryType，
-         所以本颗同时是"扫第一颗导出的 DbProviderFactory"那一条兜底路径的第一次真跑。
-         版本取的是本机全局包里唯一存在的那一颗（2.6.2），与侦察那两场用的是同一份；
-         清单里另两颗共用这份 assembly 的键（tidb / oceanbase）今天<em>仍然</em>没有实例，
-         所以这一行的翻案不外溢到它们那两行。 -->
     <PackageVersion Include="MySqlConnector" Version="2.6.2" />
 
     <!-- 源生成器主机基线：低于 SDK 自带 Roslyn 才安全 -->
@@ -46,7 +26,7 @@
     <PackageVersion Include="xunit.v3.assert" Version="4.0.1" />
     <PackageVersion Include="xunit.v3.runner.visualstudio" Version="4.0.1" />
 
-    <!-- DI 注册入口（AddFastSqlOrm）的依赖。只引 Abstractions，不引实现 —— src/ 不替宿主选容器。 -->
+    <!-- DI 注册入口（AddQuickSqlOrm）的依赖。只引 Abstractions，不引实现 —— src/ 不替宿主选容器。 -->
     <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="9.0.0" />
 
     <!-- samples/ 用的完整 DI 容器（BuildServiceProvider）。只在示例项目出现，不进 src/。 -->
