@@ -39,46 +39,51 @@
 
 ### 1.3 应用侧怎么装：NuGet 主路径
 
-22 颗库工程全部打包上 nuget.org，包 ID 与工程名逐字相同。先立两条纪律：
+**装 QuickSql 只有一条主路径：NuGet。** 22 颗库工程全部打包上 nuget.org，包 ID 与工程名逐字相同。一个普通应用要跑起来只需在 csproj 里落三行 `PackageReference`（外加各库自己的 ADO.NET 驱动，见 §1.4）——内核、provider、源生成器各一，Abstractions 作为传递依赖跟着进来，不用单独写。
 
-- **预发布档不进默认解析**：全家都是 `-beta.N` 系列，`dotnet add package` 必须带 `--prerelease`，或者写死版本号，二选一。
+先立两条与版本口径有关的纪律，它们决定了装包命令怎么写：
+
+- **预发布档不进默认解析**：全家都是 `-beta.N` 系列，`dotnet add package` 必须带 `--prerelease`，或者在 `PackageReference` 里写死版本号——二选一，否则会报"找不到稳定版本"。
 - **每重打一次包升一颗 beta**（`sql/Directory.Build.props` 注释里那条纪律）：同版本号不同内容的两颗包，消费方全局缓存里那颗会压住新打的——还原照样绿，拿到的却是旧二进制。对版本以源上实读为准：截至 2026-10-14，nuget.org 上最新是 `0.39.0-beta.1`，本仓库 props 已声明 `0.39.0-beta.2`（未重打重发）。
 
-装三包：
+主路径的最小 csproj（SQL Server 为例，换库只把 provider 那颗换成目的库、驱动包跟着换）：
+
+```xml
+<ItemGroup>
+  <!-- ① 内核：QuickSqlOrm / DbContext / 查询与写链都在这颗里 -->
+  <PackageReference Include="QuickSql.Core" Version="0.39.0-beta.1" />
+  <!-- ② provider：只装你真要连的那家（nuspec 把同版本的 Core 与血统基类包一起带进来） -->
+  <PackageReference Include="QuickSql.Providers.SqlServer" Version="0.39.0-beta.1" />
+  <!-- ③ 源生成器：普通包安装即挂进编译（包内走 analyzers/dotnet/cs，不用再手写 OutputItemType） -->
+  <PackageReference Include="QuickSql.Generators" Version="0.39.0-beta.1" />
+  <!-- ④ 驱动：provider 不带你自己的 ADO.NET 驱动，应用侧显式装（§1.4） -->
+  <PackageReference Include="Microsoft.Data.SqlClient" Version="7.1.1" />
+</ItemGroup>
+```
+
+或者用命令行装（`--prerelease` 省得写版本号，装完 csproj 里落成 `Version="*-*"`）：
 
 ```bash
-# ① 内核：QuickSqlOrm / DbContext / 查询链都在这（Abstractions 作为传递依赖跟着进来）
 dotnet add package QuickSql.Core --prerelease
-
-# ② provider：只装用得到的库种（nuspec 依赖把同版本的 Core 与血统基类包一起带进来）
 dotnet add package QuickSql.Providers.SqlServer --prerelease
-
-# ③ 源生成器：普通包安装即挂进编译——包内走 analyzers/dotnet/cs，
-#    不用像 ProjectReference 时代那样手写 OutputItemType="Analyzer"
 dotnet add package QuickSql.Generators --prerelease
 ```
 
-包 ID 全集：`QuickSql.Abstractions` ∶ `QuickSql.Core` ∶ `QuickSql.Generators` ∶ 19 颗 `QuickSql.Providers.*`（16 颗可寻址叶子 + 3 颗血统基类包；血统包也在源上，它们是叶子包的编译期依赖，应用侧不直接装）。①严格说可省（②会带进来），显式写出来是为了版本口径一眼可见。③决定 G1 在不在：装了它，带 `[Table]` 的实体在编译期生成契约、物化零反射（接线见 §2.2「G1 接线」）；不装则全落 G2 反射，且 §1.8 那两行 `Create` 当场抛「生成器未挂进编译」。
+三颗各管一件事，缺一颗的症状不同，装的时候心里有数：
 
-**驱动包不要指望 provider 带**（§1.2 原则 3）：22 颗包编译期一律不引用驱动，各库的 ADO.NET 驱动由应用侧自己装——包名表与 `drivers/` 摆放见 §1.4。
+- **①`QuickSql.Core`**：装配根（`QuickSqlOrm`、`DbContext`）、QueryModel→AST→文本、驱动加载、物化、事务都在里面。严格说单装 provider 也会把它带进来（provider 的 nuspec 依赖 Core），显式写出来只是为了版本口径一眼可见、三颗同版本。
+- **② provider（`QuickSql.Providers.<库种>`）**：方言、类型映射、键策略、DDL 发射。装哪一家 = 你能 `Create` 到哪一家。**provider 是编译期登记的，引用图上多一家就多一颗可寻址库种，不碰运行期**，所以"要连哪几座就装哪几颗"。16 颗可寻址叶子对应 16 个 `DbKind`；另有 `QuickSql.Providers.{PostgreSql,Oracle,MySql}Base` 三颗血统基类包也在源上，但它们是叶子包的编译期依赖，**应用侧不直接装**。
+- **③ `QuickSql.Generators`**：决定 G1 那张 Roslyn 源生成器在不在。装了它，带 `[Table]` 的实体在编译期生成契约、物化零反射（接线见 §2.2「G1 接线」），§1.8 那两行 `QuickSqlOrm.Create` 才有东西可分派；不装则实体全落 G2 反射兜底，且 `Create` 当场抛"生成器未挂进编译"。NuGet 装它就是一行——包内自带 `analyzers/dotnet/cs`，还原即挂进编译器，不必像源码引用时代那样手写 `OutputItemType="Analyzer"`。
 
-另一条路是**仓库内源码引用**（tests ∶ samples ∶ benchmarks 走的就是这个形态）：`ProjectReference` 传递，引 Core + 用到的 provider 就够，Abstractions 跟着进来；生成器以分析器身份挂进去：
+**驱动包 provider 不替你别装**（§1.2 原则 3）：22 颗 QuickSql 包编译期一律不引用任何 ADO.NET 驱动，各家的驱动由应用侧自己按上面④那样显式装。哪些驱动包对应哪些库种、装完之后驱动怎么被找到，全在 §1.4。
 
-```xml
-<ProjectReference Include="..\src\QuickSql.Core\QuickSql.Core.csproj" />
-<ProjectReference Include="..\src\QuickSql.Providers.SqlServer\QuickSql.Providers.SqlServer.csproj" />
-<!-- 只挂进编译器，不作为引用；写成普通引用会让宿主看到生成器的内部类型 -->
-<ProjectReference Include="..\src\QuickSql.Generators\QuickSql.Generators.csproj"
-                  OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
-```
-
-形态取自 `tests/QuickSql.Tests.Common/QuickSql.Tests.Common.csproj`（那里为了跨族对拍引了 18 个 provider 工程，普通应用只引自己要的那家）。
+> **辅助路径（只有仓库内开发、贡献者、`tests`∶`samples`∶`benchmarks` 才走）：源码 `ProjectReference`。** 引 `QuickSql.Core` + 用到的 provider 工程就够，Abstractions 跟着传递进来；生成器这时不能当普通引用（那样宿主会看见生成器的内部类型），要写成分析器挂载：`<ProjectReference Include="..\src\QuickSql.Generators\QuickSql.Generators.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />`。形态取自 `tests/QuickSql.Tests.Common/QuickSql.Tests.Common.csproj`（那里为了跨族对拍引了 18 个 provider 工程，普通应用不该这么干）。**普通消费者请用上面的 NuGet 主路径**——本节的源码引用只为改库、写样例的人留着，不是推荐安装法。
 
 ### 1.4 驱动怎么装：两条路，与仓库真实布局
 
 `QuickSql.slnx` 收 21 个 `src/` 工程 + 两个测试工程（`QuickSql.Tests.Dialects`、`QuickSql.Tests.Integration`）；`QuickSql.Tests.Common` 是被引用方而不是解决方案节点，基准测试工程刻意不入册。
 
-**路 A：NuGet 装驱动包。** 装上之后驱动程序集落在应用输出目录，解析链（§1.6）第 3 步那句 `Assembly.Load` 直接命中。各库种对应的包（「程序集」列是内建默认表 `BuiltinDrivers`（`src/QuickSql.Core/DriverLoading/BuiltinDrivers.cs`）点的名，解析就按这个名字找；「源上读数」列是 2026-10-14 实查 nuget.org 的最新稳定档，「本仓测试档」列是 `sql/Directory.Packages.props` 钉的版本）：
+**路 A：NuGet 装驱动包（绝大多数库种走这条，与 §1.3 主路径一致）。** 装上之后驱动程序集落在应用输出目录，解析链（§1.6）第 3 步那句 `Assembly.Load` 直接命中。各库种对应的包（「程序集」列是内建默认表 `BuiltinDrivers`（`src/QuickSql.Core/DriverLoading/BuiltinDrivers.cs`）点的名，解析就按这个名字找；「源上读数」列是 2026-10-14 实查 nuget.org 的最新稳定档，「本仓测试档」列是 `sql/Directory.Packages.props` 钉的版本）：
 
 | `DbKind` | 驱动包（NuGet ID） | 程序集 | 源上读数 | 本仓测试档 |
 | --- | --- | --- | --- | --- |
@@ -385,6 +390,38 @@ if (!result.Success) Log(result.Exception);         // TransactionResult { Succe
 `DbContext` 是 `IDisposable` 也是 `IAsyncDisposable`（`DbContext.cs:25`——早先那句"本身不是 IDisposable"作废）。**这一格与 §3.7 的写后读直接相关，所以不是补充说明**：会话构造时在调用方的同步帧里挂上"本条流上哪几座集群写过"那枚 `AsyncLocal` 戳子，释放必须把它注销掉，而 `async` 被调方换 `AsyncLocal` 的值写不回调用方的帧（哪怕排在第一个 `await` 之前）。所以 `DisposeAsync` 拆成两段——同步注销两颗槽位，异步只留给连接回收。落错那一格的形状不是崩，是"会话早已 dispose、这条流却永远留着写过"，读写分离从此在这条流上静默失效；示例第一跑正是那个形状，来历写在 `DbContext.cs:238` 附近那段注释里。
 
 ## 3. 怎么使用
+
+下面这张速查把"要做的事"对到"用哪条链"，每行都给了能直接抄的最小写法与详解去处。装配根（`new QuickSqlOrm(options)` 或 `QuickSqlOrm.Create(DbKind, 连接串)`）与 NuGet 装包见 §1，`orm` 是单例、`DbContext` 才按请求 Scoped（§2.1）。**先记一条总口径**：接口形状可信，执行结果除五家有库的 provider 外基本未证（§0、§4.1）。
+
+- **查询（读侧）** —— `orm.Select<T>()` 起手，`Where` / `OrderBy` / `Skip`·`Take` / `Select` 投影 / `Include`·`IncludeMany` 导航 / `GroupBy`·`Having` 分组，出口 `ToListAsync`·`FirstOrDefaultAsync`·`CountAsync`·`ToPagedAsync`。库**不是 `IQueryable`**，别塞进 LINQ 生态。`orm.Ado.QueryAsync<T>(文本, new {…})` 是写不出的句子走原生 SQL 的逃生舱。→ 详见 §3.1
+  ```csharp
+  var page = await orm.Select<Order>()
+      .Where(o => o.State == OrderState.Paid)
+      .OrderByDescending(o => o.CreatedAt)
+      .ToPagedAsync(page: 1, size: 20);          // PagedResult<Order> { Items, Total, HasNext, … }
+  ```
+- **新增（单行 / 批量）** —— `orm.Insert(实体)` 单行、`orm.InsertRange(集合)` 多行（一条多值 `INSERT … VALUES`，按参数预算自动分块）。出口：`ExecuteAffrowsAsync()` 行数；`ExecuteIdentityAsync()` 单行自增键；`ExecuteReturnKeysAsync()` 批量回填自增键并交回实体；`ExecuteBulkAsync()` 走装载通道那一档。**自增键回填分三家**（§3.2 那张表：SQL Server `OUTPUT` / PG 句尾 `RETURNING` / MySQL·虚谷·GBase 8s 语句后回读；**Oracle 血统要键即抛**）。
+  ```csharp
+  var added = await orm.InsertRange(orders).ExecuteReturnKeysAsync();   // 回填 Id 后交回同一批实体
+  ```
+- **改（按条件 / 整行 / 一句 upsert）** —— 三条链各有分工：`orm.Update<T>().Set(列, 值).Where(条件)` 点名改几列（带 lambda，入口有反射税）；`orm.UpdateRange(实体集)` 按主键整行改（除主键·自增·并发列全部写回，零反射税，可用 `.WithBulk(Merged∶SingleRow∶Upsert)` 选档）；`orm.InsertOrUpdate<T>().SetSource(实体∶集合)` 主键命中就改、不命中就插。
+  ```csharp
+  await orm.Update<Order>().Set(o => o.Note, "只改备注").Where(o => o.Id == 7).ExecuteAffrowsAsync();
+  await orm.UpdateRange(orders).WithBatchTransaction().ExecuteBulkAsync();   // 按主键整行改，一批一句
+  ```
+- **删（按条件 / 按主键整批 / 软删）** —— `orm.Delete<T>().Where(条件)` 按条件删、`orm.DeleteRange(实体集)` 按主键删整批（一句 `WHERE 键 IN (…)`；复合主键当场拒）。**软删**不是删链的参数而是在 `orm.Behaviors.SoftDelete<T>(置位列, 时间列)` 注册后，上面三条删除出口一起改写成"置位 + 记时间"的 `UPDATE`（与 `orm.Filters` 是两只对象、各管一半，见 §2.5）。
+  ```csharp
+  await orm.Delete<Order>().Where(o => o.CreatedAt < cutoff).ExecuteAffrowsAsync();
+  ```
+- **工作单元（`DbContext` + `SaveChanges`）** —— 要"改一批实体、由库判定脏列、一个批次提交"用会话：派生一个 `DbContext`、`Set<T>()` 跟踪读、`Add`·`Remove`·`Attach`、末尾 `SaveChangesAsync()` 交回 `SaveChangesReport`。只写脏列、无变更不发语句不开事务、乐观锁冲突抛 `DbUpdateConcurrencyException`。分表实体可读进会话、不可由会话写出去（§3.3、§3.6）。
+  ```csharp
+  var db = new AppDb(orm);
+  var o = await db.Orders.Where(x => x.Id == 7).FirstOrDefaultAsync();
+  o.Note = "改一下";
+  await db.SaveChangesAsync();
+  ```
+- **事务** —— `orm.BeginTransaction()` 显式、`orm.ExecuteInTransactionAsync(async ct => {…})` 包一段、`orm.BeginAmbientTransaction()` 环境事务（`DbContext` 会并入）。事务钉在一座集群上，跨集群嵌套当场拒。→ 详见 §2.6、§3.7
+- **分表 / 读写分离 / 换库** —— 分表 `[SplitTable]` 注解 + 链式 `.SplitTable(片)`（§3.6）；读写分离在 `QuickSqlOrmOptions.Replicas`∶`Clusters` 声明、运行期按主从路由（§3.7）；换库只动 csproj 那颗 provider ∶ 一处 `DbKind` ∶ 连接串，实体与链一字不动（§1.9，踩坑见 §4.4）。
 
 ### 3.0 最小可离线跑通的例子
 
@@ -874,23 +911,25 @@ DDL 按集群分组（`SchemaSyncer.cs:130` 的 `GroupByCluster`）：一次 `Sy
 
 能力位颗数取自各家掩码（§2.4 的声明处），assembly 取自内建表 `BuiltinDrivers.cs`。状态列除三格例外一律"离线文本层，未实测"（例外的口径见 §4.2）。
 
-| 库种 | `DbKind` | `DriverKey` | 内建表 `assembly` | 血统 | 位 | 状态 |
-| --- | --- | --- | --- | --- | --- | --- |
-| SQL Server | `SqlServer` | `sqlserver` | `Microsoft.Data.SqlClient` | 独立 | 17 | 全部位有活库执行见证（两台实例，集成层自述；见 §4.2） |
-| PostgreSQL | `PostgreSql` | `postgresql` | `Npgsql` | PG | 14 | 离线文本层，未实测 |
-| 金仓 KingbaseES | `Kingbase` | `kingbase` | `Kdbndp` | PG | 14 | 离线文本层，未实测 |
-| openGauss | `OpenGauss` | `opengauss` | `Npgsql` | PG | 14 | 离线文本层，未实测 |
-| GaussDB | `GaussDb` | `gaussdb` | `Npgsql` | PG | 14 | 离线文本层，未实测 |
-| 瀚高 HighGo | `Highgo` | `highgo` | `Npgsql` | PG | 14 | 离线文本层，未实测 |
-| GBase 8c | `Gbase8c` | `gbase8c` | `Npgsql` | PG | 14 | 离线文本层，未实测 |
-| Oracle | `Oracle` | `oracle` | `Oracle.ManagedDataAccess` | Oracle | 6 | 离线文本层，未实测 |
-| 达梦 | `Dameng` | `dameng` | `DmProvider` | Oracle | 6 | 离线文本层，未实测 |
-| 神通 | `ShenTong` | `shentong` | `Oscar` | Oracle | 6 | 离线文本层，未实测 |
-| MySQL | `MySql` | `mysql` | `MySqlConnector` | MySQL | 5 | 离线文本层，未实测 |
-| TiDB | `TiDb` | `tidb` | `MySqlConnector` | MySQL | 5 | 离线文本层，未实测 |
-| OceanBase（MySQL 模） | `OceanBase` | `oceanbase` | `MySqlConnector` | MySQL | 5 | 离线文本层，未实测；模式未建模 |
-| 虚谷 | `Xugu` | `xugu` | `XuguClient` | 独立 | 7 | 装载与连通实测；7 位中 4 位有活库执行见证（§4.2） |
-| GBase 8s | `Gbase8s` | `gbase8s` | `GBase.DataDB` | 独立 | 4 | 离线文本层，未实测；档位按【文档·IBM】 |
-| SQLite | `Sqlite` | `sqlite` | `Microsoft.Data.Sqlite` | 独立 | 5 | 装载/连通实测（临时文件库）；5 位中 3 位有活库执行见证，且三颗都是 ORM 产出的语句跑过而非基线重放（§4.2） |
+| 库种 | `DbKind` | `DriverKey` | 内建表 `assembly` | 血统 | 位 | 连接串示例（占位用 `<…>`） | 状态 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| SQL Server | `SqlServer` | `sqlserver` | `Microsoft.Data.SqlClient` | 独立 | 17 | `Server=<host>,1433;Database=<db>;User Id=<u>;Password=<p>;TrustServerCertificate=True`（Windows 认证换 `Integrated Security=True`） | 全部位有活库执行见证（两台实例，集成层自述；见 §4.2） |
+| PostgreSQL | `PostgreSql` | `postgresql` | `Npgsql` | PG | 14 | `Host=<host>;Port=5432;Database=<db>;Username=<u>;Password=<p>` | 离线文本层，未实测 |
+| 金仓 KingbaseES | `Kingbase` | `kingbase` | `Kdbndp` | PG | 14 | `Host=<host>;Port=54321;Database=<db>;Username=<u>;Password=<p>` | 离线文本层，未实测 |
+| openGauss | `OpenGauss` | `opengauss` | `Npgsql` | PG | 14 | `Host=<host>;Port=5432;Database=<db>;Username=<u>;Password=<p>` | 离线文本层，未实测 |
+| GaussDB | `GaussDb` | `gaussdb` | `Npgsql` | PG | 14 | `Host=<host>;Port=5432;Database=<db>;Username=<u>;Password=<p>` | 离线文本层，未实测 |
+| 瀚高 HighGo | `Highgo` | `highgo` | `Npgsql` | PG | 14 | `Host=<host>;Port=5432;Database=<db>;Username=<u>;Password=<p>` | 离线文本层，未实测 |
+| GBase 8c | `Gbase8c` | `gbase8c` | `Npgsql` | PG | 14 | `Host=<host>;Port=5432;Database=<db>;Username=<u>;Password=<p>` | 离线文本层，未实测 |
+| Oracle | `Oracle` | `oracle` | `Oracle.ManagedDataAccess` | Oracle | 6 | `Data Source=<host>:<port>/<service>;User Id=<u>;Password=<p>` | 离线文本层，未实测 |
+| 达梦 | `Dameng` | `dameng` | `DmProvider` | Oracle | 6 | `Server=<host>;Port=5236;User ID=<u>;Password=<p>` | 离线文本层，未实测 |
+| 神通 | `ShenTong` | `shentong` | `Oscar` | Oracle | 6 | `Server=<host>;Port=<port>;Database=<db>;User ID=<u>;Password=<p>` | 离线文本层，未实测 |
+| MySQL | `MySql` | `mysql` | `MySqlConnector` | MySQL | 5 | `Server=<host>;Port=3306;Database=<db>;User ID=<u>;Password=<p>;Charset=utf8mb4` | 离线文本层，未实测 |
+| TiDB | `TiDb` | `tidb` | `MySqlConnector` | MySQL | 5 | `Server=<host>;Port=4000;Database=<db>;User ID=<u>;Password=<p>` | 离线文本层，未实测 |
+| OceanBase（MySQL 模） | `OceanBase` | `oceanbase` | `MySqlConnector` | MySQL | 5 | `Server=<host>;Port=2881;Database=<db>;User ID=<u>@<租户>;Password=<p>` | 离线文本层，未实测；模式未建模 |
+| 虚谷 | `Xugu` | `xugu` | `XuguClient` | 独立 | 7 | `Server=<host>;Port=<port>;Database=<db>;User ID=<u>;Password=<p>` | 装载与连通实测；7 位中 4 位有活库执行见证（§4.2） |
+| GBase 8s | `Gbase8s` | `gbase8s` | `GBase.DataDB` | 独立 | 4 | Informix 形：`Database=<db>;Host=<host>;Service=<port>;Protocol=onsoctcp;Server=<实例>;UID=<u>;PWD=<p>` | 离线文本层，未实测；档位按【文档·IBM】 |
+| SQLite | `Sqlite` | `sqlite` | `Microsoft.Data.Sqlite` | 独立 | 5 | `Data Source=<文件路径>`（内存库 `Data Source=:memory:`） | 装载/连通实测（临时文件库）；5 位中 3 位有活库执行见证，且三颗都是 ORM 产出的语句跑过而非基线重放（§4.2） |
+
+连接串那列的口径分三档，别混读：SQL Server ∶ MySQL 血统 ∶ PG 血统 ∶ SQLite ∶ 虚谷 五行是本仓集成层在真库上用过的那几形（出处在各家测试基建类注释 `MySql.cs` ∶ `PostgreSql.cs` ∶ `Xugu.cs` ∶ `Sqlite.cs`，键名与端口随现场调）；金仓按 PG 协议族复用、且 `Kdbndp` 在 §1.9 冒烟里 `Create` 解析成功（文本层，未连库）；Oracle ∶ 达梦 ∶ 神通 ∶ GBase 8s 四行按**厂商文档**给形状，本仓从未在那几颗驱动上连通（§4.1，达梦那颗 NuGet 名对不上见 §1.4），第一次连以厂商为准。三个会咬人的细节：① 库落点由串上那颗键决定、不由 provider——SQL Server 上 `Database=` 与 `Initial Catalog=` 并存时驱动不报错、取后出现的那颗（本仓 `CatalogSql` 实测过），MySQL 血统的"模式"就是 `Database=` 那个库；② GBase 8s 用的是 Informix 那一族完全不同的键（`Protocol=onsoctcp` ∶ `Server=<实例名>` ∶ `Service=<端口>`），照 PG/MySQL 抄必然连不上；③ 占位串能产 SQL 不能连库（§3.0），`ToSql()` 那一路不碰连接，配了真串才走执行层。
 
 `DbKind` 枚举的 16 个值今天全部有 provider、内建表行、掩码对应，无空档（原 `MariaDb` 那一个值已于 v0.37 第五笔撤下——本仓库不立 MariaDB 这一档，理由见设计文档 §14）。OceanBase 的 Oracle 模同样没有键（那颗叶子在规格里被裁了后置）。
