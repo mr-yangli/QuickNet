@@ -1,4 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
+using System.Linq.Expressions;
 using QuickSql.Aop;
 using QuickSql.Providers;
 using QuickSql.Sql;
@@ -62,6 +63,16 @@ public sealed record BulkWriteReport(
     /// 放进位置参数会让所有构造点（含离线册的台账）跟着改号。<b>环境事务在场时这一颗恒为 false</b>——
     /// 那不是"没包"，是"包得比这一批更大"，提交归开事务的那个人（§8.2 那一条同族）。</summary>
     public bool UsedTransaction { get; init; }
+
+    /// <summary>库<em>报回来</em>的受影响行数，跨这一批的全部命令累加。<b>它只在执行段有值</b>：
+    /// 决策段（<see cref="IUpdateBulk{T}.ExplainBulk"/>）与 <c>Explain()</c> 交回的那一份里它是 0，
+    /// 因为那一刻还没有任何语句进过库。<b>与 <see cref="RowCount"/> 是两件事</b>：那一颗是调用方交出的行数，
+    /// 这一颗是库认账的行数，两者不等就是"有些行没被这条语句命中"——按主键定位外加 <see cref="IUpdateBulk{T}.Where"/>
+    /// 那一句条件时，差值就是被别人改过或删掉的那些行（乐观锁要的正是这个读数）。
+    /// <b>多行命令文本上的累加口径跟着驱动</b>：一条命令里并了几句时，<c>ExecuteNonQuery</c> 交回的是那几条语句
+    /// 行数之和（SQL Server 与 PostgreSQL 都如此），所以这一颗能判"整批有没有全中"，不能判"哪一行没中"。
+    /// 要逐行定责就退到 <c>SingleRow</c> 档逐条看返回值。</summary>
+    public int AffectedRows { get; init; }
 }
 
 /// <summary>批量写链的离线产物：一批命令文本（一条命令 = 一次往返）加上决策的那句话。
@@ -131,6 +142,20 @@ public interface IUpdateBulk<T> where T : class
     /// <para>关掉它的唯一理由是调用方自己要用"半批已落地"做断点续传——那种用法要么自己开事务、
     /// 要么自己逐条调 <c>orm.Update&lt;T&gt;()</c>，所以这里给的是一等公民的位置而不是暗示的路。</para></summary>
     IUpdateBulk<T> WithBatchTransaction(bool atomic = true);
+
+    /// <summary>在主键之外<em>再钉一个条件</em>：每一行的 <c>WHERE</c> 变成 <c>主键 AND 这一句</c>（全局过滤器
+    /// 仍然叠在最后，形状与读侧同一条纪律：<c>((键 AND 用户条件) AND 过滤器…)</c>）。
+    /// <para>要它的理由是乐观锁。按主键整行改的那一类调用方（ORM 之外的并发检查、"这行还是我读到的那一行时才改它"）
+    /// 需要的正是<em>一行一句的额外谓词</em>，而这一条链此前只给键：<c>orm.Update&lt;T&gt;().Set(...).Where(...)</c>
+    /// 改的是点名的几列，把整行交出去要走这一条。<b>命中数从 <see cref="BulkWriteReport.AffectedRows"/> 读</b>——
+    /// 它小于 <see cref="BulkWriteReport.RowCount"/> 就是有些行被别人改过。</para>
+    /// <para>三格口径要说白：① <b>它让这一条链付表达式翻译的税</b>（谓词要翻成 SQL，与 <see cref="Explain()"/>
+    /// 那句"过滤器那一步走闭包常量求值"同一个咽喉、同一对标注；没调用这一颗时一个字节都不多付）；
+    /// ② <b>点名 <see cref="BulkWriteMethod.Upsert"/> 那一档时带着它就当场抛</b>——upsert 档发的是
+    /// 一句多值 <c>INSERT … 冲突子句</c>，那里没有可叠的 <c>WHERE</c>（冲突判定只认主键，条件塞不进句尾），
+    /// 而静默丢掉调用方给的条件是这一族最不肯做的一件事；③ <b>可以连写多次</b>，折叠方向与读侧的多次
+    /// <c>Where</c> 一致（往末尾追加 <c>AND</c>）。</para></summary>
+    IUpdateBulk<T> Where(Expression<Func<T, bool>> predicate);
 
     /// <summary>不连库看这批会发出的命令文本（档已按 <see cref="WithBulk"/> 的请求落定）。
     /// <b>"零入口税"说的是 <see cref="WithBulk"/> 与 <see cref="ExplainBulk"/> 这两颗，不是这一颗</b>：

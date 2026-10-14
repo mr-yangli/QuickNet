@@ -55,6 +55,9 @@ public class QuickSqlQuery<T> : IQuery<T>, IEngineCarrier
 
     public IQuery<T> Where(Expression<Func<T, bool>> predicate) => new QuickSqlQuery<T>(Engine.Where(predicate));
 
+    public IQuery<T> Where(bool condition, Expression<Func<T, bool>> predicate)
+        => condition ? Where(predicate) : this;
+
     public IQuery<TResult> Select<TResult>(Expression<Func<T, TResult>> projector)
         => new QuickSqlQuery<TResult>(Engine.Project(projector));
 
@@ -266,6 +269,9 @@ class QuickSqlJoinQuery<T1, T2> : IQuery<T1, T2>
     public IQuery<T1, T2> Where(Expression<Func<T1, T2, bool>> predicate)
         => new QuickSqlJoinQuery<T1, T2>(Engine.Where(predicate));
 
+    public IQuery<T1, T2> Where(bool condition, Expression<Func<T1, T2, bool>> predicate)
+        => condition ? Where(predicate) : this;
+
     public IQuery<T1, T2> Skip(int count) => new QuickSqlJoinQuery<T1, T2>(Engine.Skip(count));
 
     public IQuery<T1, T2> Take(int count) => new QuickSqlJoinQuery<T1, T2>(Engine.Take(count));
@@ -307,6 +313,9 @@ class QuickSqlJoinQuery<T1, T2, T3> : IQuery<T1, T2, T3>
 
     public IQuery<T1, T2, T3> Where(Expression<Func<T1, T2, T3, bool>> predicate)
         => new QuickSqlJoinQuery<T1, T2, T3>(Engine.Where(predicate));
+
+    public IQuery<T1, T2, T3> Where(bool condition, Expression<Func<T1, T2, T3, bool>> predicate)
+        => condition ? Where(predicate) : this;
 
     public IQuery<T1, T2, T3> Skip(int count) => new QuickSqlJoinQuery<T1, T2, T3>(Engine.Skip(count));
 

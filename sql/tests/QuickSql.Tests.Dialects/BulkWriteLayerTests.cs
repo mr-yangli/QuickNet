@@ -909,6 +909,85 @@ public sealed class BulkWriteLayerTests
         Checks.Has("命中范围比键清单窄", delete.Reason);
     }
 
+    // ── 调用方在主键之外钉的条件（IUpdateBulk.Where，乐观锁那一格） ─────
+
+    [Fact]
+    public void A_caller_condition_folds_after_the_keys_and_before_the_filters()
+    {
+        // 这一格存在的理由是按主键整行改的那一类调用方也要能钉条件（并发戳、"还是我读到的那一行时才改它"）。
+        // 判据是<em>叠的位置</em>：键 → 调用方条件 → 全局过滤器，与读侧多次 Where 同一条追加方向。
+        var target = orm();
+        var title = "工单1";
+
+        target.Filters.Add<Ticket>(t => !t.Deleted);
+
+        var plan = target.UpdateRange([ticket(1), ticket(2)]).Where(t => t.Title == title).Explain();
+        var text = plan.Commands[0].Text;
+
+        var key = text.IndexOf("[t0].[Id] = ", StringComparison.Ordinal);
+        var condition = text.IndexOf("[t0].[Title] = ", StringComparison.Ordinal);
+        var filter = text.IndexOf("NOT [t0].[Deleted] = 1", StringComparison.Ordinal);
+
+        Assert.True(key >= 0, $"主键条件不在产出里：{text}");
+        Assert.True(condition > key, $"调用方条件排在键之前：{text}");
+        Assert.True(filter > condition, $"过滤器排在调用方条件之后：{text}");
+
+        // SET 里的 Title 与 WHERE 里那颗条件参数是两笔：一行 5 颗键+载荷再 +1 颗条件，两行 12 颗。
+        Assert.Equal(12, plan.Commands[0].Parameters.Count);
+        Checks.Has("另有调用方点名的 1 条条件", plan.Reason);
+
+        // 决策段那颗纯出口读不到受影响行数：那一颗只有执行段才有值。
+        Assert.Equal(0, target.UpdateRange([ticket(1)]).Where(t => t.Title == title).ExplainBulk().AffectedRows);
+    }
+
+    [Fact]
+    public void Several_caller_conditions_append_in_written_order_while_the_plain_chain_keeps_its_shape()
+    {
+        var target = orm();
+        var title = "工单1";
+        var tenant = 3;
+
+        var plain = target.UpdateRange([ticket(1), ticket(2)]).Explain().Commands[0].Text;
+
+        Assert.DoesNotContain("调用方点名", target.UpdateRange([ticket(1), ticket(2)]).Explain().Reason);
+
+        var two = target.UpdateRange([ticket(1), ticket(2)])
+                        .Where(t => t.Title == title)
+                        .Where(t => t.TenantId == tenant)
+                        .Explain();
+
+        Assert.True(
+            two.Commands[0].Text.IndexOf("[t0].[Title] = ", StringComparison.Ordinal)
+            < two.Commands[0].Text.IndexOf("[t0].[TenantId] = ", StringComparison.Ordinal),
+            $"先写的条件排在后面：{two.Commands[0].Text}");
+
+        Checks.Has("另有调用方点名的 2 条条件", two.Reason);
+
+        // 没点条件的那一条链仍然只交 10 颗参数（每行 4 颗载荷 + 1 颗键）：入口零税那句在这一颗上的兑现面。
+        Assert.Equal(10, target.UpdateRange([ticket(1), ticket(2)]).Explain().Commands[0].Parameters.Count);
+        Assert.Equal(14, two.Commands[0].Parameters.Count);
+    }
+
+    [Fact]
+    public void The_upsert_tier_refuses_a_caller_condition_because_that_sentence_has_no_where_to_fold_into()
+    {
+        // 与 A_global_filter_refuses_the_upsert_tier… 同一道门、同一个理由：那一句没有 WHERE。
+        // 靶子仍然挂在 MySQL 那一家（只有接了句尾的那一家走得到这道门）。
+        var target = MySql.Orm();
+        var tenant = 3;
+
+        var refused = Checks.Raised<QuickSqlException>(
+            () => target.UpdateRange([ticket(1), ticket(2)]).Where(t => t.TenantId == tenant)
+                   .WithBulk(BulkWriteMethod.Upsert).Explain());
+
+        Checks.Has("一句 upsert 档不接", refused.Message);
+        Checks.Has("只认主键", refused.Message);
+
+        // 判档那颗纯出口不读条件：拒在建文本那一步，口径与过滤器那一条逐字同族。
+        Assert.Equal(BulkWriteMethod.Upsert,
+            target.UpdateRange([ticket(1)]).Where(t => t.TenantId == tenant).WithBulk(BulkWriteMethod.Upsert).ExplainBulk().Method);
+    }
+
     // ── 钩子回放与执行口 ──────────────────────────────────────────────
 
     [Fact]

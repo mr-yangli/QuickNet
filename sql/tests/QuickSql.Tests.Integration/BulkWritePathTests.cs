@@ -312,6 +312,57 @@ public sealed class BulkWritePathTests
     }
 
     [Fact]
+    public async Task A_caller_condition_narrows_the_batch_and_the_affected_count_reports_what_landed()
+    {
+        // IUpdateBulk.Where 那一颗的活库读数：按主键整行改的链上，条件筛掉的行一个字都不许动，
+        // 而 BulkWriteReport.AffectedRows 交回的是库里真认账的行数（乐观锁要的正是这个读数——
+        // 离线册判得出句子形状，判不出"那一句真的少改了两行"）。
+        Database.Ready();
+
+        var note = tag("cond");
+        var landed = await Seed(note, 3);
+        var batch = changed(landed, note);
+
+        // 库里 Amount 是 i+0.25（三行 1.25 ∶ 2.25 ∶ 3.25），这一颗条件取前两颗。
+        var report = await Orm.UpdateRange(batch).Where(o => o.Amount < 3m)
+            .ExecuteBulkAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(3, report.RowCount);
+        Assert.Equal(2, report.AffectedRows);
+
+        var stored = Stored(note);
+
+        // 命中的两行落的是改过的那一份（CustomerId 由 Seed 的 7 换成 70+i）。
+        Assert.Equal("70", stored[landed[0]]["CustomerId"]);
+        Assert.Equal("71", stored[landed[1]]["CustomerId"]);
+
+        // 没命中的那一行仍是 Seed 那一版：条件筛掉的行不是"改了别的列"，是一个字节都没写。
+        Assert.Equal("7", stored[landed[2]]["CustomerId"]);
+    }
+
+    [Fact]
+    public async Task A_caller_condition_that_matches_nothing_moves_no_row_and_raises_nothing()
+    {
+        // 与 A_key_that_is_not_in_the_library… 同一族形状：整批都落在条件之外时，
+        // 那条链不响、不建行、不报错，只把 AffectedRows 交回 0 —— 调用方据此判"这一行被别人改过了"。
+        Database.Ready();
+
+        var note = tag("condnone");
+        var landed = await Seed(note, 2);
+
+        var report = await Orm.UpdateRange(changed(landed, note)).Where(o => o.Amount > 1_000m)
+            .ExecuteBulkAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, report.RowCount);
+        Assert.Equal(0, report.AffectedRows);
+
+        var stored = Stored(note);
+
+        Assert.Equal("7", stored[landed[0]]["CustomerId"]);
+        Assert.Equal("7", stored[landed[1]]["CustomerId"]);
+    }
+
+    [Fact]
     public async Task A_global_filter_is_part_of_the_predicate_of_every_joined_statement()
     {
         // 离线册 FilterTests 的抬头欠的那一句：「过滤器是文本层的事，而"这一条语句在库里筛掉了什么行"归集成套件」。

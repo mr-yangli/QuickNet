@@ -96,6 +96,13 @@ public interface IQuery<T> : IAsyncEnumerable<T>
 
     IQuery<T> Where(Expression<Func<T, bool>> predicate);
 
+    /// <summary><b>条件成立才贴这一条谓词</b>：给"筛选条件是可选的"那一类调用方（检索表单里用户没填的那一栏）。
+    /// <paramref name="condition"/> 为假时返回<em>自己</em>，一个字节的模型都不改，所以它与"根本没写过这一句"逐字同形
+    /// （<see cref="Explain"/> 的模型文本、发出去的 SQL 与参数编号都不变）。<b>它不是开关而是省一段 <c>if</c></b>：
+    /// 三个参数的入口与 <see cref="Where(Expression{Func{T, bool}})"/> 同一颗咽喉，翻译失败照样在编译期之前响。
+    /// 多条可选条件就是连着写几句，<c>AND</c> 的顺序 = 书写的顺序。</summary>
+    IQuery<T> Where(bool condition, Expression<Func<T, bool>> predicate);
+
     IQuery<T> AsNoTracking();
 
     /// <summary>这一条链上不套用 <c>orm.Filters</c> 上注册的全局过滤器（§10.7 约束 2）。
@@ -339,6 +346,9 @@ public interface IQuery<T1, T2>
 {
     IQuery<T1, T2> Where(Expression<Func<T1, T2, bool>> predicate);
 
+    /// <summary>条件成立才贴这一条谓词，为假时返回自己；口径同 <see cref="IQuery{T}.Where(bool, Expression{Func{T, bool}})"/>。</summary>
+    IQuery<T1, T2> Where(bool condition, Expression<Func<T1, T2, bool>> predicate);
+
     IQuery<T1, T2, T3> LeftJoin<T3>(Expression<Func<T1, T2, T3, bool>> on) where T3 : class;
 
     IQuery<T1, T2, T3> InnerJoin<T3>(Expression<Func<T1, T2, T3, bool>> on) where T3 : class;
@@ -365,6 +375,9 @@ public interface IQuery<T1, T2>
 public interface IQuery<T1, T2, T3>
 {
     IQuery<T1, T2, T3> Where(Expression<Func<T1, T2, T3, bool>> predicate);
+
+    /// <summary>条件成立才贴这一条谓词，为假时返回自己；口径同 <see cref="IQuery{T}.Where(bool, Expression{Func{T, bool}})"/>。</summary>
+    IQuery<T1, T2, T3> Where(bool condition, Expression<Func<T1, T2, T3, bool>> predicate);
 
     IQuery<TResult> Select<TResult>(Expression<Func<T1, T2, T3, TResult>> projector);
 

@@ -1,4 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
+using System.Linq.Expressions;
 using System.Text;
 using QuickSql.Aop;
 using QuickSql.Execution;
@@ -31,6 +32,11 @@ sealed class UpdateBulkEngine<T> : IUpdateBulk<T> where T : class
     bool _atomic = true;
 
     BulkWritePlan? _plan;
+
+    /// <summary>调用方在主键之外钉的那些条件（<see cref="IUpdateBulk{T}.Where"/>）。null = 一颗都没有，
+    /// 那一档 <see cref="Build"/> 走原来的形状而<em>一个表达式都不翻</em>，"入口零反射税"这句对没用这一颗的
+    /// 调用方仍然逐字成立。</summary>
+    List<Expression<Func<T, bool>>>? _extra;
 
     /// <summary>取值段的格子：每行 × 每个<em>可写</em>列一颗，已经是 <c>AuditValue</c> 之后的值。
     /// null = 那一段还没跑过。<b>主键列不在里面</b>——它是用来定位那一行的，不是被写出去的列，理由见 <see cref="Prepare"/>。</summary>
@@ -108,6 +114,16 @@ sealed class UpdateBulkEngine<T> : IUpdateBulk<T> where T : class
         return this;
     }
 
+    public IUpdateBulk<T> Where(Expression<Func<T, bool>> predicate)
+    {
+        // 存 lambda 不存文本，与 orm.Filters 同一条纪律（闭包在每次建文本时重新求值）；
+        // 连写多次就是往清单末尾追加，翻译时按同样的顺序折成 AND 链。
+        (_extra ??= []).Add(predicate);
+        _plan = null;
+
+        return this;
+    }
+
     [RequiresUnreferencedCode("全局过滤器的叠加（Filters.ApplyTo）走闭包常量求值，被裁剪的产物上谓词翻译会换一条退路。")]
     [RequiresDynamicCode("与 RequiresUnreferencedCode 同一条：谓词翻译的退路是编译表达式树。")]
     public BulkWritePlan Explain()
@@ -135,10 +151,14 @@ sealed class UpdateBulkEngine<T> : IUpdateBulk<T> where T : class
 
         var tag = Tag();
 
+        // 库里报回来的行数跨命令累加：主键之外还钉了条件时，这一颗就是"有没有行没被命中"的读数
+        // （乐观锁的验收面），所以它必须来自执行段而不是决策段的估数。
+        var affected = 0;
+
         async Task SendAll()
         {
             foreach (var command in plan.Commands)
-                await _orm.Ado.NonQueryAsync(command, tag, ct).ConfigureAwait(false);
+                affected += await _orm.Ado.NonQueryAsync(command, tag, ct).ConfigureAwait(false);
         }
 
         // 一次提交那一档（WithBatchTransaction 的默认）。判据是<em>语句数</em>而不是命令数：并档把 2000 句并成
@@ -155,12 +175,12 @@ sealed class UpdateBulkEngine<T> : IUpdateBulk<T> where T : class
             await SendAll().ConfigureAwait(false);
             tran.Commit();
 
-            return report with { UsedTransaction = true };
+            return report with { UsedTransaction = true, AffectedRows = affected };
         }
 
         await SendAll().ConfigureAwait(false);
 
-        return report;
+        return report with { AffectedRows = affected };
     }
 
     /// <summary>档位判定：纯函数，不建文本、不碰连接（判据与 <c>InsertEngine.Decide</c> 同一个形状）。
@@ -360,6 +380,12 @@ sealed class UpdateBulkEngine<T> : IUpdateBulk<T> where T : class
                     where = where is null ? equal : new SqlBinaryExpression(BinaryOperator.And, where, equal);
                 }
 
+                // 调用方点名的条件排在主键之后、全局过滤器之前：形状与读侧同一条纪律（往末尾追加 AND），
+                // 而翻译走 FilterRegistry 那一份实现，与过滤器同一个翻译器（§10.7 约束 4）。
+                if (_extra is not null)
+                    foreach (var predicate in _extra)
+                        where = new SqlBinaryExpression(BinaryOperator.And, where!, _orm.Filters.TranslateFree(predicate, _table));
+
                 var ast = new UpdateStatement { Table = _table, Sets = sets, Where = _orm.Filters.ApplyTo(_table, where!) };
 
                 var writer = new SqlWriter(new StringBuilder(256), parameters, dialect.ParameterPrefix);
@@ -385,6 +411,9 @@ sealed class UpdateBulkEngine<T> : IUpdateBulk<T> where T : class
 
         if (injected > 0)
             reason += $" 每条语句的 WHERE 里除了主键还叠着 {injected} 条全局过滤器（§10.7 的 orm.Filters）。";
+
+        if (_extra is not null)
+            reason += $" 每条语句的 WHERE 里另有调用方点名的 {_extra.Count} 条条件，叠在主键之后、全局过滤器之前。";
 
         reason += " " + BulkAtomicity.Sentence(_atomic, _rows.Length);
 
@@ -428,6 +457,12 @@ sealed class UpdateBulkEngine<T> : IUpdateBulk<T> where T : class
                      ?? throw new QuickSqlException($"{_orm.Provider.Kind} 没交 UpsertClause：一句 upsert 档在这一家不可达，而计划已经定在这一档。");
 
         RefuseUpsertFilters();
+
+        if (_extra is not null)
+            throw new QuickSqlException(
+                $"{_contract.Table.Name} 的这批 {nameof(IUpdateBulk<T>)} 带着调用方点名的 {_extra.Count} 条条件，一句 upsert 档不接：" +
+                "那一句发的是多值 INSERT 加冲突子句，冲突判定只认主键，而 WHERE 不在它的形状里——把条件静默丢掉就是" +
+                "改到条件之外的行。要么退回 Merged 或 SingleRow 那一档（那里每行一句 UPDATE，条件叠得进去），要么自己先按条件读一遍再交这批行。");
 
         var columns = new ColumnContract[_settable.Length + _keys.Length];
         var ordinals = new int[columns.Length];
@@ -666,10 +701,12 @@ sealed class DeleteBulkEngine<T> : IDeleteBulk<T> where T : class
 
         var tag = Tag();
 
+        var affected = 0;
+
         async Task SendAll()
         {
             foreach (var command in plan.Commands)
-                await _orm.Ado.NonQueryAsync(command, tag, ct).ConfigureAwait(false);
+                affected += await _orm.Ado.NonQueryAsync(command, tag, ct).ConfigureAwait(false);
         }
 
         // 这条链上的语句数就是命令数：Merged 档一条命令一句 IN 清单，SingleRow 档一条命令一句等值。
@@ -682,12 +719,12 @@ sealed class DeleteBulkEngine<T> : IDeleteBulk<T> where T : class
             await SendAll().ConfigureAwait(false);
             tran.Commit();
 
-            return report with { UsedTransaction = true };
+            return report with { UsedTransaction = true, AffectedRows = affected };
         }
 
         await SendAll().ConfigureAwait(false);
 
-        return report;
+        return report with { AffectedRows = affected };
     }
 
     (BulkWriteMethod Method, BulkWriteReport Report) Decide(BulkWriteMethod requested)

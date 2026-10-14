@@ -325,6 +325,24 @@ public sealed class FilterRegistry
     [RequiresUnreferencedCode("闭包常量求值按 MemberInfo 读字段/属性。")]
     [RequiresDynamicCode("不可约子表达式的退路是编译表达式树。")]
     internal SqlExpression Translate(Registration registration, TableRef table)
+        => TranslateInto(
+            registration.Predicate,
+            table,
+            $"{registration.Key.Name} 上注册的全局过滤器",
+            registration.Key);
+
+    /// <summary>写链上<em>调用方自己点名</em>的那一颗条件（<c>orm.UpdateRange(rows).Where(...)</c>）走这一颗口。
+    /// <b>它与 <see cref="Translate(Registration, TableRef)"/> 共用同一份实现不是省事，是 §10.7 约束 4 的那条纪律</b>：
+    /// 全局过滤器与用户 lambda 必须经同一个翻译器，否则同一条语句里两类条件的形状与失败口径会分岔。
+    /// 差别只在抬头那句是谁：<b>这里没有接口键那一档的账可算</b>（调用方给的就是这一张实体上的 lambda）。</summary>
+    [RequiresUnreferencedCode("闭包常量求值按 MemberInfo 读字段/属性。")]
+    [RequiresDynamicCode("不可约子表达式的退路是编译表达式树。")]
+    internal SqlExpression TranslateFree(LambdaExpression predicate, TableRef table)
+        => TranslateInto(predicate, table, "调用方点名的条件", null);
+
+    [RequiresUnreferencedCode("闭包常量求值按 MemberInfo 读字段/属性。")]
+    [RequiresDynamicCode("不可约子表达式的退路是编译表达式树。")]
+    SqlExpression TranslateInto(LambdaExpression predicate, TableRef table, string owner, Type? key)
     {
         // 形参按位置绑表，而过滤器的 lambda 只有一个形参，所以这里造的是"只有这一张表"的模型：
         // 表位实例是外面递进来的那一个，翻出来的列引用因此带的就是最终语句里的那个别名。
@@ -332,13 +350,13 @@ public sealed class FilterRegistry
 
         try
         {
-            return _orm.Expressions.Predicate(registration.Predicate, Scope.ForFilter(model, registration.Predicate));
+            return _orm.Expressions.Predicate(predicate, Scope.ForFilter(model, predicate));
         }
         catch (QuickSqlException exception)
         {
             throw new QuickSqlException(
-                $"{registration.Key.Name} 上注册的全局过滤器贴不进 {table.Table.Name}（表位 {table.Alias}）。" +
-                (registration.Key.IsInterface || registration.Key.IsAbstract
+                $"{owner}贴不进 {table.Table.Name}（表位 {table.Alias}）。" +
+                (key is not null && (key.IsInterface || key.IsAbstract)
                     ? $"键是接口/基类，而这一档要成立得让每一个实现类的契约里都有谓词点到的那个成员 —— 注册期查不出来（没有契约可查），只有贴上某张表时才知道。"
                     : string.Empty) + $"翻译器原话：{exception.Message}",
                 exception);
