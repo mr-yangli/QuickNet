@@ -528,6 +528,66 @@ static class Gates
         /// 归属、量法（136 B/只）与那批<em>没有落笔记录的落地产品</em>都在 <see cref="PerQueryBytes" /> 末段，
         /// 与 <see cref="FilteredChainBytesOne" /> 那一条；本格不另起一套解释。</para></summary>
         public const double FilteredChainBytesMany = 3_072;
+
+        /// <summary>第 13 行 ①：<b>1 000 只已跟踪实体、全员未变的一轮 <c>DetectChanges</c></b> 的字节。
+        /// <para>这一枚就是 §8.2 末尾那句「快照的装箱税」的所在：<c>EntityTracker.DetectChanges</c> 逐列
+        /// <c>Equals(_schema.GetValue(entity, ordinal), node.Snapshot[ordinal])</c>，每颗值类型列一次装箱。
+        /// §12.7 那份「生成器产出定长 <c>record struct</c> 快照 + <c>struct.Equals</c>」的方案欠到今天，
+        /// 而这一格就是它欠着的那枚数字（<c>ChangeTrackerBench</c> 那一条只进 BDN 报告、不进退出码，
+        /// 缺口原话在 <c>DbChangeTracker.DetectChanges</c> 的注释与 §14 的 P1 余项）。</para>
+        /// <para><b>0 上册</b>：第 13 行是本版新加的一行，先让第一场自己印实测、再按那一场重钉
+        /// （与 v0.20 / v0.23 / v0.27 / v0.28 那几行的首次跑法同式）。</para>
+        /// <para><b>v0.39 上册 472 032</b>（0 → 472 032）。来源场 <c>obj/gate-before-2.txt</c>：干净重建之后的第一场，
+        /// 而它是"会话级拷贝"那一改<em>之前</em>的读数 —— 前一场 <c>gate-before</c> 不作数，那时写回腿的 <c>at</c>
+        /// 没有逐轮前进，③ 量成了第二条地板腿（③ 与 ④ 逐字相等），修法与这一格被量具自己抓到的经过都写在
+        /// <see cref="SaveLeg"/> 的注释里。这一枚与 <c>ChangeTrackerBench</c> 报的 507.84 KB 是同一条账而不同档：
+        /// 那里 1 000 只由 <c>Harness.Table</c> 逐列灌值（可空列也有值 ⇒ 520 B/只），这里 1 000 只由
+        /// <c>Attach(new WideRow { Id = i + 1 })</c> 造（可空列全是 null、压根不装箱 ⇒ 472 B/只），
+        /// 后者对得上第 11 行地板腿那一格的 482 B/只。两把尺子不许互相换算。</para></summary>
+        public const double DetectCleanBytes = 472_032;
+
+        /// <summary>第 13 行 ②：同一档规模、<b>每只实体都有一列被改过</b>的一轮 <c>DetectChanges</c> 的字节。
+        /// <para>它与 ① 同价<em>就是</em>「§8.2 那句 hash 短路没接线」的实测形状（上册 475 704 vs 472 032，
+        /// 差 0.8%）。本格不把相等做成判据（第 12 行那句教训：把一条待办的形状钉成契约，接线那天它会站在错的一侧），
+        /// 只把两枚各自钉着 —— 哪天短路接上了，① 会掉下来而 ② 照旧，那是要重钉而不是要红。
+        /// 那 0.8%（3 672 B = 3.7 B/只）不是噪声，是<em>状态跃迁</em>那一格的代价：脏腿每只都要把 <c>State</c>
+        /// 从 Unmodified 推到 Modified 并置粘性位，而 clean 腿一步都不推。没接线时它已经在 ② 里，接线之后它就是 ② 的全部。</para></summary>
+        public const double DetectDirtyBytes = 475_704;
+
+        /// <summary>第 13 行 ③：<b>1 000 只已跟踪实体、其中一只脏着的一次 <c>SaveChanges</c></b> 的字节。
+        /// <para>这一枚量的是<em>会话级</em>那一半税：一句 UPDATE 的发射只跟批次走，而
+        /// <c>WritesAreDue → AnyDue</c>、<c>EnsureNoSplitWrites</c>、<c>WriteCluster</c>、<c>PostFlush</c>
+        /// 每一步都要按会话规模过一遍。第 11 行那三腿的规模是 13 只，同一笔钱在那里是几百字节，被 29 552 B 那一格整个盖住
+        /// —— 本行把同一个自由度换到 1 000 只上量。（"盖住"不是"没有"：本笔那一改之后第 11 行两腿各降 288 B，见下。）
+        /// <para><b>这一句本版拿到了同场见证</b>：<c>TrackedNodes</c> 那一改之后重跑，第 11 行那两枚钉各降
+        /// 288 B（合并 29 952 → 29 664、逐条 61 952 → 61 664，两腿同幅同向 = 同一处代码在两条腿上各落一次），
+        /// 而那一维在本行上是 16 080 B。同一个自由度、两把尺子、两个量级 —— 本格的存在理由就是这一句。</para></para>
+        /// <para><b>v0.39 上册 525 864</b>（0 → 525 864，同一个来源场）。它与 ① 之差 53 832 B 是本行唯一
+        /// "侦测之外"的读数，判据 ⑥ 把它折成每只 48 B。这一格里<em>有三份按会话规模拷贝的引用数组</em>
+        /// 的账（<c>AnyDue</c> 与两道发射前闸门），先按改前的数上册，是为了让改完那一次能把"减掉多少"
+        /// 写成一笔有来源的账，而不是把改前的数从账上抹掉。</para>
+        /// <para><b>v0.39 重钉 509 784</b>（525 864 → 509 784，<em>−16 080</em>）。归属：<c>EntityTracker.TrackedNodes</c>
+        /// 那一改 —— 那个属性从前每次访问都 <c>[.. _order]</c> 拷一份新的引用数组，而保存路径上按会话规模问它的两处是
+        /// <c>AnyDue</c> 与 <c>WriteCluster</c>。<b>两腿同幅，而算术自己把归因钉住了</b>：一份引用数组是 40 B 的头加
+        /// 8 B/元素，所以 1 000 只那一腿该掉 2 × 8 040 = <b>16 080</b>、1 只那一腿该掉 2 × 48 = <b>96</b>
+        /// （6 384 → 6 288）—— 两个规模各自<em>逐字</em>落在算式上，没有一个零头要找解释。
+        /// 判据 ⑥ 那个每只税因此从 48 B 落到 32 B（每处 8 B/元素 × 两处）。第三道闸门 <c>EnsureNoSplitWrites</c> 没在这一腿付费：它的
+        /// <c>Contract.Table.Split is not { }</c> 排在前面就 <c>continue</c>，压根没走到那一行 ——
+        /// <b>这一句要说出来，否则"三处改了两处"读起来像漏改了一处</b>。
+        /// <b>同一次构建里 ① 与 ② 逐字未动</b>（472 032 与 475 704，两枚钉都报 [＝]）：减的只有数组那一笔，
+        /// 装箱那半一分没动，而那是 <see cref="DetectCleanBytes"/> 与 §12.7 那条 struct 快照的欠账，不在本笔射程内。</para>
+        /// <para><b>来源场之外还有三场复验</b>：<c>--no-incremental</c> 干净重建之后连跑三场
+        /// （<c>obj/gate-final.txt</c> ∶ <c>-final-2.txt</c> ∶ <c>-final-3.txt</c>），三枚钉逐字复齐
+        /// （472 032 ∶ 475 704 ∶ 509 784），第 11 行那两腿也三场同一颗数（29 664 ∶ 61 664）。
+        /// <b>本笔在这里退掉一次误读</b>：初稿把"干净重建的第一跑偏低"记进过账，那是把摘要里那几行
+        /// <c>[↓]</c> 看串之后<em>推得</em>的一句话，三场日志一比对就散 —— 没有那三场，这句话会留在注释里
+        /// 当事实传给下一版。按 §13.1 那条"写进注释的数要先回到日志里数一遍"，改正一并留着不改写。</para>
+        /// <para><b>本笔的跨行副作用要在这里点名，别让它只活在日志里</b>：第 11 行那两枚钉同一次构建里各降
+        /// <b>−288 B</b>（合并 29 952 → 29 664、逐条 61 952 → 61 664），那一格是 13 只 ⇒ 2 ×（40 + 8 × 13）= 288，
+        /// 同一处代码在另一个规模上的同幅读数。<b>本格不把第 11 行的钉一起改掉</b>：那一格今天还挂着 +400 / +1 648
+        /// 两笔与跟踪层无关的回归（条件 <c>Where</c> 那一版推上来的，见其自己的回归位），把 −288 折进那一版的账
+        /// 等于替别人落一笔归属错的钉。谁重钉第 11 行，谁要同时说清这两笔的方向。</para></summary>
+        public const double OneWriteSaveBytes = 509_784;
     }
 
     /// <summary>有红行比基线更差时加到退出码上的那一位。<b>CI 要硬断言的是这一位没亮</b>，
@@ -618,6 +678,7 @@ static class Gates
             FilterRebuild(generated),
             MergedVsSingular(generated),
             FilterOnReadChain(generated),
+            SessionScanFloor(generated),
         ];
     }
 
@@ -1541,6 +1602,194 @@ static class Gates
             Pins: [
                 new Pin("一颗过滤器在物化链上的整链增量子节", Baselines.FilteredChainBytesOne, oneDelta),
                 new Pin($"{Registered} 颗过滤器在物化链上的整链增量子节", Baselines.FilteredChainBytesMany, manyDelta),
+            ]);
+    }
+
+    // ---------- 第 13 行 ----------
+
+    /// <summary>会话规模：与 <c>ChangeTrackerBench</c> 同档（1 000 只），短点取 1 只给两点法。</summary>
+    const int TrackedMany = 1_000, TrackedOne = 1;
+
+    /// <summary>本行各腿共用的那一步：把 <paramref name="entities"/> 那几格填满<b>键已定</b>的
+    /// <see cref="WideRow"/> 并收进会话（<c>Attach</c> 而不是 <c>Add</c>，与第 11 行同一条理由：那一档要走
+    /// OUTPUT 回填键，而本格量的是会话自己的扫描）。<b>装配在测量窗外</b>，同第 1 行那句「组装根写进被测委托会把
+    /// 单例算成每次的开销」。
+    /// <para>最后那一句自检不是装饰：空会话上的一轮侦测报 0 B，读起来正像「达标」。
+    /// <c>ChangeTrackerBench.Setup</c> 立的是同一条闸门，理由抄自那一格。</para></summary>
+    static DbContext Tracked(DbContext session, WideRow[] entities)
+    {
+        for (var i = 0; i < entities.Length; i++)
+            entities[i] = session.Attach(new WideRow { Id = i + 1 });
+
+        if (session.ChangeTracker.Count != entities.Length)
+            throw new InvalidOperationException(
+                $"只跟踪到 {session.ChangeTracker.Count} 只，预期 {entities.Length} 只：这一格量的东西不存在，别把它的数字拿去算账。");
+
+        return session;
+    }
+
+    static DbContext TrackedSession(IEntitySchemaRegistry schemas, int rows, WideRow[] entities)
+        => Tracked(new DbContext(Harness.Orm(_ => null, schemas)), entities);
+
+    /// <summary>第 13 行的侦测腿。<b>弄脏在被测窗内</b>（同第 11 行那句「<see cref="Measuring"/> 没有"每一轮之前"
+    /// 这个钩子，挪到窗户外就没法让每一轮都脏」，那里挑设值口的整条理由也一起借过来：每个设值口都不分配托管对象，
+    /// 所以窗内那一步不脏本格的字节）。
+    /// <para><b><c>Changed</c> 取的是首轮那个数</b>：<c>DetectChanges</c> 数的是<em>状态跃迁</em>而不是脏行数，
+    /// 第一次之后同一批脏行的计数恒 0，拿第二轮读会得出 0 而那条判据（②）就成了自杀。
+    /// 记这一格要在窗内多一次字段写与一个分支 —— 与窗内弄脏同一笔取舍，而它换来的是"这一格量的东西真的存在"。</para></summary>
+    static (long Bytes, double Nanos, int Changed) DetectLeg(IEntitySchemaRegistry schemas, int rows, Action<WideRow[], int>? dirty)
+    {
+        var entities = new WideRow[rows];
+        var session = TrackedSession(schemas, rows, entities);
+
+        var at = 1;
+        var first = -1;
+
+        Action run = () =>
+        {
+            dirty?.Invoke(entities, at);
+
+            var now = session.ChangeTracker.DetectChanges();
+
+            if (first < 0)
+                first = now;
+
+            at++;
+        };
+
+        return (Measuring.Bytes(run), Measuring.Nanoseconds(run), first);
+    }
+
+    /// <summary>第 13 行的保存腿：一次 <c>SaveChangesAsync</c> 的字节、耗时与<em>从数据源那侧</em>数出来的
+    /// 语句数、事务数（口径同第 11 行判据 ①：不读 QuickSql 自报的那两个数）。<paramref name="dirty"/> 传 null
+    /// 就是地板腿 —— 那一档 <c>SaveChangesAsync</c> 在 <c>WritesAreDue</c> 就返回了，三档闸门一句都不问，
+    /// 所以它给的是「一次纯侦测 + 一次空收尾」的价，与侦测腿互为减法对照（判据 ⑤）。</summary>
+    static (long Bytes, double Nanos, int Statements, int Transactions, int Operations) SaveLeg(
+        IEntitySchemaRegistry schemas, int rows, Action<WideRow[], int>? dirty)
+    {
+        var (orm, counters) = Harness.OrmCounted(_ => null, schemas);
+
+        try
+        {
+            var entities = new WideRow[rows];
+            var session = Tracked(new DbContext(orm), entities);
+
+            var at = 1;
+
+            // 非 async 的委托：写成 async lambda 会每次调用多一只状态机，而这一格钉的就是每次保存的字节。
+            // <b>每一轮都要换一个 <c>at</c></b>：写回腿的脏是"把那一列写成 −at"，而 at 不动的话第二轮写的
+            // 还是同一个值 —— 上一轮的 PostFlush 已经把快照重拍成它，于是那一行不脏、整批不发语句，
+            // 本格的写回腿就会量成第二条地板腿（实测抓到过一次：③ 与 ④ 逐字相等）。同第 11 行那一式。
+            Func<Task> run = () =>
+            {
+                dirty?.Invoke(entities, at);
+                at++;
+
+                return session.SaveChangesAsync();
+            };
+
+            var bytes = Measuring.Bytes(run);
+            var nanos = Measuring.Nanoseconds(run);
+
+            counters.Reset();
+            dirty?.Invoke(entities, at + 1);
+
+            var report = session.SaveChangesAsync().GetAwaiter().GetResult();
+
+            return (bytes, nanos, counters.Statements, counters.Transactions, report.Operations.Count);
+        }
+        finally
+        {
+            // 计数器挂在假驱动的静态槽位上（理由见 OfflineAdo 类注释④），用完必须摘 —— 摘掉才使得
+            // "其余各行跑的时候槽位是 null"成为结构保证，而不是"记得摘"。
+            Harness.UnbindCounters();
+        }
+    }
+
+    /// <summary>三腿的弄脏动作。<b>都不分配托管对象</b>（设值口整条取自第 11 行那张 <see cref="SingularSetters"/>，
+    /// 挑法与理由抄自那一格的注释：值类型列、随轮次单调所以脏是恒真的）。</summary>
+    static void DirtyAllColumns(WideRow[] entities, int at)
+    {
+        for (var i = 0; i < entities.Length; i++)
+            Gates.SingularSetters[i % Gates.SingularSetters.Length](entities[i], at);
+    }
+
+    /// <summary>只脏第一只：语句数在两档规模上都是 1，于是 1 000 只那一档与 1 只那一档之差
+    /// 就是纯粹的「会话规模那一个自由度」，发射与批次都不在里面。</summary>
+    static void DirtyFirstRow(WideRow[] entities, int at) => Gates.SingularSetters[0](entities[0], at);
+
+    /// <summary>§12.8 第 13 行：<b>会话规模这一维的跟踪税</b>（1 000 只已跟踪实体）。
+    ///
+    /// <para><b>它补的是两格欠账</b>：① <c>ChangeTrackerDetect10k</c> 那一格自己写着「不在 §12.8 那张门禁表里，
+    /// 给它加一行是改规格而不是补实现」，于是"一次把 <c>DetectChanges</c> 做贵了的 PR 不会被 CI 拦住"这条缺口
+    /// 记在 §14（原话在 <c>DbChangeTracker.DetectChanges</c> 的注释与 <c>Benchmarks.cs</c> 的类注释上）。本行就是把
+    /// 那句"改规格"改掉的那一笔改动。② 第 11 行那三腿的规模是 13 只 —— 会话级的 O(会话) 扫描在那里每只 8 B、
+    /// 整批 104 B —— 本版实测是两腿各 288 B（同一处代码在 13 只规模上的读数），被 29 320 B 那一格整个盖住了。本格把同一个自由度换到 1 000 只上，它才显形成几千字节。</para>
+    ///
+    /// <para><b>本行的口径与第 11 行的分工</b>：第 11 行钉「一批 13 只的保存」，是<em>编排</em>那一半（合并 vs 逐条）；
+    /// 本格地板与纯侦测两腿是<em>跟踪</em>那一半，而它不判合并、不判参数、也不读报告里的 <c>Rows</c>。
+    /// 别把本行的比值当"第 11 行的规模版"：这里的写回腿只脏一只、只发一句，多出来的字节全部落在扫描上。</para>
+    ///
+    /// <para><b>两腿字节相等不是判据，而是形状</b>：① 与 ② 逐字相同就是"§8.2 那句 hash 短路还没接线"的实测。
+    /// 本格不钉"相等"（第 12 行那句教训：把一条待办的形状钉成契约，接线那天它会站在错的一侧），
+    /// 只把两枚各自钉着 —— 哪天短路接上，① 会掉下来而 ② 照旧，那是要重钉，不是要红。</para></summary>
+    static GateRow SessionScanFloor(IEntitySchemaRegistry schemas)
+    {
+        var clean = DetectLeg(schemas, TrackedMany, null);
+        var dirtyAll = DetectLeg(schemas, TrackedMany, DirtyAllColumns);
+        var floor = SaveLeg(schemas, TrackedMany, null);
+        var writeBack = SaveLeg(schemas, TrackedMany, DirtyFirstRow);
+        var writeBackAtOne = SaveLeg(schemas, TrackedOne, DirtyFirstRow);
+
+        // 两点法：写回腿在两档规模上的语句数都是 1，所以这一式里没有发射的份，斜率就是每只的扫描税。
+        var perEntity = (double) (writeBack.Bytes - writeBackAtOne.Bytes) / (TrackedMany - TrackedOne);
+        var perDetected = (double) clean.Bytes / TrackedMany;
+
+        var trackedOk = floor.Operations == 0 && writeBack.Operations == 1 && writeBackAtOne.Operations == 1;
+        var detectOk = clean.Changed == 0 && dirtyAll.Changed == TrackedMany;
+        var scanOk = writeBack.Statements == 1 && writeBack.Transactions == 1
+            && writeBackAtOne.Statements == 1 && writeBackAtOne.Transactions == 1;
+        var floorOk = floor.Statements == 0 && floor.Transactions == 0;
+        var orderOk = clean.Bytes <= dirtyAll.Bytes && floor.Bytes >= clean.Bytes && writeBack.Bytes >= floor.Bytes;
+        var slopeOk = Math.Abs(perEntity - perDetected) < 200;
+
+        // ① = ② 逐字相同就是「短路没接线」的形状；分岔了就把差值印出来。写成一句局部串而不是嵌进插值里，
+        // 免得外层字符串的引号与内层三元式的引号互相吃边界。
+        // 判"同价"用的是 1% 的容差而不是逐字相等：脏腿每只都要把 State 推一格并置粘性位（改前实测差 0.8%），
+        // 那一截与短路与否无关。真接上短路时 ① 会成量级地掉下来，那时这一串自己会翻成"已分岔"。
+        var samePrice = dirtyAll.Bytes - clean.Bytes < clean.Bytes / 100;
+        var shortCircuit = samePrice
+            ? $"同价（差 {N(dirtyAll.Bytes - clean.Bytes)} B = {N((double) (dirtyAll.Bytes - clean.Bytes) * 100 / clean.Bytes)}%）⇒ hash 短路没接线"
+            : $"已分岔 差 {N(dirtyAll.Bytes - clean.Bytes)} B = {N((double) (dirtyAll.Bytes - clean.Bytes) * 100 / clean.Bytes)}%";
+
+        return new GateRow(
+            $"跟踪的会话级那一半税：{TrackedMany:N0} 只已跟踪实体的侦测一轮、空收尾与一句写回",
+            $"全员未变的一轮侦测计数为 0、每只都脏的那一轮计数 = {TrackedMany}（② 拦「窗内弄脏没生效」）；"
+            + $"空收尾 {TrackedMany:N0} 只 0 条语句 0 条事务（④，§8.2「没有欠着语句就不开事务」的规模版）；"
+            + "写回腿 1 条语句 1 条事务且在 1 只档相同（③，会话大小不能改变语句数）；"
+            + "字节单调 ① ≤ ②、③ ≥ ④ ≥ ①（⑤ 方向哨兵）；两点法每只税与纯侦测每只税之差 < 200 B（⑥，"
+            + "O(会话²) 或每只多次整会话拷贝会从这一格显形）",
+            $"① 全员未变一轮 {N(clean.Bytes)} B（{N(perDetected)} B/只）；② 每只都脏一轮 {N(dirtyAll.Bytes)} B"
+            + $"（① = ② {shortCircuit}）；"
+            + $"③ 一句写回 {TrackedMany:N0} 只 {N(writeBack.Bytes)} B（{N(writeBack.Nanos / 1000)} µs，{writeBack.Statements} 句 / {writeBack.Transactions} 事务），"
+            + $"同一形状 1 只档 {N(writeBackAtOne.Bytes)} B（{writeBackAtOne.Statements} 句 / {writeBackAtOne.Transactions} 事务）；"
+            + $"④ 空收尾 {N(floor.Bytes)} B（{N(floor.Bytes - clean.Bytes)} B 是收尾本身、不是侦测）；"
+            + $"每只税 {N(perEntity)} B（纯侦测那维 {N(perDetected)} B/只 ⇒ 扫描之外的每只 {N(perEntity - perDetected)} B）",
+            trackedOk && detectOk && scanOk && floorOk && orderOk && slopeOk ? Verdict.Green : Verdict.Red,
+            "这一格把「跟踪」那一半的价格钉住，而它下面有三件事要说白。第一，第 13 行是本版新加的一行，"
+            + "而加它这件事本身就是规格改动：ChangeTrackerBench 那一格早就写着「§12.8 那张门禁表是原稿列的 CI 阻断项，"
+            + "变更跟踪不在其中，给它加一行是改规格而不是补实现」，本行把那句话改成历史记录，"
+            + "同时把 §14 的「做贵了没人拦」那一格结掉（那条基准的 µs 仍只进 BDN 报告，本格只钉字节 —— 分配是确定量、"
+            + "时间是机器状态，见本节末尾那一段）。第二，① 与 ② 相等<em>不是达标</em>而是形状，本格不判它："
+            + "§8.2 那句「未变更的实体不进列比较」今天没接线，接线那天 ① 掉下来、② 照旧，那一次要重钉而不是报红。"
+            + "第三，③ 与 ④ 之差就是会话级扫描税（AnyDue、两道发射前闸门与 PostFlush 各自按会话过一遍），"
+            + "而它与第 11 行的三腿<em>共用同一批设值口</em>：那里「13 只整批 104 B」这个估算本版<em>被实测顶过一次</em>：改后那场第 11 行两腿对改前那场各降 288 B（不是 104），"
+            + "第 11 行看不见它不是它不存在，是规模不够。两点法那一格（⑥）拿 1 只档当短点，为的就是把"
+            + "「发射一句 UPDATE 要花多少」从斜率里减掉 —— 两档的语句数都是 1，所以差值里没有发射的份。",
+            Pins: [
+                new Pin($"一轮 DetectChanges（{TrackedMany:N0} 只，全员未变）字节", Baselines.DetectCleanBytes, clean.Bytes),
+                new Pin($"一轮 DetectChanges（{TrackedMany:N0} 只，每只都脏）字节", Baselines.DetectDirtyBytes, dirtyAll.Bytes),
+                new Pin($"一次 SaveChanges（{TrackedMany:N0} 只，其中一只欠一句 UPDATE）字节", Baselines.OneWriteSaveBytes, writeBack.Bytes),
             ]);
     }
 

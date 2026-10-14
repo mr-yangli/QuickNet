@@ -79,7 +79,9 @@ sealed class ChangeTracker(QuickSqlOrm orm) : DbChangeTracker
     public override IEnumerable<EntityEntry> Entries()
     {
         foreach (var tracker in _order.ToArray())
-            foreach (var node in tracker.Nodes)
+            // 这一处留拷贝是故意的：Entries() 是调用方手里的诊断视图，而"在枚举里改会话"（一边看一边 Remove）
+            // 是公开口能承诺的形状；内核那六处遍历走 TrackedNodes，不付这一份。
+            foreach (var node in tracker.TrackedNodes.ToArray())
                 yield return tracker.EntryOf(node);
     }
 
@@ -176,7 +178,7 @@ sealed class ChangeTracker(QuickSqlOrm orm) : DbChangeTracker
 
             var edges = tracker.Contract.Collections;
 
-            foreach (var node in tracker.Nodes)
+            foreach (var node in tracker.TrackedNodes)
             {
                 // 已经标删的父：它那一串归删除档的级联管（捞不到还会响），不在这里再判一次缺席。
                 if (node.State == EntityState.Deleted || node.Baselines is not { } baselines)
@@ -269,7 +271,7 @@ sealed class ChangeTracker(QuickSqlOrm orm) : DbChangeTracker
 
             var edges = tracker.Contract.Collections;
 
-            foreach (var node in tracker.Nodes)
+            foreach (var node in tracker.TrackedNodes)
             {
                 if (node.State == EntityState.Deleted)
                     continue;
@@ -552,7 +554,7 @@ sealed class ChangeTracker(QuickSqlOrm orm) : DbChangeTracker
             if (!tracker.MayHaveWrites)
                 continue;
 
-            foreach (var node in tracker.Nodes)
+            foreach (var node in tracker.TrackedNodes)
                 if (tracker.WillWrite(node))
                     return true;
         }
@@ -617,7 +619,7 @@ sealed class ChangeTracker(QuickSqlOrm orm) : DbChangeTracker
             if (!tracker.MayHaveWrites || tracker.Contract.Table.Split is not { } split)
                 continue;
 
-            foreach (var node in tracker.Nodes)
+            foreach (var node in tracker.TrackedNodes)
                 if (tracker.WillWrite(node))
                     throw new QuickSqlException(
                         $"{tracker.EntityType.Name} 声明了分表（{split.Kind} 档，分片键列 {split.ColumnName}），跟踪器写不出去：" +
@@ -650,7 +652,7 @@ sealed class ChangeTracker(QuickSqlOrm orm) : DbChangeTracker
 
             var named = DataSourceRouting.ClusterOf(tracker.Contract.Table);
 
-            foreach (var node in tracker.Nodes)
+            foreach (var node in tracker.TrackedNodes)
             {
                 if (!tracker.WillWrite(node))
                     continue;

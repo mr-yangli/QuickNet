@@ -492,9 +492,11 @@ public sealed class CascadePathTests
         // 三句：主查询、架→位、位→钩。第二层的 IN 里躺的是刚缝出来的那两只位的键（两颗参数），
         // 不是架的键 —— 那一格错了的话钩会整批挂错父，而文本看不出来，所以参数个数也钉住。
         Assert.Equal(3, sent.Count);
-        Assert.Contains("QuickSqlStorageRack", sent[0].Text);
-        Assert.Contains("QuickSqlShelfSlot", sent[1].Text);
-        Assert.Contains("QuickSqlSlotHook", sent[2].Text);
+        // 名字走 CatalogueName：虚谷的 IdentifierPolicy 是 FoldToUpperCase（发射前就折，两支出口都折），
+        // 而这一格钉的是"这一句打的是哪张表"，不是"字面拼法长什么样"。其余四家那一句原样返回。
+        Assert.Contains(Database.CatalogueName("QuickSqlStorageRack"), sent[0].Text);
+        Assert.Contains(Database.CatalogueName("QuickSqlShelfSlot"), sent[1].Text);
+        Assert.Contains(Database.CatalogueName("QuickSqlSlotHook"), sent[2].Text);
         Assert.Equal(1, sent[1].Parameters);
         Assert.Equal(2, sent[2].Parameters);
 
@@ -567,9 +569,10 @@ public sealed class CascadePathTests
 
         // 三句：主查询、托盘→明细、明细→物资。第二句的 IN 里是一颗托盘键，第三句是三种明细键。
         Assert.Equal(3, sent.Count);
-        Assert.Contains("QuickSqlPallet", sent[0].Text);
-        Assert.Contains("QuickSqlPalletLine", sent[1].Text);
-        Assert.Contains("QuickSqlMaterial", sent[2].Text);
+        // 同上：折的是期望值那一边，判据不松成大小写不敏感（口径见 Database.CatalogueName）。
+        Assert.Contains(Database.CatalogueName("QuickSqlPallet"), sent[0].Text);
+        Assert.Contains(Database.CatalogueName("QuickSqlPalletLine"), sent[1].Text);
+        Assert.Contains(Database.CatalogueName("QuickSqlMaterial"), sent[2].Text);
         Assert.Equal(1, sent[1].Parameters);
         Assert.Equal(3, sent[2].Parameters);
 

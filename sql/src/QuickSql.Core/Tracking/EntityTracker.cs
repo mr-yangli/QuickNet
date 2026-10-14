@@ -195,7 +195,12 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
 
     public int Count => _order.Count;
 
-    public IReadOnlyList<Node> Nodes => [.. _order];
+    /// <remarks><b>交的是 <see cref="_order"/> 本身，不是拷贝</b>：这条链上的每一处遍历（本类的
+    /// <see cref="DetectChanges"/>、会话那侧的 <c>AnyDue</c> 与两道发射前闸门）都是按会话规模跑的，
+    /// 拷一份 1 000 元素的引用数组就是 8 KB 一句都不发的工作。枚举期间不改这张表 ——
+    /// 本类改状态与脏位、不改顺序，而会摘掉节点的 <see cref="PostFlush"/> 与 <c>Entries()</c> 各自留着自己的那份拷贝
+    /// （约束的全文写在 <see cref="ITypeTracker.TrackedNodes"/> 上）。</remarks>
+    public IReadOnlyList<Node> TrackedNodes => _order;
 
     /// <remarks>只在「变脏 / 新增 / 删除」时置真，之后不再置假（<see cref="Clear"/> 与 <see cref="PostFlush"/>
     /// 例外）。于是它可以偶然多 true 一次：<c>SaveChanges</c> 那一档扫到零个节点，返回空报告。

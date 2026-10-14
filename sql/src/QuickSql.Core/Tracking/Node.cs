@@ -58,9 +58,17 @@ interface ITypeTracker
     /// <summary>当前跟踪的实例数（含各状态）。</summary>
     int Count { get; }
 
-    /// <summary>跟踪序的快照。<b>返回的是当时那一份的拷贝</b>：写完之后 <see cref="PostFlush"/> 会摘掉
-    /// 已删的节点，而调用方可能正在枚举。</summary>
-    IReadOnlyList<Node> Nodes { get; }
+    /// <summary>跟踪序那张表<em>本身</em>（不是拷贝）。<b>这一格只给内核的只读遍历用</b>：
+    /// <c>DetectChanges</c> 一类的循环每轮都要按会话规模过一遍，而这里每拷一份就是一个 N 元素的引用数组 ——
+    /// 三个调用点各拷一份的代价实测在 1 000 只那一档上是 24 KB 一次保存（§12.8 第 13 行的 ③ − ① 那一截）。
+    /// <para><b>不拷贝换来的那条约束要一起读</b>：枚举期间不许改这张表。内核的六个调用点都满足 ——
+    /// <c>DetectChanges</c> / <c>AnyDue</c> / <c>EnsureNoSplitWrites</c> / <c>WriteCluster</c> 只读节点，
+    /// 而摘行那一档把「判」与「动手」分成两趟（理由写在 <c>ChangeTracker.DiffDetachedChildren</c> 上），
+    /// 动手那一趟枚举的是自己攒的那份 <c>due</c> 而不是这张表。</para>
+    /// <para>真需要"当时的快照"那一维的调用方自己拷：<c>ChangeTracker.Entries()</c> 要的是「调用方可以在枚举里
+    /// <c>Remove</c>」这个公开承诺（<c>PostFlush</c> 用的也是同一手），<c>SnapshotEntities()</c> 要的是
+    /// <c>Local</c> 那句"快照而不是活集合"。两处都付拷贝，因为它们<em>答的就是快照那道题</em>。</para></summary>
+    IReadOnlyList<Node> TrackedNodes { get; }
 
     /// <summary>这个类型有没有"还没写出去或写的时候必须算一次"的东西。<c>SaveChanges</c> 用它跳过空桶，
     /// 于是只读过数据的会话不会为每个类型各扫三遍。</summary>

@@ -34,7 +34,9 @@ public abstract class DbChangeTracker
     /// <c>AutoDetectChangesEnabled = false</c> 时它仍会在这里跑；<em>不</em>跑的是链式物化之前那一次，
     /// 那一条路的代价账在 §8.2「快照」那一格与 <c>ChangeTrackerDetect10k</c> 那一行基准上
     /// （实测 520 B/只、约 0.24 µs/只，全部落在装箱上；见 §12.8 的 PR 附件表）。
-    /// <b>它不是九行门禁之一，所以把它做贵了不会让 CI 变红</b> —— 那句话欠在 §14。</summary>
+    /// <b>v0.39 起这一句作废</b>：§12.8 添了第十三行（<c>Gates.SessionScanFloor</c>），这一轮比较的字节数
+    /// 从此有门禁钉着 —— 全员未变与每只都脏各一枚，再加一枚"1 000 只里只有一只欠语句"的保存全程。
+    /// 把 <c>DetectChanges</c> 做贵了的 PR 从今天起红在退出码的回归位上，不再只欠一句台账。</summary>
     public abstract int DetectChanges();
 
     /// <summary>把会话清空：所有实例转 <see cref="EntityState.Detached"/>，未写出的改动就此丢弃。
