@@ -11,9 +11,9 @@
   <PropertyGroup>
     <Authors>YANGLI</Authors>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
-    <PackageProjectUrl>https://gitee.com/mr_yangli/QuickNet</PackageProjectUrl>
+    <PackageProjectUrl>https://gitee.com/mr_yangli/quick-net</PackageProjectUrl>
     <RepositoryType>git</RepositoryType>
-    <RepositoryUrl>https://gitee.com/mr_yangli/QuickNet.git</RepositoryUrl>
+    <RepositoryUrl>https://gitee.com/mr_yangli/quick-net.git</RepositoryUrl>
   </PropertyGroup>
 
 </Project>
