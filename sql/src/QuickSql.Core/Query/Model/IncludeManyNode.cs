@@ -1,3 +1,5 @@
+using QuickSql.Metadata;
+
 namespace QuickSql.Query.Model;
 
 /// <summary>集合导航（to-many）的加载意图（§5.7）。与 <see cref="IncludeNode"/> 不同：
@@ -27,4 +29,21 @@ public sealed class IncludeManyNode
     /// 所以主查询 SQL 同样一个字符不变。与 <see cref="Children"/> 分两格是因为父端不同：
     /// 那一格挂的是<em>子实体的子实体</em>（往下走一层），这一格挂的是<em>子实体手里的另一只实体</em>（往旁边走一根）。</summary>
     public List<IncludeNode> References { get; } = [];
+
+    /// <summary><c>OrderByMany</c> 落在<em>本层子行</em>上的序（§5.7 的子行排序口）。执行层把它灌进这一层
+    /// 那条子 SELECT 的 <see cref="Sql.Ast.SelectStatement.OrderBy"/> 槽 —— <b>发射在库里，不在内存里</b>：
+    /// 缝完再排只能在应用进程里付一次全量拷贝，而"每父取前 N"那一族句子离开 ORDER BY 根本发不出来。
+    /// 空清单 = 没点过这颗口，那一档子 SELECT 与这颗口存在之前<em>逐字节同形</em>（方言对空序不发
+    /// <c>ORDER BY</c>）。每一层各拿各的清单：父节点排父层子行，挂在 <see cref="Children"/> 上的那一层
+    /// 排它自己的子行，一颗口不隔层生效。</summary>
+    public List<IncludeManyOrdering> Orderings { get; } = [];
 }
+
+/// <summary>子行序的一档：<b>存的是接链那一刻就在子实体契约上认好的列</b>（<c>OrderByMany</c> 的认列
+/// 与链级 <c>OrderBy(string)</c> 共用同一颗咽喉，认不出当场抛），而不是表达式本身。理由是这两笔账：
+/// 其一，报错要响在<em>接上链的那一刻</em>而不是执行期缝子行时才发现排不出去（§5.8 的"响在书写处"纪律）；
+/// 其二，执行层那条子 SELECT 每次执行都要现造 AST，让它拿着现成的 <see cref="ColumnContract"/> 直发，
+/// 不必每跑一次就重认一遍名字。</summary>
+/// <param name="Column">子实体契约上的那一颗列。</param>
+/// <param name="Descending">降序位，口径与 <c>OrderBy(string, bool)</c> 一致：方向由形参给，不藏在串里。</param>
+public sealed record IncludeManyOrdering(ColumnContract Column, bool Descending);

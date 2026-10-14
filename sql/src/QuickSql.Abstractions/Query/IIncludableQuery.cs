@@ -24,7 +24,12 @@ public interface IIncludableQuery<T, TLastProp> : IQuery<T>
 /// <c>AsSplitQuery()</c> 同一颗加载器）—— 见 §5.7。两边的类型参数都记<em>最后一层加载到的元素类型</em>，
 /// 供下一颗 lambda 的形参在编译期定下来 —— 集合那一档记的是<em>元素</em>型（<c>TItem</c>）而不是
 /// <c>List&lt;TItem&gt;</c>，所以下一层写的是 <c>g =&gt; g.Details</c>（形参 = 一只分组）、旁边那一根写的是
-/// <c>g =&gt; g.Warehouse</c>（同一只分组手里的另一只实体）。</para></summary>
+/// <c>g =&gt; g.Warehouse</c>（同一只分组手里的另一只实体）。</para>
+///
+/// <para><b>子行的序长在链上</b>：这一家继承 <see cref="IQuery{T}"/>，链级 <c>OrderBy</c> 排的永远是
+/// <em>父行</em>；要给<em>最后一层</em>子行点序，接 <c>OrderByMany(d =&gt; d.Order)</c> 那颗扩展口
+/// （内核 §5.7 的集合加载一族）—— 它把序落进这一层那条另发的 <c>SELECT … WHERE 外键 IN (…)</c> 的
+/// <c>ORDER BY</c>，主查询一个字符不变。点在哪一层后面就排哪一层，没点的层不排。</para></summary>
 /// <typeparam name="T">根实体。</typeparam>
 /// <typeparam name="TItem">链上最后一层集合导航的元素类型。</typeparam>
 public interface IIncludableCollectionQuery<T, TItem> : IQuery<T>

@@ -697,6 +697,42 @@ sealed class QueryEngine
         return node;
     }
 
+    /// <summary>给链上最后一层集合节点的<em>子行</em>点序（<c>OrderByMany</c>，§5.7 的子行排序口）。
+    /// <b>动的是节点，不是模型</b>：序记在这一层的 <see cref="IncludeManyNode.Orderings"/> 上，
+    /// 主查询与 <c>QueryModel</c> 的清单一个字符不变 —— 与 <see cref="ThenIncludeMany"/>、
+    /// <see cref="ThenInclude(IncludeManyNode, LambdaExpression)"/> 同一条纪律。
+    /// 认列在<em>接上链的这一步</em>就做完（共用 <see cref="Column"/> 那颗三档咽喉）：排错列的代价是
+    /// 页面上"看着合理的错顺序"，没人会为此报修，所以它只能在这里响，不许拖到执行期。
+    /// 再点一次是整串替换 —— 与契约上 <c>OrderBy</c> 之后再 <c>OrderBy</c> 同一个 LINQ 口径，
+    /// 那颗口没有 <c>ThenBy</c> 的替身，多列子行序是这格今天没给的射程。</summary>
+    public void OrderByMany(IncludeManyNode node, LambdaExpression key, bool descending)
+    {
+        var contract = Orm.Schemas.Contract(node.ChildType);
+        var column = Column(contract, ManyOrderMember(key));
+
+        node.Orderings.Clear();
+        node.Orderings.Add(new IncludeManyOrdering(column, descending));
+    }
+
+    /// <summary>子行序 key 的形态闸：<b>只收子实体上的直接属性访问</b>（<c>d =&gt; d.Order</c>，允许值类型
+    /// 装箱那一层 <c>Convert</c> 壳）。嵌套路径（<c>d =&gt; d.Warehouse.Name</c>）当场拒而不是悄悄剥成
+    /// <c>Name</c>：那一剥会拿"物资的 Name"去撞子实体自己的列名，撞中了就是排错列、撞不中就是排空气 ——
+    /// 两条都比"接链时响一句、让用户自己换列"坏。这一档不发 JOIN（子 SELECT 的形状由外键那一条边定死），
+    /// 所以排在别的表那一侧的列<em>根本发不出来</em>，拒它是射程声明，不是偷懒。</summary>
+    static string ManyOrderMember(LambdaExpression key)
+    {
+        var body = key.Body is UnaryExpression { NodeType: ExpressionType.Convert or ExpressionType.ConvertChecked } box
+            ? box.Operand
+            : key.Body;
+
+        if (body is MemberExpression { Expression: ParameterExpression } member)
+            return member.Member.Name;
+
+        throw new QuickSqlException(
+            $"OrderByMany 的排序键必须是子实体上的直接属性访问（如 d => d.Order）：这颗口只把序落进子行那一条另发的 SELECT 的 ORDER BY，" +
+            $"这一档不发 JOIN，嵌套路径（如 d => d.Warehouse.Name）与算式都排不出去。当前表达式形态是 {key.Body.NodeType}。");
+    }
+
     /// <summary>两层共用的一颗节点构造：从父契约上按属性名取集合元素类型，再发现外键。</summary>
     IncludeManyNode NewIncludeManyNode(EntityContract parentContract, string memberName)
     {
@@ -1069,6 +1105,9 @@ sealed class QueryEngine
             Columns = childColumns,
             From = new SourceTable(childTable),
             Where = where,
+            // 子行序（OrderByMany，§5.7）：点过就把序灌进这一层子 SELECT 的 ORDER BY 槽，发射在方言里；
+            // 没点过这一格就是空清单，方言不发 ORDER BY，那条子句与本口存在之前逐字节同形。
+            OrderBy = [.. node.Orderings.Select(o => new OrderExpression(new ColumnExpression(childTable, o.Column), o.Descending))],
         };
 
         var dialect = Orm.Provider.Dialect;

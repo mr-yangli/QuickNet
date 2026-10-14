@@ -1,6 +1,13 @@
 using QuickSql.Materialization;
 using QuickSql.Query;
 using QuickSql.TestInfra;
+using System.Collections;
+using System.Data;
+using System.Data.Common;
+using System.Diagnostics.CodeAnalysis;
+using QuickSql.Providers;
+using QuickSql.Sql;
+using QuickSql.Values;
 using Xunit;
 
 namespace QuickSql.Tests.Dialects;
@@ -165,6 +172,324 @@ public sealed class IncludeManyChainTests
         Checks.Has("IReadOnlyList<ShopCert>", failure.Message);
         Checks.Has("追加口", failure.Message);
         Checks.Absent("没有名为", failure.Message);
+    }
+
+    // ── OrderByMany（§5.7 的子行排序口）──────────────────────────────
+    //
+    // 头注里那句"子查询的文本由执行层现造，离线这一步压根不发它"从今天起要多一颗例外：这一族
+    // 用 <c>AopExecutingTests</c> 同款的替身驱动（只换连接出口，方言与发射器都是 SqlServer 真身）
+    // 把两条 SELECT 真发到桩上，于是<em>子句的文本</em>第一次能在离线量到 —— 母句照旧由
+    // <c>ToSql()</c> 那一家钉，这一族钉的是父句逐字节不动之外，序确实进了子句的 ORDER BY。
+
+    /// <summary>点了这颗口：子 SELECT 带上 T-SQL 引号的 <c>ORDER BY</c> 出场；没点的那一形，
+    /// 子句里连 <c>ORDER BY</c> 三个字都不出现（与本口存在之前逐字节同形）；而<em>父句</em>与
+    /// 不点的孪生逐字节相等 —— 三件事一起钉，才配得上"发射在库里、主查询一个字符不变"那句承诺。</summary>
+    [Fact]
+    public async Task The_ordered_child_select_carries_the_order_by_while_the_parent_twin_is_untouched()
+    {
+        var plain = new ReadJournal();
+        await ProbeOrm(plain).Select<Rack>().IncludeMany(r => r.Slots!).ToListAsync(TestContext.Current.CancellationToken);
+
+        var ordered = new ReadJournal();
+        await ProbeOrm(ordered).Select<Rack>().IncludeMany(r => r.Slots!).OrderByMany(s => s.Bin)
+            .ToListAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, plain.Texts.Count);
+        Assert.Equal(2, ordered.Texts.Count);
+
+        Assert.Equal(plain.Texts[0], ordered.Texts[0]);
+        Checks.Absent("ORDER BY", plain.Texts[1]);
+        Checks.Has("ORDER BY [t0].[Bin] ASC", ordered.Texts[1]);
+    }
+
+    /// <summary>嵌套两层、各点各的：点在 <c>IncludeMany</c> 后面排第一层子行，点在
+    /// <c>ThenIncludeMany</c> 后面排第二层 —— "每一层都生效"不是一句承诺，是这三条文本读数。
+    /// 特别钉住"没点的那一层不发 ORDER BY"：隔层生效或静默吞层这两种失败形态在这一格里都无处藏。</summary>
+    [Fact]
+    public async Task Order_by_many_targets_the_layer_it_was_written_after()
+    {
+        var plain = new ReadJournal();
+        await ProbeOrm(plain).Select<Rack>().IncludeMany(r => r.Slots!).ThenIncludeMany(s => s.Hooks!)
+            .ToListAsync(TestContext.Current.CancellationToken);
+
+        var ordered = new ReadJournal();
+        await ProbeOrm(ordered).Select<Rack>()
+            .IncludeMany(r => r.Slots!)
+            .OrderByMany(s => s.Bin, descending: true)
+            .ThenIncludeMany(s => s.Hooks!)
+            .OrderByMany(h => h.Name)
+            .ToListAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(3, ordered.Texts.Count);
+
+        Assert.Equal(plain.Texts[0], ordered.Texts[0]);
+        Checks.Has("ORDER BY [t0].[Bin] DESC", ordered.Texts[1]);
+        Checks.Has("ORDER BY [t0].[Name] ASC", ordered.Texts[2]);
+    }
+
+    /// <summary>认列响在<em>接链的那一刻</em>，不等执行期缝子行：<c>Hooks</c> 是导航不是列，
+    /// 递进这颗口与链级 <c>OrderBy(string)</c> 撞同一句话（三档咽喉共用一颗，§5.8）。</summary>
+    [Fact]
+    public void An_unmappable_child_key_refuses_at_the_chain()
+    {
+        var failure = Checks.Raised<QuickSqlException>(
+            () => orm().Select<Rack>().IncludeMany(r => r.Slots!).OrderByMany(s => s.Hooks));
+
+        Checks.Has("没有名为 Hooks 的列", failure.Message);
+    }
+
+    /// <summary>嵌套路径（<c>d =&gt; d.Warehouse.Name</c> 那一形）当场拒，而不是剥成末级名去撞子实体
+    /// 自己的列：这一档不发 JOIN，排在别的表那一侧的列根本发不出来。</summary>
+    [Fact]
+    public void A_nested_path_key_is_refused_rather_than_flattened()
+    {
+        var failure = Checks.Raised<QuickSqlException>(
+            () => orm().Select<Rack>().IncludeMany(r => r.Slots!).OrderByMany(s => s.Bin!.Length));
+
+        Checks.Has("直接属性访问", failure.Message);
+    }
+
+    /// <summary>替身驱动的读数出口：把每条真发到连接上的 SELECT 文本记进账本，并按表名给一行现成的
+    /// 行集（架一句、位一句、钩一句）。父查询必须交回一只架，否则子 SELECT 整个被跳过；位必须交回
+    /// 一只位，否则第二层没有可当 IN 值的键。桩顶掉的只有连接出口，方言、发射器、参数 binder 全是
+    /// SqlServer 真身 —— 这正是"文本里那对 <c>[]</c> 引号算真读数"的前提。</summary>
+    static QuickSqlOrm ProbeOrm(ReadJournal journal)
+        => new(new QuickSqlOrmOptions
+        {
+            Provider = new ProbeReadProvider(SqlServer.Provider(SqlServer.NoDriverFactory.Instance), journal),
+            ConnectionString = SqlServer.OfflineConnectionString,
+        });
+
+    sealed class ReadJournal
+    {
+        public List<string> Texts { get; } = [];
+
+        public DbDataReader ReaderFor(string sql)
+        {
+            Texts.Add(sql);
+
+            if (sql.Contains("QuickSqlStorageRack", StringComparison.Ordinal))
+                return new ScriptedReader([new object?[] { 1, "架" }], typeof(int), typeof(string));
+
+            if (sql.Contains("QuickSqlShelfSlot", StringComparison.Ordinal))
+                return new ScriptedReader([new object?[] { 11, 1, "位" }], typeof(int), typeof(int), typeof(string));
+
+            if (sql.Contains("QuickSqlSlotHook", StringComparison.Ordinal))
+                return new ScriptedReader([new object?[] { 21, 11, "钩" }], typeof(int), typeof(int), typeof(string));
+
+            throw new InvalidOperationException($"读数桩没计划过的语句形状：{sql}");
+        }
+    }
+
+    /// <summary>按位置交行的最小行源：物化那边 int 走 <c>GetInt32</c>、string 走 <c>IsDBNull + GetString</c>
+    /// （<c>Materialization/ReadOps.cs</c> 的臂表），其余访问器这一册撞不到，撞上即响。</summary>
+    sealed class ScriptedReader(IReadOnlyList<object?[]> rows, params Type[] fieldTypes) : DbDataReader
+    {
+        int _at = -1;
+
+        public override int FieldCount => fieldTypes.Length;
+        public override int Depth => 0;
+        public override bool IsClosed => false;
+        public override bool HasRows => rows.Count > 0;
+        public override int RecordsAffected => -1;
+        public override int VisibleFieldCount => fieldTypes.Length;
+        public override bool Read() => ++_at < rows.Count;
+        public override bool NextResult() => false;
+
+        object? Value(int ordinal) => rows[_at][ordinal];
+
+        public override bool IsDBNull(int ordinal) => Value(ordinal) is null;
+        public override object GetValue(int ordinal) => Value(ordinal)!;
+        public override Type GetFieldType(int ordinal) => fieldTypes[ordinal];
+        public override string GetName(int ordinal) => $"col{ordinal}";
+        public override string GetDataTypeName(int ordinal) => fieldTypes[ordinal].Name;
+        public override int GetOrdinal(string name) => throw new NotSupportedException("物化按位置读，不按名字取列。");
+        public override object this[int ordinal] => GetValue(ordinal);
+        public override object this[string name] => throw new NotSupportedException();
+
+        public override int GetValues(object[] values)
+        {
+            var taken = Math.Min(values.Length, fieldTypes.Length);
+
+            for (var i = 0; i < taken; i++)
+                values[i] = Value(i)!;
+
+            return taken;
+        }
+
+        public override int GetInt32(int ordinal) => (int)Value(ordinal)!;
+        public override string GetString(int ordinal) => (string)Value(ordinal)!;
+
+        public override bool GetBoolean(int ordinal) => throw NotUsed();
+        public override byte GetByte(int ordinal) => throw NotUsed();
+        public override long GetBytes(int ordinal, long dataOffset, byte[]? buffer, int bufferOffset, int length) => throw NotUsed();
+        public override char GetChar(int ordinal) => throw NotUsed();
+        public override long GetChars(int ordinal, long dataOffset, char[]? buffer, int bufferOffset, int length) => throw NotUsed();
+        public override DateTime GetDateTime(int ordinal) => throw NotUsed();
+        public override decimal GetDecimal(int ordinal) => throw NotUsed();
+        public override double GetDouble(int ordinal) => throw NotUsed();
+        public override float GetFloat(int ordinal) => throw NotUsed();
+        public override Guid GetGuid(int ordinal) => throw NotUsed();
+        public override short GetInt16(int ordinal) => throw NotUsed();
+        public override long GetInt64(int ordinal) => throw NotUsed();
+
+        public override IEnumerator GetEnumerator() => rows.GetEnumerator();
+
+        static NotSupportedException NotUsed()
+            => new("靶子实体只有 int 与 string 两臂：撞上别的访问器说明链的形状变了，这一册要显式承认。");
+
+        protected override void Dispose(bool disposing)
+        {
+        }
+    }
+
+    /// <summary>只换连接出口的那一层：其余能力逐字转交内层真 provider（与 <c>AopExecutingTests</c>
+    /// 那颗 <c>ProbeProvider</c> 同一条纪律，只是这里的命令要交回行源而不是只认 non-query）。</summary>
+    sealed class ProbeReadProvider(IDbProvider inner, ReadJournal journal) : IDbProvider
+    {
+        public DbKind Kind => inner.Kind;
+        public DbCapabilities Capabilities => inner.Capabilities;
+        public IConnectorFactory Connectors { get; } = new ProbeConnectors(journal);
+        public ISqlDialect Dialect => inner.Dialect;
+        public ITypeMap Types => inner.Types;
+        public IValueBinder Values => inner.Values;
+        public IExpressionRules Expressions => inner.Expressions;
+        public ICodeFirstDialect CodeFirst => inner.CodeFirst;
+        public ISchemaReader Schema => inner.Schema;
+        public IKeyStrategy Keys => inner.Keys;
+        public IConcurrencyStrategy Concurrency => inner.Concurrency;
+        public IChangeGuard ChangeGuard => inner.ChangeGuard;
+        public IBulkStrategy? Bulk => inner.Bulk;
+    }
+
+    sealed class ProbeConnectors(ReadJournal journal) : IConnectorFactory
+    {
+        public DbConnection CreateConnection(string connectionString) => new ProbeConnection();
+
+        public DbCommand CreateCommand(DbConnection connection) => new ProbeCommand(journal, connection);
+
+        public bool TryEnsureLoaded(out string? failure)
+        {
+            failure = null;
+            return true;
+        }
+    }
+
+    sealed class ProbeConnection : DbConnection
+    {
+        ConnectionState _state = ConnectionState.Closed;
+
+        [AllowNull] public override string ConnectionString { get; set; } = SqlServer.OfflineConnectionString;
+        public override string Database => "probe-db";
+        public override string DataSource => "probe";
+        public override string ServerVersion => "0";
+        public override ConnectionState State => _state;
+
+        public override void ChangeDatabase(string databaseName) => throw new NotSupportedException();
+        public override void Close() => _state = ConnectionState.Closed;
+        public override void Open() => _state = ConnectionState.Open;
+
+        protected override DbTransaction BeginDbTransaction(IsolationLevel isolationLevel) => throw new NotSupportedException();
+
+        protected override DbCommand CreateDbCommand() => new ProbeCommand(null, this);
+    }
+
+    sealed class ProbeCommand(ReadJournal? journal, DbConnection? connection) : DbCommand
+    {
+        DbParameterCollection? _parameters;
+
+        [AllowNull] public override string CommandText { get; set; } = string.Empty;
+        public override int CommandTimeout { get; set; }
+        public override CommandType CommandType { get; set; } = CommandType.Text;
+        public override bool DesignTimeVisible { get; set; }
+        public override UpdateRowSource UpdatedRowSource { get; set; }
+
+        protected override DbConnection? DbConnection { get => connection; set => _ = value; }
+        protected override DbParameterCollection DbParameterCollection => _parameters ??= new ProbeParameters();
+        protected override DbTransaction? DbTransaction { get; set; }
+
+        public override void Cancel()
+        {
+        }
+
+        public override void Prepare()
+        {
+        }
+
+        protected override DbParameter CreateDbParameter() => new ProbeParameter();
+
+        protected override DbDataReader ExecuteDbDataReader(CommandBehavior behavior)
+            => journal!.ReaderFor(CommandText);
+
+        public override int ExecuteNonQuery() => throw new NotSupportedException("这一册只发 SELECT。");
+        public override object? ExecuteScalar() => throw new NotSupportedException("这一册只发 SELECT。");
+    }
+
+    sealed class ProbeParameter : DbParameter
+    {
+        public override DbType DbType { get; set; } = DbType.Object;
+        public override ParameterDirection Direction { get; set; } = ParameterDirection.Input;
+        public override bool IsNullable { get; set; }
+
+        [AllowNull] public override string ParameterName { get; set; } = string.Empty;
+        public override int Size { get; set; }
+
+        [AllowNull] public override string SourceColumn { get; set; } = string.Empty;
+        public override bool SourceColumnNullMapping { get; set; }
+        public override object? Value { get; set; }
+
+        public override void ResetDbType() => DbType = DbType.Object;
+    }
+
+    sealed class ProbeParameters : DbParameterCollection
+    {
+        readonly List<DbParameter> _items = [];
+
+        public override int Count => _items.Count;
+
+        public override object SyncRoot { get; } = new();
+
+        public override int Add(object value)
+        {
+            _items.Add((DbParameter)value);
+            return _items.Count - 1;
+        }
+
+        public override void AddRange(Array values)
+        {
+            foreach (var value in values)
+                _items.Add((DbParameter)value!);
+        }
+
+        public override void Clear() => _items.Clear();
+
+        public override bool Contains(object value) => _items.Contains(value);
+
+        public override bool Contains(string value) => IndexOf(value) >= 0;
+
+        public override void CopyTo(Array array, int index) => _items.ToArray().CopyTo(array, index);
+
+        public override IEnumerator GetEnumerator() => _items.GetEnumerator();
+
+        public override int IndexOf(object value) => _items.IndexOf((DbParameter)value);
+
+        public override int IndexOf(string parameterName) => _items.FindIndex(p => p.ParameterName == parameterName);
+
+        public override void Insert(int index, object value) => _items.Insert(index, (DbParameter)value);
+
+        public override void Remove(object value) => _items.Remove((DbParameter)value);
+
+        public override void RemoveAt(int index) => _items.RemoveAt(index);
+
+        public override void RemoveAt(string parameterName) => RemoveAt(IndexOf(parameterName));
+
+        protected override DbParameter GetParameter(int index) => _items[index];
+
+        protected override DbParameter GetParameter(string parameterName) => _items[IndexOf(parameterName)];
+
+        protected override void SetParameter(int index, DbParameter value) => _items[index] = value;
+
+        protected override void SetParameter(string parameterName, DbParameter value) => _items[IndexOf(parameterName)] = value;
     }
 
     /// <summary>写入口同样受保护、而初始化器<em>不</em>预置集合位的那一形：缝合当场找不到可追加的现串。

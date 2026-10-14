@@ -94,6 +94,47 @@ public static class IncludeExtensions
 
         return fq;
     }
+
+    /// <summary>给链上<em>最后一层</em>集合加载的子行点序（§5.7 的子行排序口）：
+    /// <c>IncludeMany(r =&gt; r.Details).OrderByMany(d =&gt; d.Order)</c> —— 这一层另发的那条子 SELECT
+    /// 带上 <c>ORDER BY</c> 出场，缝回父实体的顺序就是库里的顺序。
+    ///
+    /// <para><b>为什么是这一颗形状，而不是 <c>IncludeMany(navigation, orderBy, descending)</c> 的可选形参</b>：
+    /// 这一家的链式语法（<see cref="ThenIncludeMany"/> / <see cref="ThenInclude"/>）全都长在
+    /// <see cref="IIncludableCollectionQuery{T, TItem}"/> 上、各收各自那一档的 lambda（v0.39 契约注释里
+    /// 写明的"类型参数记最后一层元素型，供下一颗 lambda 的形参在编译期定下来"就是这套语法的地基）；
+    /// 把序塞进 <c>IncludeMany</c> 的形参表，只盖得住<em>第一层</em> —— <c>ThenIncludeMany</c> 是另一颗口，
+    /// 要盖嵌套就得在它身上再抄一遍可选形参，一颗能力分裂成两颗口、两套默认值。长在链上则天然逐层可达：
+    /// 点在哪一层后面就排哪一层（<c>.IncludeMany(a).OrderByMany(x).ThenIncludeMany(b).OrderByMany(y)</c>
+    /// 两层各排各的），没点的层不排 —— 目标由<em>书写位置</em>显式给出，不存在"隔层生效"或"静默吞掉下一层"
+    /// 这两种失败形态。这与 <c>OrderBy(string, bool)</c> 同一口径：<b>方向由形参给，不写在串里、不藏在表达式里</b>。</para>
+    ///
+    /// <para><b>发射在库里</b>：那颗序进的是这一层子 SELECT 的 <c>ORDER BY</c>（目标方言的引号由发射器加），
+    /// 不是物化之后在内存里排 —— 后者既表达不了方言侧的序语义，也白付一次全量拷贝。
+    /// <b>主查询一个字符不变</b>：与整条集合链同一条纪律；没点这颗口时子 SELECT 里连
+    /// <c>ORDER BY</c> 三个字都不出现，与本口存在之前逐字节同形。
+    /// 排序键认列与链级 <c>OrderBy(string)</c> 共用同一颗三档咽喉（属性名→列名→大小写不敏感唯一命中），
+    /// <b>认不出当场抛</b>在接链的那一刻；只收子实体上的直接属性访问，嵌套路径当场拒（那颗口上写了为什么）。
+    /// 再点一次是整串替换（<c>OrderBy</c> 之后 <c>OrderBy</c> 的 LINQ 口径）；多列子行序今天没有出口。</para>
+    ///
+    /// <para><b>链级 <c>OrderBy</c> 不归它管</b>：<see cref="IIncludableCollectionQuery{T, TItem}"/> 继承
+    /// <see cref="IQuery{T}"/>，那一句排的还是父行 —— 两颗口各排各的行集，互不遮蔽。</para></summary>
+    /// <typeparam name="T">根实体。</typeparam>
+    /// <typeparam name="TItem">链上最后一层集合导航的元素类型 —— 排序键就从它上认列。</typeparam>
+    /// <typeparam name="TKey">排序键的类型。泛型而不是 <c>IComparable</c>：免掉值类型每一次的装箱。</typeparam>
+    public static IIncludableCollectionQuery<T, TItem> OrderByMany<T, TItem, TKey>(
+        this IIncludableCollectionQuery<T, TItem> query,
+        Expression<Func<TItem, TKey>> key,
+        bool descending = false)
+    {
+        if (query is not QuickSqlIncludableManyQuery<T, TItem> fq)
+            throw new QuickSqlException(
+                $"OrderByMany 只能用在 QuickSql 的 IncludeMany/ThenIncludeMany 链式对象上。当前类型是 {query.GetType().Name}。");
+
+        fq.Engine.OrderByMany(fq.LastIncludeManyNode, key, descending);
+
+        return fq;
+    }
 }
 
 /// <summary><see cref="IIncludableQuery{T, TProp}"/> 的内部实现。携带最后加载的 <see cref="IncludeNode"/>，

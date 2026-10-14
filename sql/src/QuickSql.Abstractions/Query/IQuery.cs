@@ -150,7 +150,9 @@ public interface IQuery<T> : IAsyncEnumerable<T>
     /// 返回 <see cref="IIncludableCollectionQuery{T, TDetail}"/>，所以可以再往下一层挂
     /// <c>ThenIncludeMany</c>（<c>IncludeMany(t =&gt; t.Groups).ThenIncludeMany(g =&gt; g.Details)</c> 三张表两条子查询，
     /// 下一层的父端就是上一层刚缝出来的那一批）。外键发现按<em>约定</em>三档：子实体上指向父类型的引用导航、
-    /// 集合边上点名的 <c>[ForeignKey]</c>、列名 <c>{父类型名}Id</c>。</summary>
+    /// 集合边上点名的 <c>[ForeignKey]</c>、列名 <c>{父类型名}Id</c>。
+    /// <b>子行的序</b>接链上的 <c>OrderByMany(d =&gt; d.Order)</c> 那颗扩展口（排在 <c>ThenIncludeMany</c>
+    /// 之前就是给前一层点序）：发射在这一层子 SELECT 的 <c>ORDER BY</c> 上，主查询与不发序时逐字节同形。</summary>
     IIncludableCollectionQuery<T, TDetail> IncludeMany<TDetail>(Expression<Func<T, IEnumerable<TDetail>>> navigation);
 
     /// <summary>显式别名，取代按形参名找表（§5.1）。</summary>
