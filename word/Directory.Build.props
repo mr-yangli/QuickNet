@@ -15,7 +15,7 @@
   <!-- NuGet 打包元数据里本子树独有的那三颗。版本从 0.1.0-beta.1 起，理由见 excel/Directory.Build.props
        那一段注释。 -->
   <PropertyGroup>
-    <Version>0.1.0-beta.2</Version>
+    <Version>0.1.0-beta.3</Version>
     <PackageReadmeFile>quickword-usage.md</PackageReadmeFile>
     <PackageTags>word;docx;table;export</PackageTags>
   </PropertyGroup>
