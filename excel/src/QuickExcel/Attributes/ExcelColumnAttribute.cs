@@ -34,6 +34,12 @@ public sealed class ExcelColumnAttribute : Attribute
     /// <summary>Trim leading/trailing whitespace on import. Default true.</summary>
     public bool AutoTrim { get; set; } = true;
 
+    /// <summary>Bold the column's cells (header and body). Default false.</summary>
+    public bool Bold { get; set; }
+
+    /// <summary>Horizontal alignment for the column's cells (header and body). Default leaves Excel's own alignment.</summary>
+    public ExcelAlign Align { get; set; } = ExcelAlign.Default;
+
     public ExcelColumnAttribute() { }
     public ExcelColumnAttribute(string name) => Name = name;
 }

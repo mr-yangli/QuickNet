@@ -1,7 +1,6 @@
-using System.Collections;
-using System.Reflection;
 using QuickExcel.Internal.Metadata;
 using QuickExcel.Internal.OpenXml;
+using System.Collections;
 
 namespace QuickExcel;
 
@@ -27,7 +26,7 @@ internal static class SheetBuilder
 {
     public static List<SheetInput> Build(object value, ExportOptions options)
     {
-        if (value is null) throw new ArgumentNullException(nameof(value));
+        ArgumentNullException.ThrowIfNull(value);
 
         if (value is IEnumerable<ExcelSheet> multi)
         {
@@ -39,9 +38,9 @@ internal static class SheetBuilder
         }
 
         if (value is ExcelSheet single)
-            return new List<SheetInput> { FromRows(single.Rows, single.Name) };
+            return [FromRows(single.Rows, single.Name)];
 
-        return new List<SheetInput> { FromRows(value, options.SheetName) };
+        return [FromRows(value, options.SheetName)];
     }
 
     private static SheetInput FromRows(object rows, string sheetName)

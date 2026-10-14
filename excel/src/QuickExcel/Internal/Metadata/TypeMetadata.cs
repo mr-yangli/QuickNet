@@ -117,6 +117,8 @@ internal static class TypeMetadataCache
             Required = (col?.Required ?? false) || validation.OfType<RequiredAttribute>().Any(),
             IsImage = isImage,
             AutoTrim = col?.AutoTrim ?? true,
+            Bold = col?.Bold ?? false,
+            Align = col?.Align ?? ExcelAlign.Default,
             ImageOptions = imgAttr,
             Getter = CompileGetter(member),
             Setter = CompileSetter(member),

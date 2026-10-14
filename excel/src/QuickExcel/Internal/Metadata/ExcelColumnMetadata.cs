@@ -36,6 +36,12 @@ internal sealed class ExcelColumnMetadata
 
     public bool AutoTrim { get; init; } = true;
 
+    /// <summary>Bold this column's cells (header and body).</summary>
+    public bool Bold { get; init; }
+
+    /// <summary>Horizontal alignment for this column's cells (header and body).</summary>
+    public ExcelAlign Align { get; init; } = ExcelAlign.Default;
+
     /// <summary>The <see cref="ExcelImageAttribute"/> when this column carries images.</summary>
     public ExcelImageAttribute? ImageOptions { get; init; }
 

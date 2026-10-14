@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>QuickPdf.Sample</RootNamespace>
+    <Description>QuickPdf 示例：把数据源导出成 PDF 表格（单表与多表分节），CJK 字体整份嵌入。</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\QuickPdf\QuickPdf.csproj" />
+  </ItemGroup>
+
+</Project>

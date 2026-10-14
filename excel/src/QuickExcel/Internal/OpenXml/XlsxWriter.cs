@@ -92,7 +92,6 @@ internal sealed class XlsxWriter
         var cellBuf = new StringBuilder(256);
         var rowBuf = new StringBuilder(288);
         int rowIndex = 0;
-        int headerStyle = _styles.GetStyleIndex(XlCellCategory.Text, null, bold: _options.BoldHeader);
 
         if (_options.PrintHeader)
         {
@@ -100,7 +99,11 @@ internal sealed class XlsxWriter
             rowBuf.Clear();
             rowBuf.Append("<row r=\"1\">");
             for (int c = 0; c < colCount; c++)
+            {
+                int headerStyle = _styles.GetStyleIndex(XlCellCategory.Text, null,
+                    bold: _options.BoldHeader || columns[c].Bold, align: columns[c].Align);
                 AppendTextCell(rowBuf, rowIndex, c, columns[c].HeaderName, headerStyle);
+            }
             rowBuf.Append("</row>");
             await sw.WriteAsync(rowBuf.ToString()).ConfigureAwait(false);
         }
@@ -192,7 +195,7 @@ internal sealed class XlsxWriter
                 return;
             case XlCellCategory.Bool:
             {
-                int s = _styles.GetStyleIndex(XlCellCategory.Text, col.FormatString);
+                int s = _styles.GetStyleIndex(XlCellCategory.Text, col.FormatString, col.Bold, col.Align);
                 AppendRef(buf, row, colIndex);
                 buf.Append(" s=\"").Append(s).Append("\" t=\"b\"><v>").Append(cell.Value).Append("</v></c>");
                 break;
@@ -201,7 +204,7 @@ internal sealed class XlsxWriter
             case XlCellCategory.Date:
             case XlCellCategory.Time:
             {
-                int s = _styles.GetStyleIndex(cell.Category, col.FormatString);
+                int s = _styles.GetStyleIndex(cell.Category, col.FormatString, col.Bold, col.Align);
                 AppendRef(buf, row, colIndex);
                 buf.Append(" s=\"").Append(s).Append("\"><v>").Append(cell.Value).Append("</v></c>");
                 break;
@@ -209,7 +212,7 @@ internal sealed class XlsxWriter
             case XlCellCategory.Text:
             default:
             {
-                int s = _styles.GetStyleIndex(XlCellCategory.Text, col.FormatString);
+                int s = _styles.GetStyleIndex(XlCellCategory.Text, col.FormatString, col.Bold, col.Align);
                 if (_shared is not null)
                 {
                     int idx = _shared.GetOrAdd(cell.Value);

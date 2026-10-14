@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>QuickWord.Sample</RootNamespace>
+    <Description>QuickWord 示例：写表（SaveAs）、读回（Read 块模型）、写散文（SaveLines）。</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\QuickWord\QuickWord.csproj" />
+  </ItemGroup>
+
+</Project>

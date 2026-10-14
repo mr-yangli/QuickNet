@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- TFM / Nullable / ImplicitUsings 见 excel/Directory.Build.props，这里只补示例独有的三格。 -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>QuickExcel.Sample</RootNamespace>
+    <Description>QuickExcel 示例：POCO 导出 .xlsx、只读回读、导入 + DataAnnotations 验证。</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\QuickExcel\QuickExcel.csproj" />
+  </ItemGroup>
+
+</Project>

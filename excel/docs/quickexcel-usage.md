@@ -38,7 +38,7 @@
 
 ### 1.3 命名空间
 
-公开面全在 `namespace QuickExcel`：入口类 `Excel`、选项 `ExportOptions`/`ImportOptions`/`TemplateOptions`、结果 `ImportResult<T>`/`ImportError`、图片 `ExcelImage`/`ImagePlaceholder`、特性 `ExcelColumnAttribute` 等六个、枚举 `ExcelType`/`StringStorageMode`/`ExcelImageFormat`/`ImportErrorKind`，以及多表容器 `ExcelSheet`（定义在 `Export/SheetBuilder.cs`）。一行 `using QuickExcel;` 就够。
+公开面全在 `namespace QuickExcel`：入口类 `Excel`、选项 `ExportOptions`/`ImportOptions`/`TemplateOptions`、结果 `ImportResult<T>`/`ImportError`、图片 `ExcelImage`/`ImagePlaceholder`、特性 `ExcelColumnAttribute` 等六个、枚举 `ExcelType`/`StringStorageMode`/`ExcelImageFormat`/`ImportErrorKind`/`ExcelAlign`，以及多表容器 `ExcelSheet`（定义在 `Export/SheetBuilder.cs`）。一行 `using QuickExcel;` 就够。
 
 ## 2. 列模型与数据源
 
@@ -62,7 +62,7 @@
 
 | 特性 | 关键成员（默认值） | 作用 |
 | --- | --- | --- |
-| `ExcelColumnAttribute` | `Name`(=成员名)、`Aliases`(导入接受的额外表头，忽略大小写与空白)、`Order`(1000，小者靠前，同值保持声明序)、`Width`(-1=自动)、`Format`、`Required`(默认 false，与 DataAnnotations `[Required]` **取并集**)、`ColumnIndex`(-1=按名匹配)、`AutoTrim`(true) | 重命名 / 排序 / 定宽 / 定位 / 别名的主开关 |
+| `ExcelColumnAttribute` | `Name`(=成员名)、`Aliases`(导入接受的额外表头，忽略大小写与空白)、`Order`(1000，小者靠前，同值保持声明序)、`Width`(-1=自动)、`Format`、`Required`(默认 false，与 DataAnnotations `[Required]` **取并集**)、`ColumnIndex`(-1=按名匹配)、`AutoTrim`(true)、`Bold`(false，整列含表头加粗)、`Align`(`ExcelAlign.Default`，水平对齐 Left/Center/Right) | 重命名 / 排序 / 定宽 / 定位 / 别名 / 逐列样式的主开关 |
 | `ExcelColumnWidthAttribute` | `Width`（构造参数，Excel 字符单位） | 只设导出列宽 |
 | `ExcelFormatAttribute` | `FormatString`（构造参数，如 `"#,##0.00"`、`"yyyy-MM-dd HH:mm"`） | 数字/日期自定义格式，写进 `xl/styles.xml`（自定义 numFmtId 从 164 起排） |
 | `ExcelIgnoreAttribute` | 无 | 属性/字段既不导出也不导入 |
@@ -126,6 +126,16 @@ POCO 的属性访问器与构造函数在首行一次性编译成表达式树并
 - 裸 `byte[]`（未标图片语义）→ **Base64 文本**。想当图片导出就标 `[ExcelImage]`。
 
 列宽：`Width>0` 时按 Excel 字符单位写 `<cols>`；负值不写，交给 Excel 自动。
+
+### 3.4 单元格样式（逐列）
+
+导出的样式只有三个维度，`xl/styles.xml` 里按 `(numFmt, bold, align)` 内部化成一个 `xf` 索引，热路径逐格只是一次字典命中（`Internal/OpenXml/Stylesheet.cs`）。可控项：
+
+- **加粗**：`ExportOptions.BoldHeader=true` 粗化整行表头；`[ExcelColumn(Bold=true)]` 粗化该列（表头与正文都跟）。表头那格的实际粗体位是 `BoldHeader || Bold` 的并。
+- **水平对齐**：`[ExcelColumn(Align=ExcelAlign.Left|Center|Right)]`，默认 `Default` 交给 Excel 自己（数字右、文本左）。表头与正文同享该列的 `Align`。
+- **数字/日期格式**：`[ExcelFormat]` 或 `ExcelColumn.Format`（见 §3.3），写进 numFmt。
+
+**边界（今天做不到，别误当有）**：样式是**逐列**的，不是逐格——同一列里无法只标红某一行；**填充底色、字体颜色/字号/字体名、边框、垂直对齐、自动换行**都不在公开面上（`BuildXf` 里 `fillId`/`borderId` 恒为 `0`，字体硬编码 Calibri 11 两档）。按语义给错误格标色只能在导入侧靠 `ImportError.CellReference` 回传、由上层自行着色，导出管线本身不产色。
 
 ## 4. 导入与验证
 
@@ -281,6 +291,7 @@ var result = Excel.ImportByTemplate<Employee>("data.xlsx", "template.xlsx",
 - **`Import<T>` 读枚举期间持有文件流**：惰性 `Query` 要尽快消费完或及时 dispose。
 - **不可 seek 的流**读入时整体缓冲进 `MemoryStream`（大流注意）。
 - 导出不生成合并区（只在导入侧消化合并区）。
+- 样式仅逐列的加粗 + 水平对齐 + numFmt（§3.4）；逐格样式、填充色、字体颜色/字号、边框、垂直对齐都不支持。
 
 ## 8. API 总表
 
@@ -295,4 +306,4 @@ var result = Excel.ImportByTemplate<Employee>("data.xlsx", "template.xlsx",
 | 数据源 | `ExcelSheet` |
 | 图片 | `ExcelImage` · `ImagePlaceholder` · `ExcelImageFormat` |
 | 特性 | `ExcelColumn` · `ExcelColumnWidth` · `ExcelFormat` · `ExcelIgnore` · `ExcelImage` · `ExcelSheet` |
-| 枚举/异常 | `ExcelType` · `StringStorageMode` · `QuickExcelTemplateException` |
+| 枚举/异常 | `ExcelType` · `StringStorageMode` · `ExcelAlign` · `QuickExcelTemplateException` |

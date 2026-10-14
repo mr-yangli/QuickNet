@@ -9,7 +9,7 @@ namespace QuickSql.Write;
 /// PG 血统的 <c>ON CONFLICT … DO UPDATE SET … = EXCLUDED.…</c>）发的是内核那一条 <c>INSERT … VALUES</c>
 /// 再接一段本家句尾；整语句那一族（<c>MERGE INTO</c>：SqlServer、Oracle 血统、虚谷、Gbase8s）发的是一整句
 /// <c>MERGE</c>。选哪一形由 provider 与方言自己定（<see cref="Providers.IBulkStrategy.UpsertClause"/> 交得出句尾
-/// 就走句尾，否则问方言的 <see cref="Sql.ISqlDialect.Emit(MergeStatement)"/>），两家都拿不到时这一条链在这一家当场拒。
+/// 就走句尾，否则问方言那颗收 <c>UpsertStatement</c> 的整语句 emit），两家都拿不到时这一条链在这一家当场拒。
 /// 逐家的形态与"哪几家只到文本层、没有活库见证"记 §9.1 与使用册那一节。</para>
 /// <para><b>入口零反射税</b>，与 <see cref="QuickSqlOrm.InsertRange{T}"/>、<see cref="QuickSqlOrm.UpdateRange{T}"/> 同档甚至
 /// 更干净一档：列清单来自契约、值来自编译好的读写委托，一个表达式树都不建，连全局过滤器都不叠（在场即拒，见

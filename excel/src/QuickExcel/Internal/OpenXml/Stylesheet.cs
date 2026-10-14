@@ -26,14 +26,14 @@ internal sealed class Stylesheet
     public Stylesheet()
     {
         // Seed the always-present default xf (index 0 = General, non-bold).
-        Intern(new XfKey(NumFmtGeneral, false, false));
+        Intern(new XfKey(NumFmtGeneral, false, ExcelAlign.Default));
     }
 
-    /// <summary>Resolves the style index for a value category with an optional custom format string.</summary>
-    public int GetStyleIndex(XlCellCategory category, string? formatString, bool bold = false, bool wrap = false)
+    /// <summary>Resolves the style index for a value category with an optional custom format string, bold and alignment.</summary>
+    public int GetStyleIndex(XlCellCategory category, string? formatString, bool bold = false, ExcelAlign align = ExcelAlign.Default)
     {
         int numFmtId = ResolveNumFmtId(category, formatString);
-        return Intern(new XfKey(numFmtId, bold, wrap));
+        return Intern(new XfKey(numFmtId, bold, align));
     }
 
     private int ResolveNumFmtId(XlCellCategory category, string? formatString)
@@ -75,10 +75,23 @@ internal sealed class Stylesheet
           .Append("\" fillId=\"0\" borderId=\"0\" xfId=\"0\"");
         if (key.NumFmtId != NumFmtGeneral) sb.Append(" applyNumberFormat=\"1\"");
         if (key.Bold) sb.Append(" applyFont=\"1\"");
-        if (key.Wrap) sb.Append(" applyAlignment=\"1\"><alignment wrapText=\"1\"/></xf");
-        else sb.Append("/>");
+        if (key.Align != ExcelAlign.Default)
+        {
+            sb.Append(" applyAlignment=\"1\"><alignment horizontal=\"")
+              .Append(Horizontal(key.Align)).Append("\"/></xf>");
+            return sb.ToString();
+        }
+        sb.Append("/>");
         return sb.ToString();
     }
+
+    private static string Horizontal(ExcelAlign align) => align switch
+    {
+        ExcelAlign.Left => "left",
+        ExcelAlign.Center => "center",
+        ExcelAlign.Right => "right",
+        _ => "general"
+    };
 
     public string BuildXml()
     {
@@ -130,5 +143,5 @@ internal sealed class Stylesheet
         return sb.ToString();
     }
 
-    private readonly record struct XfKey(int NumFmtId, bool Bold, bool Wrap);
+    private readonly record struct XfKey(int NumFmtId, bool Bold, ExcelAlign Align);
 }

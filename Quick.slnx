@@ -43,6 +43,9 @@
   </Folder>
   <Folder Name="/samples/">
     <Project Path="sql/samples/QuickSql.Sample/QuickSql.Sample.csproj" />
+    <Project Path="excel/samples/QuickExcel.Sample/QuickExcel.Sample.csproj" />
+    <Project Path="word/samples/QuickWord.Sample/QuickWord.Sample.csproj" />
+    <Project Path="pdf/samples/QuickPdf.Sample/QuickPdf.Sample.csproj" />
   </Folder>
   <Folder Name="/benchmarks/">
     <Project Path="excel/benchmarks/QuickExcel.Benchmarks/QuickExcel.Benchmarks.csproj" />

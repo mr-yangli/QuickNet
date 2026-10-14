@@ -1300,6 +1300,36 @@ foreach (var row in manyRows)
         Console.WriteLine($"    明细 {line.Sku}：包裹 {string.Join("、", line.Parcels?.Select(p => p.TrackingNo) ?? [])} ∶ 缝回来的父订单 Note={line.Order?.Note}");
 }
 
+// ── 17. 一句 upsert：InsertOrUpdate（跑真 SQLite，命中改 ∶ 缺键插两支各验一次）────────
+//
+// orm.InsertOrUpdate<T>().SetSource(...) 按主键决定"有就改、没有就插"。SQLite 这一家发的是
+// INSERT … ON CONFLICT ("Id") DO UPDATE SET 列 = excluded.列（那颗 Bulk 是 null，句尾长在方言上，
+// 见使用册 §3.2 那句"接不到句尾槽"）。这里先看句子、再看落库：改的那一支不许多出一行，
+// 缺的那一支要真插进来——"没欠语句"与"库里落没落"是两件事，裁判问库不问返回值。
+Console.WriteLine();
+Console.WriteLine("── 17. 一句 upsert：InsertOrUpdate ──");
+
+var upsertProbe = new Customer { Name = "upsert 探针", City = "初始城市" };
+var probeId = (int)await orm.Insert(upsertProbe).ExecuteIdentityAsync();   // 先落一行，拿到它的主键
+
+// 一批两支：同一颗 Id 改了城市（命中→改），另一颗 Id 库里没有（缺键→插）。ghostId 取一颗不撞序列的显式键。
+var existing = new Customer { Id = probeId, Name = "upsert 探针", City = "改成新城市" };
+const int ghostId = 987654;
+var missing = new Customer { Id = ghostId, Name = "ghost", City = "插进来的" };
+
+Console.WriteLine($"  发出的句子：{Head(orm.InsertOrUpdate<Customer>().SetSource(existing).ToSql(), 130)}");
+
+var upserted = await orm.InsertOrUpdate<Customer>().SetSource([existing, missing]).ExecuteAffrowsAsync();
+
+var afterExisting = await orm.Select<Customer>().Where(c => c.Id == probeId).FirstOrDefaultAsync();
+var afterMissing = await orm.Select<Customer>().Where(c => c.Id == ghostId).FirstOrDefaultAsync();
+var landedRows = await orm.Select<Customer>().Where(c => c.Id == probeId || c.Id == ghostId).CountAsync();
+
+Console.WriteLine($"  执行受影响行数（各家命中计数口径不同，只当参考）：{upserted}");
+Console.WriteLine($"  命中那一支：Id={probeId} 城市={afterExisting?.City}（应=改成新城市）");
+Console.WriteLine($"  缺键那一支：Id={ghostId} 城市={afterMissing?.City}（应=插进来的）");
+Console.WriteLine($"  两颗键各只一行、合计读回 {landedRows} 行（应=2：证明改的那支没又插一条）");
+
 Console.WriteLine();
 Console.WriteLine("═══ 示例完成 ═══");
 
