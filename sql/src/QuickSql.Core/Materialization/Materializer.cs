@@ -74,6 +74,21 @@ public static class ValueConverter
         if (underlying == typeof(TimeSpan) && value is not TimeSpan)
             return (T)(object)TimeSpan.FromTicks(Convert.ToInt64(value, CultureInfo.InvariantCulture));
 
+        // 带偏移的时刻与裸时刻之间那两折：驱动交回什么型不归我们定（真 PG 上 Npgsql 10 在 timestamptz
+        // 列交回的是 Kind=Utc 的 DateTime，不是 DateTimeOffset），而 ABP 家族的 LockoutEnd 那一派声明的是
+        // DateTimeOffset?，于是"读一颗 timestamptz 列"从前以 Convert.ChangeType 的
+        // Invalid cast from 'System.DateTime' to 'System.DateTimeOffset' 收尾——宿主启动即 FTL，
+        // 症状是整站登录不了，不是慢一点。两臂都只折型不折时刻：
+        // DateTime→DateTimeOffset 走 BCL 自己那条规则（Utc 配零偏移、Local 配它自己的偏移、
+        // Unspecified 按本机偏移），DateTimeOffset→DateTime 一律落到 UTC 那颗裸时刻，
+        // 因为库里那一格存的是时刻，而这套东西全线按 UTC 写（与写侧 PostgreSqlValues 的
+        // DateTimeOffset 臂同一读法，两边凑回来是同一个瞬时）。
+        if (underlying == typeof(DateTimeOffset) && value is DateTime moment)
+            return (T)(object)new DateTimeOffset(moment);
+
+        if (underlying == typeof(DateTime) && value is DateTimeOffset withOffset)
+            return (T)(object)withOffset.UtcDateTime;
+
         if (underlying == typeof(string))
             return (T)(object)ToText(value);
 

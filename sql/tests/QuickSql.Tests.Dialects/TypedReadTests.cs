@@ -126,6 +126,51 @@ public sealed class TypedReadTests
         Paid,
     }
 
+    // ── 带偏移的时刻 ↔ 裸时刻 那两折（真 PG 的 timestamptz 交回 Kind=Utc 的 DateTime，
+    //    而 ABP 的 LockoutEnd 声明的是 DateTimeOffset?；从前这一格落到最后一句
+    //    Convert.ChangeType 上，以 Invalid cast 收尾，宿主启动即 FTL）
+
+    /// <summary>Utc 那颗裸时刻折成偏移为零的 DateTimeOffset，瞬时一字不动。可空那一档是现场在用的形状
+    /// （<c>DateTimeOffset?</c>），而折型走的是同一扇门——臂只认 <c>underlying</c>。</summary>
+    [Fact]
+    public void A_utc_moment_folds_into_a_zero_offset_instant()
+    {
+        var utc = new DateTime(2026, 10, 15, 3, 4, 5, DateTimeKind.Utc);
+
+        var folded = ValueConverter.To<DateTimeOffset?>(utc);
+
+        Assert.NotNull(folded);
+        Assert.Equal(TimeSpan.Zero, folded!.Value.Offset);
+        Assert.Equal(utc, folded.Value.UtcDateTime);
+    }
+
+    /// <summary><c>timestamp without time zone</c> 那一格交回 Kind=Unspecified，而 BCL 对这一档写的
+    /// 是本机偏移（<c>new DateTimeOffset(dt)</c> 那一条规则）。这一臂钉的是"不猜成 UTC"：猜成 UTC
+    /// 会把一颗本机上写入的锁定时限推后或提前几个小时，而那句猜测在任何文档里都没有依据。</summary>
+    [Fact]
+    public void An_unspecified_moment_takes_the_local_offset_the_bcl_promises()
+    {
+        var bare = DateTime.SpecifyKind(new DateTime(2026, 10, 15, 3, 4, 5), DateTimeKind.Unspecified);
+
+        var folded = ValueConverter.To<DateTimeOffset>(bare);
+
+        Assert.Equal(new DateTimeOffset(bare, TimeZoneInfo.Local.GetUtcOffset(bare)), folded);
+    }
+
+    /// <summary>反方向：一列 <c>DateTime</c> 属性收到驱动交回的 <c>DateTimeOffset</c>（Oracle 那一家
+    /// 有 TIMESTAMP WITH TIME ZONE，虚谷与金仓那一族也可能回这一型）时折成 <b>UTC 裸时刻</b>——
+    /// 库里那一格存的是瞬时，而这套东西写侧一律按 UTC 落，折回本地会把同一个瞬时读成两个。</summary>
+    [Fact]
+    public void An_offset_value_folds_back_into_the_utc_instant()
+    {
+        var source = new DateTimeOffset(2026, 10, 15, 11, 4, 5, TimeSpan.FromHours(8));
+
+        var folded = ValueConverter.To<DateTime>(source);
+
+        Assert.Equal(DateTimeKind.Utc, folded.Kind);
+        Assert.Equal(source.UtcDateTime, folded);
+    }
+
     [Fact]
     public void The_read_door_is_byte_for_byte_the_converter()
     {
