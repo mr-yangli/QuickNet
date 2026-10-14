@@ -173,6 +173,24 @@ public interface ISchemaReader
     /// <para>可空性<em>不在</em>这一颗的职责里：那是一格布尔，家与家同义，Core 自己比
     /// （比的是 <see cref="ColumnContract.NullableInStore"/>，不是 <see cref="ColumnContract.IsNullable"/>）。</para></summary>
     bool? ColumnShapeMatches(ColumnContract expected, SchemaColumn actual) => null;
+
+    /// <summary>库里这一列<em>现在</em>有没有 NULL 行。只有结构同步要把一列<em>收紧</em>成
+    /// <c>NOT NULL</c> 时才问（§9.5，判据见 SchemaSyncResult.SkippedNullabilityTightening 那一格）。
+    ///
+    /// <para><b>为什么归 provider 而不是 Core 自己发那句 <c>SELECT</c></b>：这一句要的是这一家的
+    /// 标识符字形（双引号 / 反引号 / 方括号）与这一家的"取第一行"写法（<c>LIMIT</c> ∶ <c>TOP 1</c> ∶
+    /// <c>FETCH FIRST</c>），Core 手里没有这两格，猜出来的文本在六家之一是语法错。与
+    /// <see cref="ProbeLengthSemanticsAsync"/> 同一个处境，也只读、不写。</para>
+    ///
+    /// <para><b>三态的 <c>null</c> 是"这一家没接"</b>，不是"没有 NULL"：那一格 Core 照今天那样把
+    /// <c>ALTER</c> 发出去，并在同步结果的"判不了"清单里点名这一列——脏表上那一发仍然会以库的拒绝收尾，
+    /// 那是没接这一颗的家的既有行为，不靠默认值假装修好了。接了一家的默认值就<em>不该</em>是
+    /// <see langword="false"/>：那等于对所有未接的库宣布"这张表干净"，而这句话只有库答得起。</para></summary>
+    Task<bool?> ColumnHasNullsAsync(
+        DbConnection connection,
+        TableInfo table,
+        string columnName,
+        CancellationToken ct = default) => Task.FromResult<bool?>(null);
 }
 
 /// <summary>库里读回的一列。<b>后头那几格全可空，而空的意思是"这一家读不出"</b>，不是"库里没有"——

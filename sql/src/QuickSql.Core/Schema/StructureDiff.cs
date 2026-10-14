@@ -28,6 +28,14 @@ public sealed record StructurePlan(TableInfo Table)
     /// 幂等裁判那一句"第二趟零动作"——它确实零动作，因为要发的东西已经不在库里了。</summary>
     public IReadOnlyList<ColumnContract> ColumnComments { get; init; } = [];
 
+    /// <summary><see cref="AlterColumns"/> 里那些"这一趟会把库里的可空列<em>收紧</em>成 <c>NOT NULL</c>"的列，
+    /// 顺序 = 契约列序。<b>它是子集而不是第三件事</b>：放宽方向（契约可空而库里 NOT NULL）与只改形状那几列
+    /// 都不在这里，它们那一句 <c>ALTER</c> 撞不出 <c>23502</c>。
+    /// <para>这一格单独列出来，是因为收紧那一档的判据缺一半：契约与目录两侧都说得出口径，而
+    /// <em>"这一列有没有存量 NULL"只有库答得起</em>。所以归一在这里判（离线可穷举），探量在
+    /// <see cref="SchemaSyncer"/> 那一格做（它手里有连接），两边共读这一份子集——判据不另立第二处。</para></summary>
+    public IReadOnlyList<ColumnContract> NullabilityTightenings { get; init; } = [];
+
     /// <summary>要否重发<em>表</em>备注。只在契约说过（<see cref="TableInfo.Comment"/> 非 null）
     /// 而库里那份与它不同才为真：null 说的是"没写过备注"，不是"要求库里没有备注"。</summary>
     public bool EmitTableComment { get; init; }
@@ -87,6 +95,7 @@ public static class StructureDiff
         var refused = new List<string>();
         var adds = new List<ColumnContract>();
         var alters = new List<ColumnContract>();
+        var tightenings = new List<ColumnContract>();
         var comments = new List<ColumnContract>();
         var indexes = new List<IndexContract>();
         var drops = new List<SchemaIndex>();
@@ -130,7 +139,14 @@ public static class StructureDiff
                 else if (storeOwned)
                     refused.Add($"列 {expected.ColumnName} 的形状与契约不同，而它的值归库给（自增 / 库自己递增的那一型）：ALTER 它会抹掉取值机制，这一趟不做（要人工）");
                 else
+                {
                     alters.Add(expected);
+
+                    // 收紧方向单独记一笔（判据与上面那一格同一颗，不另立第二处）：这一句 ALTER 发下去
+                    // 会要库对存量行担保 NOT NULL，而存量里有没有 NULL 只有库知道。
+                    if (nullabilityDiffers && !expected.NullableInStore)
+                        tightenings.Add(expected);
+                }
             }
 
             // 备注那一格只在契约说过时才问：null 说的是"用户没写备注"，不是"要求库里清掉备注"。
@@ -173,6 +189,7 @@ public static class StructureDiff
         {
             AddColumns = [.. adds],
             AlterColumns = [.. alters],
+            NullabilityTightenings = [.. tightenings],
             ColumnComments = [.. comments],
             EmitTableComment = tableComment,
             CreateIndexes = [.. indexes],

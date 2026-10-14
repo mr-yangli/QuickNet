@@ -124,6 +124,49 @@ public sealed class StructureSyncTests
     public void Nullability_alone_alters()
         => Assert.Equal(["Title"], Diff(CurrentStore(titleNullable: false)).AlterColumns.Select(c => c.ColumnName));
 
+    // ── 收紧那一档：哪几句 ALTER 要先到库里问一句"有没有空值" ────────────
+    //
+    // 这一份子集单独有测试是因为它的判据与 AlterColumns 那一格只差一个方向，而方向错了整格的后果
+    // 不一样：放宽那一句永远撞不出 23502，收紧那一句在一列有存量空值时必撞。两者混在一份清单里，
+    // 执行层就只能靠"发出去试试"分辨，而那一试落在启动那一趟上是宿主起不来。
+
+    /// <summary>库里可空而契约要它非空 → 这一句 <c>ALTER</c> 是收紧，进要问库的那份清单。
+    /// 形状两边一致，钉的是"只有可空性这一格差"也会走探针——那正是 <c>ConcurrencyStamp</c> 那一颗现场。</summary>
+    [Fact]
+    public void A_tightened_column_is_named_for_the_null_probe()
+    {
+        var plan = Diff(CurrentStore(amountNullable: true));
+
+        Assert.Equal(["Amount"], plan.AlterColumns.Select(c => c.ColumnName));
+        Assert.Equal(["Amount"], plan.NullabilityTightenings.Select(c => c.ColumnName));
+    }
+
+    /// <summary>反方向（契约可空而库里非空）<em>不</em>进这份清单：那一句是把约束放松，
+    /// 库里有多少行都收得下。它仍然是一句 <c>ALTER</c>，只是不欠库里一句问话。</summary>
+    [Fact]
+    public void A_loosened_column_is_not_probed()
+    {
+        var plan = Diff(CurrentStore(titleNullable: false));
+
+        Assert.Equal(["Title"], plan.AlterColumns.Select(c => c.ColumnName));
+        Assert.Empty(plan.NullabilityTightenings);
+    }
+
+    /// <summary>主键列那一格被拒（不改主键）时<em>也不</em>进这份清单：执行层根本拿不到那一句，
+    /// 为一个不会发的句子去库里数空值是白跑一趟。同一判据盖住"值归库给"那一族。</summary>
+    [Fact]
+    public void A_refused_column_is_neither_altered_nor_probed()
+    {
+        var columns = CurrentStore();
+        columns[0] = columns[0] with { IsNullable = true };
+
+        var plan = Diff(columns);
+
+        Assert.Empty(plan.AlterColumns);
+        Assert.Empty(plan.NullabilityTightenings);
+        Assert.Contains(plan.Refused, r => r.Contains("列 Id ", StringComparison.Ordinal));
+    }
+
     /// <summary>被 ALTER 的那一列<em>同时</em>进备注清单：T-SQL 的 <c>ALTER COLUMN</c> 会连带删掉那一列的
     /// 扩展属性。少了这一条，"改了长度"这一趟以"备注没了"收尾，而下一趟读到空备注只会补备注，
     /// 永远不会说这一趟丢过它——幂等裁判照样绿，那是假绿。</summary>
@@ -709,6 +752,7 @@ public sealed class StructureSyncTests
         bool titleNullable = true,
         string titleComment = "标题",
         string? Amount = null,
+        bool amountNullable = false,
         string? Price = null,
         string? CreatedAt = null,
         string? Quantity = null,
@@ -718,7 +762,7 @@ public sealed class StructureSyncTests
         {
             Col("Id", Id ?? "int", identity: true, pk: pkOn == "Id"),
             Col("Title", Title ?? "nvarchar(32)", nullable: titleNullable, comment: titleComment),
-            Col("Amount", Amount ?? "numeric(18,4)", pk: pkOn == "Amount"),
+            Col("Amount", Amount ?? "numeric(18,4)", nullable: amountNullable, pk: pkOn == "Amount"),
             Col("Price", Price ?? "decimal(10,2)"),
             Col("CreatedAt", CreatedAt ?? "datetime2(3)"),
             Col("Quantity", Quantity ?? "int"),

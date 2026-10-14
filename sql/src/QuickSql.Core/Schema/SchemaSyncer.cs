@@ -120,6 +120,7 @@ public sealed class SchemaSyncer
                 NotJudged = [.. tally.NotJudged],
                 Refused = [.. tally.Refused],
                 SkippedSplitTemplates = [.. skipped],
+                SkippedNullabilityTightening = [.. tally.SkippedTightenings],
             };
         }
 
@@ -167,12 +168,22 @@ public sealed class SchemaSyncer
             NotJudged = [.. tally.NotJudged],
             Refused = [.. tally.Refused],
             SkippedSplitTemplates = [.. skipped],
+            SkippedNullabilityTightening = [.. tally.SkippedTightenings],
         };
     }
 
     /// <summary>一张已经在的表：先算计划，再把计划里的每一句发出去。<b>清单里没有的一句都不会发</b>，
     /// 而那几格拒（删列、改主键与自增；删索引要调用方显式开那一档）在计划层就已经挡掉了，
     /// 执行层拿不到它们。</summary>
+    /// <remarks><b>收紧 <c>NOT NULL</c> 的那几句要多问库一句</b>（<see cref="StructurePlan.NullabilityTightenings"/>）：
+    /// 计划层看得见"契约要它非空而库里允许为空"，看不见"存量行里有没有空值"——那一问只有这一格答得起，
+    /// 因为它手里有连接。问出"有空值"就把<em>整句</em> <c>ALTER</c> 留下不发、写进
+    /// <see cref="SchemaSyncResult.SkippedNullabilityTightening"/>；答不出（那几家没接这颗探针）照发，
+    /// 并在"判不了"清单里点名。
+    /// <para><b>为什么跳过整句而不是只摘掉 <c>SET NOT NULL</c> 那一半</b>:同一条 <c>ALTER COLUMN … TYPE</c>
+    /// 在脏表上本身就是一次 <c>ATRewriteTable</c>（表重写 + 全表校锁），而"这一列的精度也该顺手改对"
+    /// 不是启动那几分钟要办的事——回填完，下一趟两句一起发。把发射口拆成"带不带可空性"两档要动六家的
+    /// DDL 发射器，换回来的只是让一次表重写提前落在一趟启动里。</para></remarks>
     async Task ApplyAsync(Tally tally, DbConnection connection, EntityContract contract, SchemaTable existing, CancellationToken ct)
     {
         var plan = StructureDiff.Build(contract, existing, _provider.Schema, _provider.CodeFirst.Identifiers, _dropIndexes);
@@ -183,11 +194,50 @@ public sealed class SchemaSyncer
         foreach (var note in plan.Refused)
             tally.Refused.Add($"{contract.Table.Name}：{note}");
 
-        foreach (var statement in ApplyStatements(contract, plan, tally))
+        var blocked = await BlockedTighteningsAsync(tally, connection, contract, plan, ct).ConfigureAwait(false);
+
+        foreach (var statement in ApplyStatements(contract, plan, tally, blocked))
         {
             await ExecuteDdlAsync(connection, statement, tally.Sql, ct).ConfigureAwait(false);
             tally.Record(statement);
         }
+    }
+
+    /// <summary>那些会把一列收紧成 <c>NOT NULL</c> 的 <c>ALTER</c>，逐列问一句"库里有没有空值"。
+    /// 交回的是<em>这一趟不许发</em>的那几列名；探针答不出（<c>null</c>）的那些列不进这一份——
+    /// 没接探针的六家保持今天的形状，只在报告里欠一行"判不了"。</summary>
+    async Task<HashSet<string>> BlockedTighteningsAsync(
+        Tally tally,
+        DbConnection connection,
+        EntityContract contract,
+        StructurePlan plan,
+        CancellationToken ct)
+    {
+        var blocked = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var column in plan.NullabilityTightenings)
+        {
+            var hasNulls = await _provider.Schema
+                .ColumnHasNullsAsync(connection, contract.Table, column.ColumnName, ct).ConfigureAwait(false);
+
+            var name = $"{contract.Table.Name}.{column.ColumnName}";
+
+            switch (hasNulls)
+            {
+                case true:
+                    blocked.Add(column.ColumnName);
+                    tally.SkippedTightenings.Add($"{name}：契约要它 NOT NULL 而库里这一列已有空值，" +
+                                                 "这一句 ALTER 整条没发（改精度与收紧可空性在同一句里）。" +
+                                                 "出路：回填那一列，下一趟结构同步自己把它收紧");
+                    break;
+                case null:
+                    tally.NotJudged.Add($"{name}：这一家没接“有没有空值”那颗探针，收紧的那一句照发——" +
+                                         "存量里真有空值时它会以库的拒绝收尾（要人工：先回填）");
+                    break;
+            }
+        }
+
+        return blocked;
     }
 
     /// <summary>一句 <c>CREATE TABLE</c> 加上它欠的那几份备注。<b>建表那一趟从前一个字节都不发备注</b>：
@@ -223,7 +273,10 @@ public sealed class SchemaSyncer
         return items;
     }
 
-    List<Statement> ApplyStatements(EntityContract contract, StructurePlan plan, Tally tally)
+    /// <param name="blockedTightenings">这些列的那一句 <c>ALTER</c> 这一趟不许发：它们要把一列收紧成
+    /// <c>NOT NULL</c>，而库里那一列已经有空值（每一列为什么被挡写进结果的那一份清单，见
+    /// <see cref="BlockedTighteningsAsync"/>）。清单外的一句都不受影响。</param>
+    List<Statement> ApplyStatements(EntityContract contract, StructurePlan plan, Tally tally, HashSet<string> blockedTightenings)
     {
         var items = new List<Statement>();
 
@@ -244,9 +297,30 @@ public sealed class SchemaSyncer
             items.Add(new Statement(Emit(w => _provider.CodeFirst.EmitAddColumn(w, contract.Table, column)),
                 ChangeKind.AddColumn, $"{contract.Table.Name}.{column.ColumnName}"));
 
+        // 收紧被挡的那一列：整句不发（改精度与 SET NOT NULL 在同一句里，拆不开，理由见 ApplyAsync 的 remarks）。
+        // <b>而"这一家压根没有改列语句"那一族（今天只有 SQLite：不声明 <c>Alter_Column_Precision</c>）也在这一格挡</b>：
+        // 那句 <c>EmitAlterColumnPrecision</c> 在本家是<em>兜底抛</em>（"Core 不会走到这一句"那句话今天没有读者兑现），
+        // 让执行层拿到这一句就是把宿主启动撞死在发射点上——与被探针挡下的 23502 是同一个家庭的两种炸法。
+        // 挡在这里而不是 StructureDiff 里：那颗归一是纯函数，能力位是 provider 侧事实，不塞进它的形参表。
+        var canAlterColumns = (_provider.Capabilities & DbCapabilities.Alter_Column_Precision) != 0;
+
         foreach (var column in plan.AlterColumns)
+        {
+            if (blockedTightenings.Contains(column.ColumnName))
+                continue;
+
+            if (!canAlterColumns)
+            {
+                tally.NotJudged.Add($"{contract.Table.Name}.{column.ColumnName}：这一列与契约不同，" +
+                                    "而这一家没有改列的语句（能力位 <c>Alter_Column_Precision</c> 未声明）：一句都不发，" +
+                                    "这一列原样留着（要人工：\"建新表、拷数据、换名\"那一族重建在本仓库未建模，§14。" +
+                                    "可空性收紧的那一半若库里已有空值，另见跳过清单）");
+                continue;
+            }
+
             items.Add(new Statement(Emit(w => _provider.CodeFirst.EmitAlterColumnPrecision(w, contract.Table, column)),
                 ChangeKind.AlterColumn, $"{contract.Table.Name}.{column.ColumnName}"));
+        }
 
         foreach (var column in plan.ColumnComments)
         {
@@ -491,7 +565,7 @@ enum ChangeKind
     DropIndex,
 }
 
-/// <summary>一趟同步的七份点名清单。<b>内部类型，因为它只活在这一格里</b>：两档策略共用一个累加点
+/// <summary>一趟同步的八份点名清单。<b>内部类型，因为它只活在这一格里</b>：两档策略共用一个累加点
 /// （<see cref="Record"/>），于是"哪些算动作、哪些只是给人的话"这一判据也只有一份。</summary>
 sealed class Tally
 {
@@ -503,6 +577,7 @@ sealed class Tally
     public List<string> Dropped { get; } = [];
     public List<string> NotJudged { get; } = [];
     public List<string> Refused { get; } = [];
+    public List<string> SkippedTightenings { get; } = [];
 
     /// <summary>这一趟发出去（Script 档则是准备发出去）的每一句原文，顺序 = 发送顺序。<b>它与
     /// <see cref="SchemaSyncResult.DdlStatements"/> 是同一份清单</b>，只是两档的语义不同：Execute 档里
@@ -600,6 +675,14 @@ public sealed record SchemaSyncResult(
     /// <c>orm.CreateSplitTables&lt;T&gt;(起, 止)</c> 那一格给。它非空时说明库里那些片还不存在，写侧要到
     /// 目标片上撞库错才看得见，所以这一格要有人看。</summary>
     public IReadOnlyList<string> SkippedSplitTemplates { get; init; } = [];
+
+    /// <summary>这一趟<em>没有发</em>的那几句收紧 <c>NOT NULL</c> 的 <c>ALTER</c>，逐项写 <c>表.列</c> 与原因。
+    /// <b>它与 <see cref="Refused"/> 不是一格</b>：拒是"这条规则永远不做"（删列、改主键），这一格是
+    /// "库里现在有挡着它的东西"——回填完那一列，下一趟结构同步自己就把它收紧，不需要谁改契约。
+    /// <para>被挡的那一句是<em>整条</em> <c>ALTER</c>，所以那一列的精度/长度差也一并还挂着：
+    /// <see cref="AlteredColumns"/> 里没有它，不是漏记。这一格非空就是"库里有几列还比契约松"，
+    /// 读侧不会因此出错，写侧要等回填。</para></summary>
+    public IReadOnlyList<string> SkippedNullabilityTightening { get; init; } = [];
 
     public static readonly SchemaSyncResult Empty = new(Array.Empty<string>(), false, string.Empty);
 }

@@ -214,6 +214,41 @@ public sealed class PostgreSqlSchemaReader : ISchemaReader
         return new LengthSemanticsReading(collation, declared, declared, typeName is "varchar" or "bpchar" or "text");
     }
 
+    /// <summary>这一列有没有存量空值——§9.5 要把一列收紧成 <c>NOT NULL</c> 前问的那一句。
+    ///
+    /// <para><b>取一行而不是数全表</b>：<c>COUNT(*)</c> 在一张大表上是一次全表扫，而这一问要的只是
+    /// "有没有"，<c>LIMIT 1</c> 命中第一颗空值就收。它仍然是读一句 <c>SELECT</c>，不写、不改形状，
+    /// 与 <see cref="ProbeLengthSemanticsAsync"/> 同一档权限。</para>
+    ///
+    /// <para><b>标识符只能拼文本，参数化吃不下对象名</b>，所以这一句是本 reader 里唯一一处不在
+    /// <c>information_schema</c> 上用 <c>@param</c> 的地方。用的字形与建表、查询同一个口
+    /// （<see cref="IdentifierPolicy.PostgreSQL"/> 的 <c>Quote</c>，双引号 + 内部引号翻倍），
+    /// 于是"探的是哪一列"与"要 ALTER 的是哪一列"不可能是两个名字——这一句答错了要付的是
+    /// 把一列脏数据当干净、下一句 <c>SET NOT NULL</c> 照样撞 <c>23502</c>。</para></summary>
+    public Task<bool?> ColumnHasNullsAsync(
+        DbConnection connection,
+        TableInfo table,
+        string columnName,
+        CancellationToken ct = default)
+    {
+        var sql = $"SELECT 1 FROM {Qualified(table)} WHERE {IdentifierPolicy.PostgreSQL.Quote(columnName)} IS NULL LIMIT 1";
+
+        return HasRowAsync(connection, sql, ct);
+    }
+
+    /// <summary>表名限定与发射侧同一颗默认模式（<c>public</c>）：结构同步连的那条会话可以带着别的
+    /// <c>search_path</c>，而这一句探的必须是刚才那张要被 <c>ALTER</c> 的表。</summary>
+    static string Qualified(TableInfo table)
+        => $"{IdentifierPolicy.PostgreSQL.Quote(table.Schema ?? "public")}.{IdentifierPolicy.PostgreSQL.Quote(table.Name)}";
+
+    static async Task<bool?> HasRowAsync(DbConnection connection, string sql, CancellationToken ct)
+    {
+        using var command = Command(connection, sql);
+        using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
+
+        return await reader.ReadAsync(ct).ConfigureAwait(false);
+    }
+
     /// <summary>形状对得上吗——比的是<em>归一后的存储类型文本</em>，而归一只有本家做得起（§9.5 的 diff）：
     /// 发射侧一律大写（<c>VARCHAR(32)</c>）而 <c>information_schema</c> 一律小写长名
     /// （<c>character varying</c>），手工建的表上 <c>NUMERIC</c> 不带位数而契约侧永远带，

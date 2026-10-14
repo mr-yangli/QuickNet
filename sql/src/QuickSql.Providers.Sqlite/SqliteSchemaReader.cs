@@ -219,6 +219,37 @@ public sealed class SqliteSchemaReader : ISchemaReader
         return new LengthSemanticsReading(string.Empty, declared, declared, false);
     }
 
+    /// <summary>这一列有没有存量空值——§9.5 要把一列收紧成 <c>NOT NULL</c> 前问的那一句（判据与后果写在
+    /// <see cref="ISchemaReader.ColumnHasNullsAsync"/> 与 <c>SchemaSyncResult.SkippedNullabilityTightening</c>）。
+    ///
+    /// <para><b>这一句是数据侧的问句，不是目录侧的</b>：本家的目录（<c>pragma_table_info</c>）能答"这一列
+    /// <em>声明</em>成什么"，永远答不出"存量行里有没有 NULL"——那一问只有 <c>SELECT</c> 打得开。表名与列名
+    /// 走 <see cref="IdentifierPolicy.Sqlite"/> 那一份字形（恒加双引号、内部引号翻倍），与
+    /// <c>SqliteCodeFirst</c> 建表、<c>AdoExecutor</c> 查询共用同一颗 <c>Quote</c>，所以"探的哪一列"与
+    /// "要 ALTER 的哪一列"不可能是两个名字。<b>限定形与发射侧同一格</b>：契约没点模式就发裸名（会话级的
+    /// <c>main</c> 解析），点了就带 <c>库.</c>——与类注释第五条那句"读侧与写侧用同一颗 Schema"逐字同规，
+    /// 本家的 <c>TEMP</c> 遮蔽只有在这一条上才不构成错位。</para>
+    ///
+    /// <para><c>LIMIT 1</c> 在本家是真语法（第 28 到 30 轮的查询侧读数里到处都是它），命中第一颗空值就收，
+    /// 不把脏表整个数一遍。</para></summary>
+    public async Task<bool?> ColumnHasNullsAsync(
+        DbConnection connection,
+        TableInfo table,
+        string columnName,
+        CancellationToken ct = default)
+    {
+        var target = table.Schema is { Length: > 0 } named
+            ? $"{IdentifierPolicy.Sqlite.Quote(named)}.{IdentifierPolicy.Sqlite.Quote(table.Name)}"
+            : IdentifierPolicy.Sqlite.Quote(table.Name);
+
+        var sql = $"SELECT 1 FROM {target} WHERE {IdentifierPolicy.Sqlite.Quote(columnName)} IS NULL LIMIT 1";
+
+        using var command = Command(connection, sql);
+        using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
+
+        return await reader.ReadAsync(ct).ConfigureAwait(false);
+    }
+
     /// <summary>声明宽度：<b>从型名文本里读出来的一颗数</b>，七家里只有本家这么办（另六家各有自己的
     /// 数字字段，见 <c>Gbase8sSchemaReader</c> 的 <c>width</c> 与 <c>PostgreSqlSchemaReader</c> 那一对）。
     /// 判据两处：基名含 <c>CHAR</c>（本家自己发的只有 <c>VARCHAR(n)</c> 这一形带宽度【实测·4003】，
