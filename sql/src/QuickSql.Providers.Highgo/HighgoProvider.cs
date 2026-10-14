@@ -28,13 +28,13 @@ namespace QuickSql.Providers.Highgo;
 /// 一个字不需要改。本家对那颗虚口的姿势与前两颗分叉叶同一：产出即血统，见证在
 /// <c>HighgoDialectTests</c> 的无缝格。</para>
 ///
-/// <para><b>清单那颗 <c>assembly</c> 的名字来路是这一份清单里的第三种</b>：填 <c>Npgsql</c>。
+/// <para><b>内建表那颗 <c>assembly</c> 的名字来路是这一份内建表里的第三种</b>：填 <c>Npgsql</c>。
 /// 金仓行写的是厂商文档名（Kdbndp），opengauss／gaussdb 两颗共享的是邻家库种的兼容臂（行级说法是
 /// "厂商分发的是 Npgsql 的 fork"），而本行的来路是行内那三个字"兼容 PG"——线协议就是 PG 的，
 /// Npgsql 是血统协议自己的驱动，不借邻家的臂。于是 PG 血统三颗键（opengauss／gaussdb／本行）
 /// 同一份 assembly，成为"三键一 assembly"在这一族的第一次凑齐，与 mysql／tidb／oceanbase 那三键
 /// <em>同构</em>（上一笔推广出的"系统形状"本笔续上一格），而两颗分叉叶共享的是兼容臂、本颗共享的
-/// 是 primary，这个区别留在清单 $comment 里而不是抹平。瀚高自己分发的托管驱动叫什么，
+/// 是 primary，这个区别留在内建表注释 里而不是抹平。瀚高自己分发的托管驱动叫什么，
 /// 本仓库没有可引读数——不猜名字（达梦行立的纪律），现场按厂商读数改回。整行"未实测"，
 /// 刻意不写 <c>factoryType</c>（理由与达梦那一行逐字相同）。</para>
 ///
@@ -44,7 +44,7 @@ namespace QuickSql.Providers.Highgo;
 [QuickSqlProvider(DbKind.Highgo)]
 public sealed class HighgoProvider : PostgreSqlProviderBase
 {
-    /// <summary>清单里的 <c>key</c>。assembly 的来路与"第三种共享形状"写在类注释第四段与清单 $comment；
+    /// <summary>内建表里的 <c>key</c>。assembly 的来路与"第三种共享形状"写在类注释第四段与内建表注释；
     /// 与全部"未实测"行同一处境：刻意不写 <c>factoryType</c>，走"扫导出类型里第一个
     /// <c>DbProviderFactory</c> 子类"那条兜底（理由与达梦那一行逐字相同）。</summary>
     public const string DriverKey = "highgo";

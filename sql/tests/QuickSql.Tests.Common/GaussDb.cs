@@ -12,7 +12,7 @@ namespace QuickSql.TestInfra;
 /// 本机没有任何一台 GaussDB，清单里那颗 <c>gaussdb</c> 键的 assembly（Npgsql）走的是金仓行 $comment
 /// 里那条兼容臂——与 <c>Kdbndp</c>、<c>DmProvider</c>、<c>MySqlConnector</c> 一样从未被解析成功过
 /// （§13.5 台账里这一行整行「未实测」），而 GaussDB 厂商自己分发的那份托管驱动连名字都没有入账读数。
-/// 所以这里同样<em>没有</em> <see cref="SqlServer.DriverFromManifest"/> 的对应物，有了就会被误读成
+/// 所以这里同样<em>没有</em> <see cref="SqlServer.Driver"/> 的对应物，有了就会被误读成
 /// "这条解析路径验过"。</para>
 ///
 /// <para>连接串占位符复用 <see cref="SqlServer.OfflineConnectionString"/>：

@@ -25,7 +25,7 @@ namespace QuickSql.Providers.PostgreSqlBase;
 /// 且交回 <c>Task&lt;导入器&gt;」的连接方法 —— 不写死 <c>NpgsqlConnection</c> 的名字，与
 /// <c>SqlServerBulkCopy.ConnectionScopedCtor</c> 按形状找构造子同一手法：现场同时装两家时，
 /// 通道永远来自工厂所在的那一家。这套成员缺任何一件交回 <see langword="null"/>，阶梯自然从 L3 起 ——
-/// <b>这一条对借邻家臂的叶子同样成立</b>：清单上金仓那颗 primary（Kdbndp）与 openGauss/GaussDB/瀚高/GBase 8c
+/// <b>这一条对借邻家臂的叶子同样成立</b>：内建表上金仓那颗 primary（Kdbndp）与 openGauss/GaussDB/瀚高/GBase 8c
 /// 各家若装的是真 Npgsql，通道到场；装的是没有导入器的 fork，通道整家缺席、照旧走文本层，
 /// 而 provider 代码一个字不改。</para>
 ///

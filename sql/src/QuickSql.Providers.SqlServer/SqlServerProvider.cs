@@ -7,7 +7,7 @@ namespace QuickSql.Providers.SqlServer;
 /// <summary>SQL Server 的驱动槽位（§4）。P0 主靶（§14）。
 ///
 /// <b>构造期不反射</b>：<see cref="DbProviderFactory"/> 由 Core 的 <c>DriverRegistry</c> 按
-/// <c>QuickSqlDrivers.json</c> 解析后注入，所以本程序集编译期不认识 <c>Microsoft.Data.SqlClient</c>
+/// 内建表 <c>BuiltinDrivers</c> 解析后注入，所以本程序集编译期不认识 <c>Microsoft.Data.SqlClient</c>
 /// （§1.2 原则 3）。SqlServer 也走这条路径，是为了让"驱动反射加载"在 P0 第一次真跑起来，
 /// 而不是等到只有私有源驱动的 P3 才首次运行——那是 §14 代价表里点名的坑。
 ///
@@ -16,7 +16,7 @@ namespace QuickSql.Providers.SqlServer;
 [QuickSqlProvider(DbKind.SqlServer)]
 public sealed class SqlServerProvider : IDbProvider
 {
-    /// <summary>清单里的 <c>key</c>。<c>assembly</c> 通常是 <c>Microsoft.Data.SqlClient</c>。</summary>
+    /// <summary>内建表里的 <c>key</c>。<c>assembly</c> 通常是 <c>Microsoft.Data.SqlClient</c>。</summary>
     public const string DriverKey = "sqlserver";
 
     readonly SqlServerTypes _types = SqlServerTypes.Instance;

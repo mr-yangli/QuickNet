@@ -134,10 +134,10 @@ public sealed class QuickSqlOrm
         });
     }
 
-    /// <summary>§4 一行注册的清单侧：只报 <see cref="DbKind"/> 与连接串，工厂由
-    /// <see cref="QuickSql.DriverLoading.DriverRegistry"/> 按 <c>QuickSqlDrivers.json</c> 现场解析。
-    /// 与上一颗同样依赖生成器登记；不同在这一颗会真去读清单文件，所以现场没驱动、清单没复制到输出目录
-    /// 时抛的是 <c>DriverNotAvailableException</c>（消息带驱动名与清单路径）而不是这里的"未登记"。</summary>
+    /// <summary>§4 一行注册的驱动侧：只报 <see cref="DbKind"/> 与连接串，工厂由
+    /// <see cref="QuickSql.DriverLoading.DriverRegistry"/> 按内建表 <c>BuiltinDrivers</c> 现场解析。
+    /// 与上一颗同样依赖生成器登记；不同在这一颗会真去按程序集名装载驱动，所以现场没驱动时抛的是
+    /// <c>DriverNotAvailableException</c>（消息带驱动名与 <c>drivers/</c> 探测位）而不是这里的"未登记"。</summary>
     [RequiresUnreferencedCode("Create 组装的是 G2 兜底构造器，且工厂解析读 Instance 静态字段（§12.7 F）。")]
     [RequiresDynamicCode("Create 组装的是 G2 兜底构造器。")]
     public static QuickSqlOrm Create(DbKind kind, string connectionString)
@@ -145,7 +145,7 @@ public sealed class QuickSqlOrm
         var driverKey = ProviderRegistry.DriverKeyOf(kind)
             ?? throw new InvalidOperationException(
                 $"DbKind.{kind} 未在 ProviderRegistry 中登记（生成器未挂或 provider 未引用）。已登记：{string.Join(", ", ProviderRegistry.Registered)}。");
-        var factory = QuickSql.DriverLoading.DriverRegistry.Load().Factory(driverKey);
+        var factory = new QuickSql.DriverLoading.DriverRegistry().Factory(driverKey);
         return Create(kind, connectionString, factory);
     }
 
@@ -320,6 +320,18 @@ public sealed class QuickSqlOrm
         // 立刻物化：延迟到执行才枚举的话，AuditValue 填充与"看到的那份数据"就可能不是同一份。
         return new InsertEngine<T>(this, rows as T[] ?? [.. rows]);
     }
+
+    /// <summary>一句 upsert（§5.4 写侧、§12.1 写侧扩展那句"含 MERGE"那一档的一等公民入口）：
+    /// <b>按主键决定"没有就插、有就改"</b>——每一行把除主键、库里给值的列与并发列以外的全部列写进去，
+    /// 主键既是插入清单的一部分、又是冲突判定的键。发射形态由这一家自己定（MySQL ∶ PG 血统走句尾、
+    /// SqlServer ∶ Oracle 血统 ∶ 虚谷 ∶ Gbase8s 走整语句 <c>MERGE</c>），调用方不选。
+    /// <para>它是 <see cref="UpdateRange{T}"/> 的 <see cref="Providers.BulkWriteMethod.Upsert"/> 档同一句文本的
+    /// 另一扇门（同一把列尺子、同两道当场拒），独立出来只为让"我要 upsert"写在方法名上。<b>入口零反射税</b>，
+    /// 与 <see cref="InsertRange{T}"/>、<see cref="UpdateRange{T}"/> 同档：列来自契约、值来自编译好的委托。</para>
+    /// <para>数据走 <see cref="IInsertOrUpdate{T}.SetSource(T)"/> 而不是这颗的形参（FreeSql 式独立链的口径），
+    /// 于是同一只 <see cref="IInsertOrUpdate{T}"/> 可以先 <c>.SetSource(一只)</c> 再换一批。<b>主键由库给值而
+    /// 调用方没带键时当场拒</b>——那种键的冲突判定出不来，逐家形态与"哪几家只到文本层"记 §9.1 与使用册那一节。</para></summary>
+    public IInsertOrUpdate<T> InsertOrUpdate<T>() where T : class => new InsertOrUpdateEngine<T>(this);
 
     /// <summary>UPDATE 链（§6 示例里那句 <c>orm.Update&lt;Item&gt;().Set(...).ExecuteAffrowsAsync(ct)</c>）。
     /// <b>这一条链与 <see cref="Select{T}"/> 一样要付 RUC/RDC 入口税</b>，而 <see cref="Insert{T}"/> 不付：

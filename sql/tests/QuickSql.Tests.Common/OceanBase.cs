@@ -10,7 +10,7 @@ namespace QuickSql.TestInfra;
 /// 本机没有任何一台 OceanBase 实例（§13.4 授权的只有两台 SQL Server 与一台虚谷），清单里那颗 <c>oceanbase</c> 键
 /// 与 <c>mysql</c>／<c>tidb</c> 两颗共用同一份 <c>MySqlConnector</c> 程序集名（清单第一次三键一 assembly），
 /// 而这个名字从未被解析成功过（§13.5 台账里这一行整行「未实测」），所以这里同样<em>没有</em>
-/// <see cref="SqlServer.DriverFromManifest"/> 的对应物。多出来的那一格是本家独有的：双模库的"模式在连接上决定"
+/// <see cref="SqlServer.Driver"/> 的对应物。多出来的那一格是本家独有的：双模库的"模式在连接上决定"
 /// 今天没有任何程序入口能问出来（§14 那格参数名单的第二个实例）——这里造的每一颗 provider 都只在主张
 /// "假设这条连接在 MySQL 模"，读这些用例时不许把那格读成已验证。</para>
 ///

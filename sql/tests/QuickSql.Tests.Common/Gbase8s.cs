@@ -23,7 +23,7 @@ namespace QuickSql.TestInfra;
 ///
 /// <para>本机没有任何一台 GBase 8s，清单里那颗 <c>gbase8s</c> 键的 assembly（<c>GBase.DataDB</c>）与
 /// <c>Kdbndp</c>、<c>DmProvider</c>、<c>MySqlConnector</c>、<c>Oscar</c> 一样从未被解析成功过
-/// （§13.5 台账整行「未实测」），所以这里同样<em>没有</em> <see cref="SqlServer.DriverFromManifest"/>
+/// （§13.5 台账整行「未实测」），所以这里同样<em>没有</em> <see cref="SqlServer.Driver"/>
 /// 的对应物，有了就会被误读成"这条解析路径验过"。<b>这一家还多一道前置：那一行改名之前要先证
 /// "Informix 的就是 GBase 8s 的"</b>（本层每一格现在都挂在这一句借来的等价上，记 §14），
 /// 所以就算驱动解析通了，它验的也只是"清单里那一行取得出工厂"，<em>不</em>验这一层写的任何一个字。</para>

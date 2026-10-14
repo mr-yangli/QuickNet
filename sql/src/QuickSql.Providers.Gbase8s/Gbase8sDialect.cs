@@ -102,6 +102,103 @@ public sealed class Gbase8sDialect(Gbase8sTypes types, Gbase8sKeys keys, Gbase8s
     /// （两半同时被断言的纪律与 <c>OracleDialect</c>/<c>XuguDialect</c> 那两份同一条）。</summary>
     protected override void EmitUpdateTarget(SqlWriter writer, TableRef table) => EmitTableName(writer, table.Table);
 
+    /// <summary><c>InsertOrUpdate</c> 在本家的发射：<b>没有 MERGE 语法，用 <c>UPDATE … WHERE</c> + <c>INSERT … SELECT …
+    /// WHERE NOT EXISTS</c> 两条</b>（类注释第五条与 <see cref="EmitJoinedSources"/> 那条抛指的同一条等价路，
+    /// 【文档·IBM】）。每行一对：<c>UPDATE 置值 WHERE 键=…</c>（命中就改，没命中 0 行）紧跟
+    /// <c>INSERT … SELECT … FROM systables WHERE tabid = 1 AND NOT EXISTS (…键…)</c>（没命中才插）。
+    /// <c>systables WHERE tabid = 1</c> 是这一族把"一颗字面 <c>SELECT</c> 落成一行"的惯用单行源，与本家
+    /// <see cref="Gbase8sKeys"/> 那句 <c>SELECT DBINFO(…) FROM systables WHERE tabid = 1</c> 同一来路。</summary>
+    ///
+    /// <para><b>这一格比句尾与 MERGE 那几颗多背三处未证，逐条写清（本家一条文本都没在活库跑过、本机也没有可跑的库，
+    /// 类注释第二段那句在这里是起点不是待翻的话）</b>：① 一条命令里放<b>多行的这一对语句 = 一个分号批</b>，而本家的
+    /// 多语句批 <see cref="Providers.IBulkStrategy.SupportsMergedStatements"/> 取默认 false、没有过读数——
+    /// <c>WHERE EXISTS</c> 这形状<em>天生</em>要两条语句一起走，退不开，除非引擎改两条往返（那是另一版的活）；
+    /// ② 目标<em>不起别名</em>（<see cref="WriteTargetAlias"/>），所以三处目标引用都用表名本身；③ 参数是位置形
+    /// <c>?</c>（<see cref="EmitParameter"/>），<b>登记次序必须等于文本次序</b>——这里全部由 <see cref="DialectBase.EmitExpression"/>
+    /// 当场登记 + 落 <c>?</c>，一处不重排。同一行的键会在 <c>UPDATE WHERE</c>、<c>INSERT 的 SELECT 清单</c>、
+    /// <c>NOT EXISTS</c> 三处各落一颗 <c>?</c>（各登记一颗同值的参数），语义对而参数偏多，是这一形状没 CTE 可共享行集的代价。</para>
+    ///
+    /// <para>重开触发一句话：连上一台活的 GBase 8s 跑绿这一对（尤其那颗分号批）。</para></summary>
+    public override void Emit(in UpsertStatement upsert, SqlWriter writer)
+    {
+        var table = upsert.Table.Table;
+        var settable = upsert.Settable.Count;
+
+        for (var row = 0; row < upsert.Rows.Count; row++)
+        {
+            // 每一行是一对独立语句：行与行之间也要用分号隔开（一对内部 UPDATE ∶ INSERT 已经带了一颗分号）。
+            if (row > 0)
+                writer.Append("; ");
+
+            var cells = upsert.Rows[row];
+
+            // 一条：命中就改。SET 只并可写列，键只进 WHERE（改自己的键不是整行更新）。
+            writer.Append("UPDATE ");
+            EmitTableName(writer, table);
+            writer.Append(" SET ");
+
+            for (var column = 0; column < settable; column++)
+            {
+                if (column > 0)
+                    writer.Append(", ");
+
+                EmitIdentifier(writer, upsert.Settable[column].ColumnName);
+                writer.Append(" = ");
+                EmitExpression(cells[column]!, writer);
+            }
+
+            writer.Append(" WHERE ");
+            EmitWhereKeys(writer, upsert, cells, settable);
+
+            writer.Append("; INSERT INTO ");
+            EmitTableName(writer, table);
+            writer.Append(" (");
+            EmitColumnList(writer, upsert);
+            writer.Append(") SELECT ");
+
+            for (var column = 0; column < upsert.Columns.Count; column++)
+            {
+                if (column > 0)
+                    writer.Append(", ");
+
+                EmitExpression(cells[column]!, writer);
+            }
+
+            writer.Append(" FROM systables WHERE tabid = 1 AND NOT EXISTS (SELECT 1 FROM ");
+            EmitTableName(writer, table);
+            writer.Append(" WHERE ");
+            EmitWhereKeys(writer, upsert, cells, settable);
+            writer.Append(")");
+        }
+    }
+
+    /// <summary>键等式串（多键合取）：<c>k0 = ? AND k1 = ?</c>。键格在 <see cref="UpsertStatement.Columns"/>
+    /// 里排在可写列之后，所以从 <c>settable + j</c> 取。</summary>
+    void EmitWhereKeys(SqlWriter writer, in UpsertStatement upsert, IReadOnlyList<SqlExpression?> cells, int settable)
+    {
+        for (var key = 0; key < upsert.Keys.Count; key++)
+        {
+            if (key > 0)
+                writer.Append(" AND ");
+
+            EmitIdentifier(writer, upsert.Keys[key].ColumnName);
+            writer.Append(" = ");
+            EmitExpression(cells[settable + key]!, writer);
+        }
+    }
+
+    /// <summary>整张写入清单（可写 ++ 键）的列名串，供 <c>INSERT INTO 表 (…)</c> 用。</summary>
+    void EmitColumnList(SqlWriter writer, in UpsertStatement upsert)
+    {
+        for (var column = 0; column < upsert.Columns.Count; column++)
+        {
+            if (column > 0)
+                writer.Append(", ");
+
+            EmitIdentifier(writer, upsert.Columns[column].ColumnName);
+        }
+    }
+
     /// <summary>登记参数而<em>不</em>落地它的名字，只落一颗 <c>?</c>。这是本家与另五家在文本层
     /// <b>唯一一处结构性的不同</b>：那五家的参数在文本里是有形状的（<c>@p0</c> / <c>:p0</c>），
     /// 本家那一格只有一个字符。

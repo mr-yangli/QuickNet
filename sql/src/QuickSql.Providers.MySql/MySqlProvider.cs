@@ -59,9 +59,9 @@ namespace QuickSql.Providers.MySql;
 [QuickSqlProvider(DbKind.MySql)]
 public sealed class MySqlProvider : MySqlProviderBase
 {
-    /// <summary>清单里的 <c>key</c>。<c>assembly</c> 按 §9.1 的清单写 <c>MySqlConnector</c>（社区驱动，
+    /// <summary>内建表里的 <c>key</c>。<c>assembly</c> 按 §9.1 的清单写 <c>MySqlConnector</c>（社区驱动，
     /// 这一家官方没有 ADO.NET 驱动，<c>MySQL.Data</c> 那一份是另一条血统），而这个名字与金仓、达梦那两格
-    /// 同一处境：<b>从未在一台机器上解析成功过</b>。清单里因此同样刻意不写 <c>factoryType</c> ——
+    /// 同一处境：<b>从未在一台机器上解析成功过</b>。内建表里因此同样刻意不写 <c>factoryType</c> ——
     /// 省略它走"扫导出类型里第一个 <c>DbProviderFactory</c> 子类"那条兜底，比猜一个全名更容易成。</summary>
     public const string DriverKey = "mysql";
 

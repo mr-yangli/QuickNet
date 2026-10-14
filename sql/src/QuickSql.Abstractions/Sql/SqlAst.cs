@@ -178,3 +178,40 @@ public sealed record DeleteStatement
 
     public IReadOnlyList<JoinClause> Joins { get; init; } = [];
 }
+
+/// <summary>整语句 upsert 的 AST（<c>InsertOrUpdate</c> 链在无句尾槽的那一家发的东西）。它是一颗<b>形态中立</b>
+/// 的行集载体：两种真实写法都从它出——SQLite 的 <c>INSERT … ON CONFLICT (键) DO UPDATE SET 列 = excluded.列</c>
+/// 与 <c>MERGE INTO</c> 那一族（SqlServer ∶ Oracle 血统 ∶ 虚谷 ∶ Gbase8s）。
+///
+/// <para><b>它与 <see cref="InsertStatement"/> 的分别是走的门不同，不是内容</b>：句尾那一族（MySQL ∶ PG 血统）
+/// 有 <see cref="Providers.IBulkStrategy.UpsertClause"/> 那颗槽，内核照旧发一颗 <see cref="InsertStatement"/>
+/// 再接一段尾巴——那条路 <c>UpdateRange(...).WithBulk(Upsert)</c> 已经跑绿过，本档原样复用、一处不动；而
+/// <b>没有那颗槽的一家</b>（典型是整颗 <c>Bulk</c> 交回 null 的 SQLite——它接不出句尾不是因为不支 upsert，
+/// 而是 §12.3 那句"没有可举证的参数预算 ⇒ Bulk 交回 null"把它连槽一起挡在外面）只能把整个发射交给方言，
+/// 由它发这一颗 <see cref="UpsertStatement"/>。于是这颗 AST 带上了句尾那一族不需要在 AST 上带的分工
+/// （<see cref="Keys"/> 与 <see cref="Settable"/>），因为发它的那一方拿不到内核替它拼好的列尺子。</para>
+///
+/// <para><b>这颗 AST 与那颗 <c>UpsertClause</c> 槽是同一个意思的两面</b>（列清单 = 可写 ++ 键、键进冲突判定不进
+/// 写入那一支），只是载体不同：槽交的是"给 <c>INSERT</c> 补一句尾巴"的字符串，这颗交的是"发一整句"的 AST。
+/// 未来若把 <c>UpsertClause</c> 从 <see cref="Providers.IBulkStrategy"/> 挪进方言层（它本质是语法不是批量档位），
+/// 两家能并成一条出路；那一挪要重接已经跑绿的 <c>UpdateRange</c> 档，不记在这一颗里，见 §14。</para></summary>
+public sealed record UpsertStatement
+{
+    /// <summary>目标表，也是"没命中就插"那一支插进去的表。</summary>
+    public required TableRef Table { get; init; }
+
+    /// <summary>写入清单的顺序 = <see cref="Settable"/> ++ <see cref="Keys"/>，与句尾族那条
+    /// <c>INSERT … VALUES</c> 逐位同序），<see cref="Rows"/> 的每一行按它排列。</summary>
+    public required IReadOnlyList<Metadata.ColumnContract> Columns { get; init; }
+
+    /// <summary>行 × 列。每格都是参数（这一版不产 <c>DEFAULT</c> 格，与 <see cref="InsertStatement"/> 同一口径）。</summary>
+    public required IReadOnlyList<IReadOnlyList<SqlExpression?>> Rows { get; init; }
+
+    /// <summary>冲突判定的键（<c>ON 目标.键 = 行集.键</c> ∶ <c>ON CONFLICT (键)</c>）：顺序同契约，复合键装得下
+    /// （多条件合取与 <c>(a, b)</c> 目标各是合法文本，与 <c>DeleteRange</c> 那句"IN 装不下元组"是两件事）。</summary>
+    public required IReadOnlyList<Metadata.ColumnContract> Keys { get; init; }
+
+    /// <summary>"命中就改"那一支改写的列 = 除键、库里给值的列与并发列以外的全部列，与句尾族的
+    /// <see cref="Providers.UpsertColumns.Settable"/> 同一把尺。</summary>
+    public required IReadOnlyList<Metadata.ColumnContract> Settable { get; init; }
+}

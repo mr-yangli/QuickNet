@@ -19,7 +19,7 @@ namespace QuickSql.Providers.ShenTong;
 /// （拒收文案），而本家与达梦同族<em>不同形</em>——CREATE TABLE 差在恰好缝所 carry 的那一句，其余各链逐字
 /// 相同。那一格的可跑证据在 <c>ShenTongDialectTests</c>，"同族两叶各自与基类对"不再等于"两叶彼此对"。</para>
 ///
-/// <para><b>清单来路</b>：<c>shentong</c> 键的 assembly 写 <c>Oscar</c>——那是一颗文档口径的名字
+/// <para><b>内建表来路</b>：<c>shentong</c> 键的 assembly 写 <c>Oscar</c>——那是一颗文档口径的名字
 /// （§9.1 行 902 第四列全文就这一个词），与 <c>Kdbndp</c>、<c>DmProvider</c> 同一处境：从未在一台机器上
 /// 解析成功过、刻意不写 <c>factoryType</c>（走"扫第一个 <c>DbProviderFactory</c> 子类"的兜底，理由与达梦行
 /// 逐字相同）、整行「未实测」。现场装上真驱动那天先按厂商读数改回，而不是让本行把它读成"已验证"。</para>
@@ -32,8 +32,8 @@ namespace QuickSql.Providers.ShenTong;
 [QuickSqlProvider(DbKind.ShenTong)]
 public sealed class ShenTongProvider : OracleProviderBase
 {
-    /// <summary>清单里的 <c>key</c>。assembly 那颗 <c>Oscar</c> 是 §9.1 行 902 第四列的原词，
-    /// 从未解析成功过（见类注释第四段），所以清单不写 <c>factoryType</c>——省略它走兜底扫描，
+    /// <summary>内建表里的 <c>key</c>。assembly 那颗 <c>Oscar</c> 是 §9.1 行 902 第四列的原词，
+    /// 从未解析成功过（见类注释第四段），所以内建表不写 <c>factoryType</c>——省略它走兜底扫描，
     /// 比猜一个全名更容易成（达梦行立的纪律，原文照用）。</summary>
     public const string DriverKey = "shentong";
 

@@ -80,7 +80,7 @@ public sealed class ProviderRegistrationGenerator : IIncrementalGenerator
                     continue;
 
                 // DriverKey 是每颗 leaf 上都存在的 `public const string DriverKey`；
-                // 缺这一颗就不登记（QuickSqlOrm.Create 走清单解析时找不到键，抛"该 Kind 无登记"更清晰）。
+                // 缺这一颗就不登记（QuickSqlOrm.Create 走内建表解析时找不到键，抛"该 Kind 无登记"更清晰）。
                 var driverKey = DriverKeyOf(type);
                 if (driverKey is null)
                     continue;

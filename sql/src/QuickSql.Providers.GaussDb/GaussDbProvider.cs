@@ -28,11 +28,11 @@ namespace QuickSql.Providers.GaussDb;
 /// <c>DISTRIBUTED BY</c>）原样继承；真实例到场的五问清单（§14 行 2044 与 openGauss 类注释）对本家同样成立，
 /// 且第一问之前要先问"这台库与 openGauss 是不是同一套文本假设"。</para>
 ///
-/// <para><b>清单那颗 <c>assembly</c> 的名字来路要说准</b>：仍填 <c>Npgsql</c>。于是 PG 血统第一次出现
+/// <para><b>内建表那颗 <c>assembly</c> 的名字来路要说准</b>：仍填 <c>Npgsql</c>。于是 PG 血统第一次出现
 /// "两颗键、同一份 assembly"（opengauss／gaussdb），而它与 mysql／tidb／oceanbase 三键一 assembly
 /// <em>同构而更薄</em>：那三颗共享的是同一族协议的<em>真 primary</em>（MySqlConnector 本来就是那家的驱动），
 /// 这里两颗共享的是<em>邻家库种的兼容臂</em>（金仓那一行的 primary Kdbndp 依旧不共享过来）——
-/// 上一笔在清单里写下的"不对称"，本笔把它从一次记例推广成 PG 血统的系统形状。现场若 GaussDB 装的是
+/// 上一笔在内建表里写下的"不对称"，本笔把它从一次记例推广成 PG 血统的系统形状。现场若 GaussDB 装的是
 /// 自己分发的那份，本行第一件事是按厂商读数改回它自己的程序集名，而不是让本行把它读成"已验证"。</para>
 ///
 /// <para><b>"已适配"三句在这里的读法</b>（§9.1 (丁)）：与 openGauss、TiDB、OceanBase 同档，一句都立不起来，
@@ -42,7 +42,7 @@ namespace QuickSql.Providers.GaussDb;
 [QuickSqlProvider(DbKind.GaussDb)]
 public sealed class GaussDbProvider : PostgreSqlProviderBase
 {
-    /// <summary>清单里的 <c>key</c>。assembly 的来路与"两颗键共享兼容臂"的读法写在类注释第四段；
+    /// <summary>内建表里的 <c>key</c>。assembly 的来路与"两颗键共享兼容臂"的读法写在类注释第四段；
     /// 与全部"未实测"行同一处境：刻意不写 <c>factoryType</c>，走"扫导出类型里第一个
     /// <c>DbProviderFactory</c> 子类"那条兜底（理由与达梦那一行逐字相同）。</summary>
     public const string DriverKey = "gaussdb";

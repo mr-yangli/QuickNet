@@ -79,8 +79,8 @@ public sealed class OceanBaseDialectTests
     public void Kind_and_driver_key_are_the_only_two_things_this_leaf_brings_of_its_own()
     {
         // 这一条钉的是"叶子到底带了什么进来"：一颗枚举值（v0.30 就占着位，本笔零 Core 改动）、
-        // 一颗清单键，其余全部继承。清单键 "oceanbase" 与 "mysql"／"tidb" 共用同一份 assembly
-        // （QuickSqlDrivers.json 第一次三键一程序集）——键不同而 assembly 相同不是冗余，
+        // 一颗内建表键，其余全部继承。内建表键 "oceanbase" 与 "mysql"／"tidb" 共用同一份 assembly
+        // （内建表 BuiltinDrivers 第一次三键一程序集）——键不同而 assembly 相同不是冗余，
         // 是"驱动按协议族装、库种按方言假设装"那格解开的第三个现场。
         Assert.Equal(DbKind.OceanBase, Provider.Kind);
         Assert.Equal("oceanbase", QuickSql.Providers.OceanBase.OceanBaseProvider.DriverKey);

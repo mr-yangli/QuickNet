@@ -25,9 +25,10 @@ public sealed class UntranslatableExpressionException(string nodeText, string? s
     public string? SuggestedRewrite { get; } = suggestedRewrite;
 }
 
-/// <summary>驱动未就位（§1.2 原则 3 的反射加载路径）。错误消息里必须带 <c>QuickSqlDrivers.json</c> 的修法。</summary>
+/// <summary>驱动未就位（§1.2 原则 3 的反射加载路径）。错误消息里必须带两条修法：把驱动 DLL 丢进
+/// <c>drivers/</c>，或用 <c>DriverRegistry.Register</c> 注入已在进程里的工厂。</summary>
 public sealed class DriverNotAvailableException(string driverKey, string? detail, Exception? inner = null)
-    : QuickSqlException($"未加载到驱动 '{driverKey}'。请在 QuickSqlDrivers.json 的 drivers 数组里配置 key/assembly/path/factoryType；{detail ?? "详见 §9.5 交付形态"}", inner)
+    : QuickSqlException($"未加载到驱动 '{driverKey}'。把该库的 ADO.NET 驱动程序集丢进 <输出目录>/drivers/（文件名按内建表 BuiltinDrivers 的程序集名），或用 DriverRegistry.Register 注入已在进程里的工厂；{detail ?? "详见 §9.5 交付形态"}", inner)
 {
     public string DriverKey { get; } = driverKey;
 }

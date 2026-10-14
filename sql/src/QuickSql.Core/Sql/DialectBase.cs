@@ -210,6 +210,82 @@ public abstract class DialectBase(IdentifierPolicy identifiers, IValueBinder val
     protected virtual void EmitReturning(SqlWriter writer, IReadOnlyList<ColumnContract> returning)
         => throw new QuickSqlException($"{Kind} 未实现 RETURNING/OUTPUT，但请求了主键回填（§4 的 IKeyStrategy）");
 
+    /// <summary>整语句 upsert 的默认：抛。句尾那一族走 <see cref="Providers.IBulkStrategy.UpsertClause"/>
+    /// 而不是这一颗（内核先问那一份句尾），只有"没有那颗槽"的一家（SQLite 的 <c>ON CONFLICT</c>、
+    /// <c>MERGE INTO</c> 那一族）到这里；没覆写又没有句尾的家，<c>InsertOrUpdate</c> 在内核那一层就当场拒，
+    /// 走不到这一句的默认抛。这一句抛因此是"覆写漏了一家"的编程期信号，不是给现场的常规红。</summary>
+    public virtual void Emit(in UpsertStatement upsert, SqlWriter writer)
+        => throw new QuickSqlException($"{Kind} 既没接句尾 UpsertClause、也没覆写整语句 upsert 的 emit：InsertOrUpdate 在这一家不可达。");
+
+    /// <summary><c>MERGE</c> 一族共用的后半段：<c>ON (键配) WHEN MATCHED UPDATE SET WHEN NOT MATCHED INSERT VALUES</c>，
+    /// 可选以分号收尾（T-SQL 的 <c>MERGE</c> 必须收一个 <c>;</c>，Oracle 血统与虚谷不收）。三家各写自己的
+    /// <c>MERGE INTO … USING (…)</c> 前半段（源的形状与别名写法是它们的分岔点），尾巴都到这里，一处真相。
+    /// 键只进 <c>ON</c> 与 <c>INSERT</c>、不进 <c>UPDATE SET</c>（改自己的键不是整行更新，与句尾族同判）；
+    /// <c>UPDATE SET</c> 因此只并 <see cref="UpsertStatement.Settable"/>，<c>INSERT</c> 并整张
+    /// <see cref="UpsertStatement.Columns"/>（= 可写 ++ 键）。</summary>
+    protected void EmitMergeTail(SqlWriter writer, string targetAlias, string sourceAlias, in UpsertStatement upsert, bool semicolon)
+    {
+        writer.Append(" ON (");
+
+        for (var key = 0; key < upsert.Keys.Count; key++)
+        {
+            if (key > 0)
+                writer.Append(" AND ");
+
+            EmitQualified(writer, targetAlias, upsert.Keys[key].ColumnName);
+            writer.Append(" = ");
+            EmitQualified(writer, sourceAlias, upsert.Keys[key].ColumnName);
+        }
+
+        writer.Append(") WHEN MATCHED THEN UPDATE SET ");
+
+        for (var column = 0; column < upsert.Settable.Count; column++)
+        {
+            if (column > 0)
+                writer.Append(", ");
+
+            EmitQualified(writer, targetAlias, upsert.Settable[column].ColumnName);
+            writer.Append(" = ");
+            EmitQualified(writer, sourceAlias, upsert.Settable[column].ColumnName);
+        }
+
+        writer.Append(" WHEN NOT MATCHED THEN INSERT (");
+        EmitIdentifierList(writer, upsert.Columns);
+        writer.Append(") VALUES (");
+
+        for (var column = 0; column < upsert.Columns.Count; column++)
+        {
+            if (column > 0)
+                writer.Append(", ");
+
+            EmitQualified(writer, sourceAlias, upsert.Columns[column].ColumnName);
+        }
+
+        writer.Append(')');
+
+        if (semicolon)
+            writer.Append(';');
+    }
+
+    /// <summary>一颗 <c>别名.列</c>：两侧各过一次 <see cref="EmitIdentifier"/>（引号与折叠归本家策略），中间一个点。</summary>
+    protected void EmitQualified(SqlWriter writer, string alias, string column)
+    {
+        EmitIdentifier(writer, alias);
+        writer.Append('.');
+        EmitIdentifier(writer, column);
+    }
+
+    protected void EmitIdentifierList(SqlWriter writer, IReadOnlyList<ColumnContract> columns)
+    {
+        for (var i = 0; i < columns.Count; i++)
+        {
+            if (i > 0)
+                writer.Append(", ");
+
+            EmitIdentifier(writer, columns[i].ColumnName);
+        }
+    }
+
     public virtual void Emit(in UpdateStatement update, SqlWriter writer)
     {
         writer.Append("UPDATE ");

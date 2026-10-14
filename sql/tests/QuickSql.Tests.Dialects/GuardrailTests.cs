@@ -272,6 +272,6 @@ public sealed class GuardrailTests
         var failure = Checks.Raised<DriverNotAvailableException>(() => query.ToList().Count);
 
         Checks.Has("CreateConnection", failure.Message);
-        Checks.Has("QuickSqlDrivers.json", failure.Message);
+        Checks.Has("drivers/", failure.Message);
     }
 }

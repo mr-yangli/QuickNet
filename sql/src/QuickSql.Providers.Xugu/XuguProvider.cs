@@ -12,10 +12,10 @@ namespace QuickSql.Providers.Xugu;
 /// §2 那条"provider 之间禁止互引"在这里表现为：<see cref="XuguConnectorFactory"/> 是第五份逐字同形的拷贝。</para>
 ///
 /// <para><b>构造期不反射</b>：<see cref="DbProviderFactory"/> 由 Core 的 <c>DriverRegistry</c> 按
-/// <c>QuickSqlDrivers.json</c> 解析后注入，所以本程序集编译期不认识 <c>XuguClient</c>（§1.2 原则 3）。
+/// 内建表 <c>BuiltinDrivers</c> 解析后注入，所以本程序集编译期不认识 <c>XuguClient</c>（§1.2 原则 3）。
 /// 那颗程序集名与金仓、达梦、MySQL 三格同一处境：按 §9.1 的清单写，<b>从未在一台机器上解析成功过</b>，
 /// 而且它是四颗里唯一一处<em>连"官方发布名"都没有两档出处</em>的一颗（本次读到的文档给的是驱动包名，
-/// 与托管程序集名是否同名没有核过）—— 所以清单里同样<em>不写</em> <c>factoryType</c>，
+/// 与托管程序集名是否同名没有核过）—— 所以内建表里同样<em>不写</em> <c>factoryType</c>，
 /// 省略它走"扫导出类型里第一个 <c>DbProviderFactory</c> 子类"那条兜底。
 /// 兜底在这一家格外靠得住一点：厂商参考页上写着 <c>XGProviderFactory.Instance</c>【文档】，
 /// 也就是说那一颗工厂<em>类</em>的名字与它存在这件事是有出处的，缺的只是"程序集叫什么"。</para>
@@ -100,7 +100,7 @@ namespace QuickSql.Providers.Xugu;
 [QuickSqlProvider(DbKind.Xugu)]
 public sealed class XuguProvider : IDbProvider
 {
-    /// <summary>清单里的 <c>key</c>。<c>assembly</c> 按本次读到的文档写 <c>XuguClient</c>，
+    /// <summary>内建表里的 <c>key</c>。<c>assembly</c> 按本次读到的文档写 <c>XuguClient</c>，
     /// 而它从未在一台机器上解析成功过（上一段有这一格的完整处境）。名字与
     /// <see cref="DbKind.Xugu"/> 的 <c>ToString().ToLowerInvariant()</c> 一致，所以 <c>key</c> 那一颗
     /// 不需要额外映射表。</summary>

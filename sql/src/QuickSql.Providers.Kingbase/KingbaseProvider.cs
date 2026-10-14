@@ -23,7 +23,7 @@ namespace QuickSql.Providers.Kingbase;
 [QuickSqlProvider(DbKind.Kingbase)]
 public sealed class KingbaseProvider : PostgreSqlProviderBase
 {
-    /// <summary>清单里的 <c>key</c>。<c>assembly</c> 按厂商文档是 <c>Kdbndp</c>（金仓自研驱动），
+    /// <summary>内建表里的 <c>key</c>。<c>assembly</c> 按厂商文档是 <c>Kdbndp</c>（金仓自研驱动），
     /// 现场也可以注 <c>Npgsql</c>（§9.1 那句"兼容 Npgsql"）—— 两条都走同一份注入路径，本程序集编译期都不认识。</summary>
     public const string DriverKey = "kingbase";
 

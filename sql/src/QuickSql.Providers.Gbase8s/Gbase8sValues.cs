@@ -21,7 +21,7 @@ namespace QuickSql.Providers.Gbase8s;
 /// 只有裸 <c>?</c>、后面不跟名字 —— 所以"参数内联给 DBA 看"这一档在本家<em>发不出带值的文本</em>。
 /// <c>XuguValues</c> 类注释第一条为这一档立的判据（能内联就给、不能就保留占位符）在这里不适用：
 /// 保留的是<em>一颗不带名字的字符</em>，比保留 <c>:p0</c> 更少一格信息。这一格今天不改代码、也不声明
-/// 任何"不支持"位，它记 §14 与 <c>QuickSqlDrivers.json</c> 那条本家注。</item>
+/// 任何"不支持"位，它记 §14 与 内建表 <c>BuiltinDrivers</c> 那条本家注。</item>
 /// <item><b><c>Size</c> 在这一家不是装饰</b>：量纲恒字节（<c>Gbase8sTypes</c> 第一条）意味着
 /// "这一颗参数最长几字节"是<em>库侧</em>的一件真事，而另五家它只在 MySQL 那一条上有过含义。
 /// 下面 <see cref="SizeOf"/> 因此比另五家多带一支：hint 有 <c>MaxBytes</c> 时按它报，

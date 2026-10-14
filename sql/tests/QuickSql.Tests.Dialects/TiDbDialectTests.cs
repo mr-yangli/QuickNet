@@ -76,9 +76,9 @@ public sealed class TiDbDialectTests
     [Fact]
     public void Kind_and_driver_key_are_the_only_two_things_this_leaf_brings_of_its_own()
     {
-        // 这一条钉的是"叶子到底带了什么进来"：一颗枚举值、一颗清单键，其余全部继承。
-        // 清单键 "tidb" 与 "mysql" 共用同一份 assembly（QuickSqlDrivers.json 里第一次出现两键一程序集），
-        // 所以 DriverKey 不同而 assembly 相同不是矛盾，是把"驱动"与"库种"解开的那一格露在了清单上。
+        // 这一条钉的是"叶子到底带了什么进来"：一颗枚举值、一颗内建表键，其余全部继承。
+        // 内建表键 "tidb" 与 "mysql" 共用同一份 assembly（内建表 BuiltinDrivers 里第一次出现两键一程序集），
+        // 所以 DriverKey 不同而 assembly 相同不是矛盾，是把"驱动"与"库种"解开的那一格露在了内建表上。
         Assert.Equal(DbKind.TiDb, Provider.Kind);
         Assert.Equal("tidb", QuickSql.Providers.TiDb.TiDbProvider.DriverKey);
         Assert.NotEqual(QuickSql.Providers.MySql.MySqlProvider.DriverKey, QuickSql.Providers.TiDb.TiDbProvider.DriverKey);

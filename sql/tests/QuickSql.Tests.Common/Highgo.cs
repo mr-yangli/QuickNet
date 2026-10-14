@@ -13,7 +13,7 @@ namespace QuickSql.TestInfra;
 /// 真实例到场的第一问是"这一家'兼容 PG'兼容的是哪一代 PG"（行里没有读数）。本机没有任何一台瀚高，
 /// 清单里那颗 <c>highgo</c> 键的 assembly（Npgsql）走的是血统协议自己的驱动（来路全文在清单 $comment
 /// 与本家类注释第四段）——与 <c>Kdbndp</c>、<c>DmProvider</c>、<c>MySqlConnector</c> 一样从未被解析成功过
-/// （§13.5 台账里这一行整行「未实测」）。所以这里同样<em>没有</em> <see cref="SqlServer.DriverFromManifest"/>
+/// （§13.5 台账里这一行整行「未实测」）。所以这里同样<em>没有</em> <see cref="SqlServer.Driver"/>
 /// 的对应物，有了就会被误读成"这条解析路径验过"。</para>
 ///
 /// <para>连接串占位符复用 <see cref="SqlServer.OfflineConnectionString"/>：

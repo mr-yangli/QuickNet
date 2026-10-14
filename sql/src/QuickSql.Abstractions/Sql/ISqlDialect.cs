@@ -110,6 +110,15 @@ public interface ISqlDialect
 
     void Emit(in InsertStatement insert, SqlWriter writer);
 
+    /// <summary>发一整句 upsert——<b>只给"没有 <see cref="Providers.IBulkStrategy.UpsertClause"/> 那颗句尾槽"的一家</b>
+    /// （内核先问那份句尾，交得出就走 <see cref="Emit(InsertStatement)"/> 再接尾巴，走不到这一颗）。到这里的一家
+    /// 发的是两种写法之一：SQLite 的 <c>INSERT … ON CONFLICT DO UPDATE SET 列 = excluded.列</c>，或
+    /// <c>MERGE INTO</c> 那一族（SqlServer、Oracle 血统、虚谷、Gbase8s）。AST 形态中立，写法由这一家自己定。
+    /// <b>默认实现抛</b>——只有覆写了它的家发得出这一句，没覆写又没有句尾的家，<c>InsertOrUpdate</c> 在内核那一层
+    /// 就当场拒（口径见 <see cref="Providers.IBulkStrategy"/> 末尾那句"位与槽是两面"）。收 <see cref="SqlWriter"/>
+    /// 而不返回 <c>string</c>，与 §12.7 那条一致。</summary>
+    void Emit(in UpsertStatement upsert, SqlWriter writer);
+
     void Emit(in UpdateStatement update, SqlWriter writer);
 
     void Emit(in DeleteStatement delete, SqlWriter writer);

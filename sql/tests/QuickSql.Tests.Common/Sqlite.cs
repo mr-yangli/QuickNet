@@ -15,9 +15,9 @@ namespace QuickSql.TestInfra;
 /// <c>QuickSql.Tests.Common.csproj</c> 那一段与 <c>SqliteDialectTests</c>）。</para>
 ///
 /// <para><b>这一档有另三颗单层家都没有的一格：这颗组装根<em>验得出</em>而不只是"挂着就会被误读"</b>。
-/// <see cref="Gbase8s"/> 那一份类注释里写着「这里没有 <see cref="SqlServer.DriverFromManifest"/> 的对应物，
+/// <see cref="Gbase8s"/> 那一份类注释里写着「这里没有 <see cref="SqlServer.Driver"/> 的对应物，
 /// 有了就会被误读成这条解析路径验过」，<see cref="Xugu"/> 那一份在同一格上从"没有对应物"改口成
-/// "有身份了"（v0.32 第二格开了集成通路）。本家从第一天就有 <see cref="DriverFromManifest"/>，
+/// "有身份了"（v0.32 第二格开了集成通路）。本家从第一天就有 <see cref="Driver"/>，
 /// 而它<em>不许被离线册调用</em>：离线册拿 <see cref="SqlServer.NoDriverFactory"/>，碰驱动就是
 /// §3 那条约束的红。只有 <c>tests/QuickSql.Tests.Integration</c>（那里 <c>Microsoft.Data.Sqlite</c>
 /// 在引用闭包里）调得动它，出处是 <c>obj/sqlite-probe*/</c> 那批报告里的 A0 系列四颗。</para>
@@ -47,7 +47,7 @@ public static class Sqlite
         });
 
     /// <summary>走完整的运行期驱动解析链（清单 → 独立 <c>AssemblyLoadContext</c> → 工厂），与
-    /// <see cref="SqlServer.DriverFromManifest"/>、<see cref="Xugu.DriverFromManifest"/> 同一条路、
+    /// <see cref="SqlServer.Driver"/>、<see cref="Xugu.Driver"/> 同一条路、
     /// 同一条"不许直接 <c>new</c> 工厂"的理由。
     ///
     /// <para><b>本行验的到底是哪三件事</b>：清单里 <c>"sqlite"</c> 那一颗键读得出、程序集名
@@ -56,8 +56,8 @@ public static class Sqlite
     /// 清单上第一颗 <c>factoryType</c> 不是照厂商文档写、而是从活机器上读回来的键</b>，所以这里量的是
     /// "我们写进清单的那颗类名与现场那颗同名"，不是"我们猜对了一颗类名"。
     /// 它仍然<em>不</em>验这一层写的任何一个字（那是集成册那 95 条的活）。</para></summary>
-    public static DbProviderFactory DriverFromManifest()
-        => DriverRegistry.Load().Factory(SqliteProvider.DriverKey);
+    public static DbProviderFactory Driver()
+        => new DriverRegistry().Factory(SqliteProvider.DriverKey);
 
     /// <summary>集成测试的目标库：<b>没有默认值</b>，与 <see cref="SqlServer.TestConnectionString"/>、
     /// <see cref="Xugu.TestConnectionString"/> 同一条判据。环境变量 <c>QUICKSQL_SQLITE_CONNECTION</c> 优先，

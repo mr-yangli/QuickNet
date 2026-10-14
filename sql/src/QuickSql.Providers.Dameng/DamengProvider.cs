@@ -35,8 +35,8 @@ namespace QuickSql.Providers.Dameng;
 [QuickSqlProvider(DbKind.Dameng)]
 public sealed class DamengProvider : OracleProviderBase
 {
-    /// <summary>清单里的 <c>key</c>。程序集名按厂商文档写成 <c>DmProvider</c>，<b>从未在一台机器上解析成功过</b>
-    /// （§13.5 台账），所以清单里那一行刻意不写 <c>factoryType</c> —— 省略它走的是"扫导出类型里第一个
+    /// <summary>内建表里的 <c>key</c>。程序集名按厂商文档写成 <c>DmProvider</c>，<b>从未在一台机器上解析成功过</b>
+    /// （§13.5 台账），所以内建表里那一行刻意不写 <c>factoryType</c> —— 省略它走的是"扫导出类型里第一个
     /// <see cref="DbProviderFactory"/> 子类"那条兜底，比猜一个全名更容易成。</summary>
     public const string DriverKey = "dameng";
 

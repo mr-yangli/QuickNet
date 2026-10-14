@@ -20,7 +20,7 @@ namespace QuickSql.Providers.OracleBase;
 /// <c>CodeFirst</c> 实例类型就是 <c>OracleCodeFirst</c> 本身。</para>
 ///
 /// <para><b>构造期不反射</b>：<see cref="DbProviderFactory"/> 由 Core 的 <c>DriverRegistry</c> 按
-/// <c>QuickSqlDrivers.json</c> 解析后注入，所以本程序集编译期不认识 <c>Oracle.ManagedDataAccess</c>
+/// 内建表 <c>BuiltinDrivers</c> 解析后注入，所以本程序集编译期不认识 <c>Oracle.ManagedDataAccess</c>
 /// 也不认识达梦那一份（§1.2 原则 3）。</para>
 ///
 /// <para>各槽位共用同一批实例（与另两族同一条纪律；【v0.31】另三家今天也守这一条，五家无一例外）：
@@ -143,7 +143,7 @@ public abstract class OracleProviderBase : IDbProvider
     /// <para><b>【本笔表态 —— §12.1 批量阶梯铺开时这一家刻意不接，三条理由按薄厚排】</b>
     /// ① 这一族真实存在一个 L1 形状的候选（ODP.NET 的数组绑定：一次往返交整列值），但它的回包给不出
     /// "这一批真进去几行"可数的数（<c>ExecuteArray</c> 一族的返回口径本次一页厂商文档都没读到），
-    /// 而 §12.1 那句"报不出行数的通道宁可没有"是三家用同一把尺立起来的；② 这颗程序集（清单上 Oracle /
+    /// 而 §12.1 那句"报不出行数的通道宁可没有"是三家用同一把尺立起来的；② 这颗程序集（内建表上 Oracle /
     /// DmProvider / Oscar 三份名）从未在一台机器上解析成功过，反射面连"类型在不在"都无从验；
     /// ③ 本机没有任何一台授权实例。<b>重开条件</b>：三缺一不行——先要有实例，再要有能读出"行数口径"的
     /// 厂商页，两者都到场才谈接线；在那之前这一格保持 null，阶梯从 L3 起。Merged 档同走默认 false：

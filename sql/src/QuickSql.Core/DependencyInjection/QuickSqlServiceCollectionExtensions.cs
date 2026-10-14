@@ -87,7 +87,7 @@ public static class QuickSqlServiceCollectionExtensions
 {
     /// <summary>EF Core 风格的注册口。<b>默认 Scoped</b>，与 <c>AddDbContext</c> 同一条判据。
     /// 重对象（<see cref="IEntitySchemaRegistry"/>、<see cref="IDbProvider"/>）走 Singleton。
-    /// 驱动工厂由 <see cref="DriverRegistry"/> 按 <c>QuickSqlDrivers.json</c> 现场解析。</summary>
+    /// 驱动工厂由 <see cref="DriverRegistry"/> 按 内建表 <c>BuiltinDrivers</c> 现场解析。</summary>
     [RequiresUnreferencedCode("QuickSqlOrm 的 G2 兜底构造器按 Type 反射解析实体与注解。")]
     [RequiresDynamicCode("QuickSqlOrm 的 G2 兜底构造器编译读写委托。")]
     public static IServiceCollection AddQuickSqlOrm(
@@ -121,7 +121,7 @@ public static class QuickSqlServiceCollectionExtensions
         return RegisterCore(services, builder);
     }
 
-    /// <summary>已知工厂的注册口。跳过清单解析，适合宿主自己引用了驱动包的场景。</summary>
+    /// <summary>已知工厂的注册口。跳过内建表解析，适合宿主自己引用了驱动包的场景。</summary>
     [RequiresUnreferencedCode("QuickSqlOrm 的 G2 兜底构造器按 Type 反射解析实体与注解。")]
     [RequiresDynamicCode("QuickSqlOrm 的 G2 兜底构造器编译读写委托。")]
     public static IServiceCollection AddQuickSqlOrm(
@@ -228,12 +228,12 @@ public static class QuickSqlServiceCollectionExtensions
         return services;
     }
 
-    [RequiresUnreferencedCode("DriverRegistry 按清单反射解析 DbProviderFactory。")]
+    [RequiresUnreferencedCode("DriverRegistry 按内建表反射解析 DbProviderFactory。")]
     static DbProviderFactory ResolveFactory(DbKind kind)
     {
         var driverKey = ProviderRegistry.DriverKeyOf(kind)
             ?? throw new InvalidOperationException(
                 $"DbKind.{kind} 未在 ProviderRegistry 中登记（生成器未挂或 provider 未引用）。");
-        return DriverRegistry.Load().Factory(driverKey);
+        return new DriverRegistry().Factory(driverKey);
     }
 }

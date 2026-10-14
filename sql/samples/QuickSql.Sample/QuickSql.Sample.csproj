@@ -28,14 +28,9 @@
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
 
     <!-- 驱动包只出现在 tests/ 与 samples/：src/ 下的 provider 编译期不认识它（§1.2 原则 3）。
-         §14 那一段要走的是清单里 "sqlserver" 那一行的运行期解析，所以这一颗必须拷进输出目录，
+         §14 那一段要走的是内建表 BuiltinDrivers 里 "sqlserver" 那一行的运行期解析，所以这一颗必须拷进输出目录，
          而<em>不是</em>直接 new SqlClientFactory()——那样会把要示范的那条链绕过去。 -->
     <PackageReference Include="Microsoft.Data.SqlClient" />
-  </ItemGroup>
-
-  <!-- 驱动清单：运行期按 DbKind 解析 DbProviderFactory -->
-  <ItemGroup>
-    <None Include="..\..\QuickSqlDrivers.json" Link="QuickSqlDrivers.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

@@ -400,7 +400,7 @@ public sealed class ConcurrencyPathTests
         var id = await Seed(sku);
 
         // 独立一台 ORM：钩子是挂在 <c>Aop</c> 上的进程内状态，改共享那一份会串到同场其他用例。
-        // <b>v0.32 第二格： provider 与连接串改由缝给</b>（这一颗从前是 <c>SqlServer.Orm(SqlServer.DriverFromManifest())</c>，
+        // <b>v0.32 第二格： provider 与连接串改由缝给</b>（这一颗从前是 <c>SqlServer.Orm(SqlServer.Driver())</c>，
         // 而本方法的 <c>Read</c>/<c>Row</c> 都走 <c>Database</c> —— 第五家那一跑里"写在一台库、判在另一台"）
         var armed = Database.OrmWith();
         var db = new DbContext(armed);

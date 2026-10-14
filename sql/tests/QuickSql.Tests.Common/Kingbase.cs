@@ -6,7 +6,7 @@ namespace QuickSql.TestInfra;
 /// <summary>金仓这一系的组装根，与 <see cref="SqlServer"/> 同形：<b>provider 由调用方直接构造并交进来</b>
 /// （§12.7 F），内核不做 <c>Type.GetType(string)</c>。
 ///
-/// <para>它存在的唯一理由是"第二个方言族在离线侧可测"这一件事，所以这里<b>没有</b> <see cref="SqlServer.DriverFromManifest"/>
+/// <para>它存在的唯一理由是"第二个方言族在离线侧可测"这一件事，所以这里<b>没有</b> <see cref="SqlServer.Driver"/>
 /// 的对应物：本机没有任何一台金仓，清单里那一行的程序集名也从未被解析成功过（§13.5 台账里的「未实测」）。
 /// 等现场第一次连上真库，这一格要补的是连接串解析与真库用例，而不是在这里先猜一个默认值。</para>
 ///

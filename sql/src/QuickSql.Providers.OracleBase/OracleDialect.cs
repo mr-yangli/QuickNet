@@ -165,4 +165,60 @@ public class OracleDialect(DbKind kind, OracleTypes types, OracleKeys keys, Orac
             + "日常路径不会到这里 —— SupportsJoinedWrites 为 false 时 SaveChanges 整桶退回一句一实体，"
             + "语义与合并档等价（§12.4 第 1 项），代价是那 " + joins.Count + " 组表源所代表的行各占一次往返。");
     }
+
+    /// <summary>源在本家起的别名（目标另起 <c>t0</c>）。两家都是<em>不带 <c>AS</c></em> 的表别名——这与
+    /// <see cref="SourceAliasKeyword"/> 那句"这一家只在列别名上接受 <c>AS</c>"同源，MERGE 的两个别名都是表位。</summary>
+    const string MergeTarget = "t0";
+
+    const string MergeSource = "qsrc";
+
+    /// <summary><c>InsertOrUpdate</c> 在本血统的发射：<b>Oracle 的 <c>MERGE INTO … USING (SELECT … FROM dual UNION ALL …) …</c></b>。
+    /// 这一家没有 <c>(VALUES …)</c> 那种行集构造子，多行只能写成一颗 <c>SELECT … FROM dual</c> 的 <c>UNION ALL</c> 串
+    /// （每颗格是一枚参数、以一个列别名命名，后面的 <c>ON</c> ∶ <c>SET</c> ∶ <c>INSERT VALUES</c> 都引那别名）；
+    /// <c>ON</c> 与两支的去向由共用层那份 <see cref="DialectBase.EmitMergeTail"/> 发，不收分号。
+    /// 目标位起别名（<c>MERGE INTO 表 t0</c>）——这一家只有 <c>UPDATE</c> 的目标不能起别名，<c>MERGE</c> 能。</summary>
+    ///
+    /// <para><b>档位口径</b>：这一句是本血统第一条产出的 <c>MERGE</c> 文本，形态是厂商文档口径（Oracle MERGE 语法），
+    /// 而本仓库<em>没有任何一台授权 Oracle 血统实例</em>跑过它（类注释第二段那句"本类产出没有在一台真库上跑过"
+    /// 对这一格同样成立）。它到"文本层已钉 + 未实测台账"为止，达梦 ∶ 神通两家在这一颗上同档同因（共用本类产出）。
+    /// 另一格 Oracle MERGE 的老坑——<c>WHEN MATCHED UPDATE SET</c> 不能改 <c>ON</c> 里用到的那一列（ORA-38104）——
+    /// 本形状构造上不会踩：键只进 <c>ON</c> 与 <c>INSERT</c>，<c>SET</c> 只有可写列。重开条件一句话：连上一台 Oracle
+    /// 血统库跑绿这一句（§14、集成册补一场）。</para></summary>
+    public override void Emit(in UpsertStatement upsert, SqlWriter writer)
+    {
+        writer.Append("MERGE INTO ");
+        EmitTableName(writer, upsert.Table.Table);
+        writer.Append(' ');
+        EmitIdentifier(writer, MergeTarget);
+
+        // USING (SELECT :p0 AS "col0", :p1 AS "col1" FROM dual UNION ALL SELECT …) qsrc
+        writer.Append(" USING (");
+
+        for (var row = 0; row < upsert.Rows.Count; row++)
+        {
+            if (row > 0)
+                writer.Append(" UNION ALL ");
+
+            writer.Append("SELECT ");
+
+            var cells = upsert.Rows[row];
+
+            for (var column = 0; column < cells.Count; column++)
+            {
+                if (column > 0)
+                    writer.Append(", ");
+
+                EmitExpression(cells[column]!, writer);
+                writer.Append(" AS ");
+                EmitIdentifier(writer, upsert.Columns[column].ColumnName);
+            }
+
+            writer.Append(" FROM dual");
+        }
+
+        writer.Append(") ");
+        EmitIdentifier(writer, MergeSource);
+
+        EmitMergeTail(writer, MergeTarget, MergeSource, upsert, semicolon: false);
+    }
 }

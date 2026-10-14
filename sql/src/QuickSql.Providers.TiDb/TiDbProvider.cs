@@ -3,7 +3,7 @@ using QuickSql.Providers.MySqlBase;
 
 namespace QuickSql.Providers.TiDb;
 
-/// <summary>TiDB 的驱动槽位（§9.1 的 TiDB 那一行，"缺的只是一层壳与它的清单行"那一格的兑现日）。
+/// <summary>TiDB 的驱动槽位（§9.1 的 TiDB 那一行，"缺的只是一层壳与它的内建表行"那一格的兑现日）。
 ///
 /// <para><b>它是 MySQL 血统的第一颗真叶子</b>——说"第一颗"要带一个限定，否则会被本仓库自己的历史挑刺：
 /// <c>QuickSql.Providers.MySql</c> 那层壳更早落地、同样零覆写，但它是<b>本尊</b>挂上血统，而本类是
@@ -41,13 +41,13 @@ namespace QuickSql.Providers.TiDb;
 /// </list></para>
 ///
 /// <para><b>"已适配"三句在这里的读法</b>（§9.1 (丁)）：本家比另外四家更弱一档——它连一颗实例、
-/// 一次驱动解析的见证都没有（驱动清单里与 <c>mysql</c> 那一行共用同一颗 assembly <c>MySqlConnector</c>，
+/// 一次驱动解析的见证都没有（驱动内建表里与 <c>mysql</c> 那一行共用同一颗 assembly <c>MySqlConnector</c>，
 /// 那一行"从未解析成功过"的处境本行全文继承）。所以这一家今天能说的只有文本层那一句：
 /// 产出自本类的每一颗字节都出自 <c>MySqlProviderBase</c> 那 1 557 行，与"MySQL 接受它"隔着一整个未实测的距离。</para></summary>
 [QuickSqlProvider(DbKind.TiDb)]
 public sealed class TiDbProvider : MySqlProviderBase
 {
-    /// <summary>清单里的 <c>key</c>。它是 <c>QuickSqlDrivers.json</c> 里<b>第一颗与另一行共用同一份 assembly 的键</b>
+    /// <summary>内建表里的 <c>key</c>。它是 内建表 <c>BuiltinDrivers</c> 里<b>第一颗与另一行共用同一份 assembly 的键</b>
     /// （<c>mysql</c> 与本行都解析 <c>MySqlConnector</c>）：两颗键指向同一个程序集不是冗余，是把"驱动"与
     /// "库种"这两格解开的第一个现场——驱动按协议族装，库种按方言假设装，中间那格今天由 provider 自己站死。
     /// 与另几行同一处境：从未在一台机器上解析成功过，同样刻意不写 <c>factoryType</c>（兜底理由与达梦那一行逐字相同）。</summary>

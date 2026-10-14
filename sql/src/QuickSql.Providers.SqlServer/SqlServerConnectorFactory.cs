@@ -4,7 +4,7 @@ using QuickSql.Providers;
 namespace QuickSql.Providers.SqlServer;
 
 /// <summary>连接与命令的创建（§4）。<b>这里没有任何 <c>SqlConnection</c>/<c>SqlClientFactory</c> 的类型名</b>：
-/// 驱动实例由 Core 的 <c>DriverRegistry</c> 按 <c>QuickSqlDrivers.json</c> 在运行期解析后注入（§1.2 原则 3），
+/// 驱动实例由 Core 的 <c>DriverRegistry</c> 按 内建表 <c>BuiltinDrivers</c> 在运行期解析后注入（§1.2 原则 3），
 /// 之后全部是 <see cref="DbProviderFactory"/> 的虚调用。热路径上没有反射，也没有字符串找类型。</summary>
 public sealed class SqlServerConnectorFactory(DbProviderFactory factory) : IConnectorFactory
 {

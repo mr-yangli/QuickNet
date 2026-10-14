@@ -10,7 +10,7 @@ namespace QuickSql.Providers.Xugu;
 /// 而"复用"在这一族压根不是问题（它没有血统基类，§9.1 那份清单里没有第二种挂在这家底下的库种），
 /// 所以这一份重复是纯粹由 §2 那条禁令造成的，不是分层没做到位。
 ///
-/// <para>驱动实例由 Core 的 <c>DriverRegistry</c> 按 <c>QuickSqlDrivers.json</c> 在运行期解析后注入
+/// <para>驱动实例由 Core 的 <c>DriverRegistry</c> 按 内建表 <c>BuiltinDrivers</c> 在运行期解析后注入
 /// （§1.2 原则 3），热路径上没有反射，也没有字符串找类型。这一族的驱动比另四家多一个失败面：
 /// 它带一份<em>原生</em>同伴（<c>xugusql.dll</c> / <c>libxugusql.so</c>），所以"托管程序集加载成功"
 /// 不等于"能用"—— 下面那颗 <see cref="TryEnsureLoaded"/> 在这一家比在另四家更该被调用。

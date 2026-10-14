@@ -11,7 +11,7 @@ namespace QuickSql.TestInfra;
 /// 本机没有任何一台 openGauss（§13.4 授权的三台里没有它，官方镜像在 §13.1 第 4 项点名过而未起），
 /// 清单里那颗 <c>opengauss</c> 键的 assembly（Npgsql）走的是金仓行 $comment 里"现场也可以注 Npgsql"
 /// 那条兼容臂，而这个名字与 <c>Kdbndp</c> 一样从未被解析成功过（§13.5 台账里这一行整行「未实测」）——
-/// 所以这里同样<em>没有</em> <see cref="SqlServer.DriverFromManifest"/> 的对应物，有了就会被误读成
+/// 所以这里同样<em>没有</em> <see cref="SqlServer.Driver"/> 的对应物，有了就会被误读成
 /// "这条解析路径验过"。</para>
 ///
 /// <para>连接串占位符复用 <see cref="SqlServer.OfflineConnectionString"/>：

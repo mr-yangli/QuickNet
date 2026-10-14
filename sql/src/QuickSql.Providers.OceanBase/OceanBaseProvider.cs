@@ -25,7 +25,7 @@ namespace QuickSql.Providers.OceanBase;
 /// 是同一颗公开形状的三个来客），那一句归 §4 SPI 与 §9.5 <c>doctor</c>，不是本笔能顺手定的。
 /// 这一家今天能<em>诚实</em>说的只有：产出自本类的每一颗字节都出自 <c>MySqlProviderBase</c> 那一份文本层，
 /// 它与"MySQL 模的 OceanBase 接受它"之间隔着<em>两层</em>未实测——第一层是"MySqlConnector 从没解析成功过"
-/// （清单里 <c>mysql</c>／<c>tidb</c>／<c>oceanbase</c> 三颗键共用同一份 assembly，那一行整行「未实测」），
+/// （内建表里 <c>mysql</c>／<c>tidb</c>／<c>oceanbase</c> 三颗键共用同一份 assembly，那一行整行「未实测」），
 /// 第二层是"这条连接今天到底在哪个模"问不出来。前一层与 TiDB 同处境，后一层是本家<em>独有</em>的，
 /// 也是本类不许被读成"OceanBase 已适配"的原因。</para>
 ///
@@ -42,19 +42,19 @@ namespace QuickSql.Providers.OceanBase;
 ///
 /// <para><b>"已适配"三句在这里的读法</b>（§9.1 (丁)）：与 <c>TiDbProvider</c> 同档而更弱——它连"这一颗是 MySQL 模"
 /// 都不敢替现场断，因为那句在 OceanBase 上是<em>连接级事实</em>而非<em>库种事实</em>。所以本家今天三句都立不起来：
-/// ① 驱动 —— 清单里 <c>oceanbase</c> 键从未在任何机器上解析过，它继承的 <c>mysql</c> 行本身整行「未实测」；
+/// ① 驱动 —— 内建表里 <c>oceanbase</c> 键从未在任何机器上解析过，它继承的 <c>mysql</c> 行本身整行「未实测」；
 /// ② 覆盖面 —— 零条语句在任何一台 OceanBase 上执行过（§13.4 授权的三台里没有它，本机也没有）；
 /// ③ 中文 —— 从未问过。重开触发同 <c>TiDbProvider</c>：真实例到场之日（§13.1 第 4 项姿势交付），
 /// 而 OceanBase 那一天<em>多</em>一件要先问的：确认那台连接建在 MySQL 模——这一问今天没有任何程序入口能答。</para></summary>
 [QuickSqlProvider(DbKind.OceanBase)]
 public sealed class OceanBaseProvider : MySqlProviderBase
 {
-    /// <summary>清单里的 <c>key</c>。它是 <c>QuickSqlDrivers.json</c> 里<b>第三颗与 <c>mysql</c>／<c>tidb</c> 共用
+    /// <summary>内建表里的 <c>key</c>。它是 内建表 <c>BuiltinDrivers</c> 里<b>第三颗与 <c>mysql</c>／<c>tidb</c> 共用
     /// 同一份 assembly（<c>MySqlConnector</c>）的键</b>——"驱动按协议族装、库种按方言假设装"那格解开的第三个现场。
     /// 与前两行同一处境：从未在一台机器上解析成功过，同样刻意不写 <c>factoryType</c>（走扫第一个
     /// <c>DbProviderFactory</c> 子类的兜底，理由与达梦那一行逐字相同）。<b>而这一颗比前两颗多一层不确定</b>：
     /// 它的 <c>assembly</c> 只在"这条连接建在 MySQL 模"时才走 <c>MySqlConnector</c>——若现场把这台库建在 Oracle 模，
-    /// 该走的是另一颗（今天清单里没有、因为 §9.1 那行 Oracle 模那颗叶子被裁了后置）。这一格差异今天无处声明，
+    /// 该走的是另一颗（今天内建表里没有、因为 §9.1 那行 Oracle 模那颗叶子被裁了后置）。这一格差异今天无处声明，
     /// 缺口记 §14 那颗"模式在连接上决定"（金仓兼容模式的第二个实例）。</summary>
     public const string DriverKey = "oceanbase";
 

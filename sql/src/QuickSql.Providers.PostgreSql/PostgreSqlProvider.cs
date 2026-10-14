@@ -55,12 +55,12 @@ namespace QuickSql.Providers.PostgreSql;
 /// 一个<em>反方向</em>的样本：前五颗叶子的"没覆写"读作"分岔不在发射面上"，本颗的"没覆写"读作
 /// "覆写了也只会离派生更远"——无缝这一格今天第一次与"有缝也不走"同时成立。</para>
 ///
-/// <para><b>清单那颗 <c>assembly</c> 是 Npgsql 在这份清单上的第一颗本尊键</b>：填 <c>Npgsql</c>。
+/// <para><b>内建表那颗 <c>assembly</c> 是 Npgsql 在内建表上的第一颗本尊键</b>：填 <c>Npgsql</c>。
 /// 前四颗派生键共享这颗名字的两条来路都在别人身上——opengauss／gaussdb 借的是邻家库种（金仓）那一行的
 /// 兼容臂，highgo／gbase8c 直称的是行内那三个字"兼容 PG"；本行不用借也不用称：这一家的线协议就是
-/// Npgsql 所实现的那一个协议。于是 PG 血统凑齐"五颗键、同一份 assembly"（本清单第一次到五），
-/// 而来路今天分三种：兼容臂 2 ∶ 派生直称 2 ∶ 本尊正路 1，那道差别留在清单 $comment 与本段不抹平。
-/// 另有一格只在本行成立：全清单唯一一处写到 <c>Npgsql</c> 那颗<b>工厂类全名</b>的地方是金仓行 $comment 里
+/// Npgsql 所实现的那一个协议。于是 PG 血统凑齐"五颗键、同一份 assembly"（本内建表第一次到五），
+/// 而来路今天分三种：兼容臂 2 ∶ 派生直称 2 ∶ 本尊正路 1，那道差别留在内建表注释与本段不抹平。
+/// 另有一格只在本行成立：全内建表唯一一处写到 <c>Npgsql</c> 那颗<b>工厂类全名</b>的地方是金仓行注释里
 /// 那句"现场改法"（<c>Npgsql.NpgsqlFactory</c>），也就是写在<em>退路</em>那一支里——本行走的是正路而照旧
 /// 刻意不写 <c>factoryType</c>（理由与达梦那一行逐字相同）。这颗名字从未解析成功过、整行「未实测」，
 /// 本机没有任何一台 PostgreSQL。它是不是公开可下载、什么许可、AOT 友不友好，本仓库没有一处读数，
@@ -75,8 +75,8 @@ namespace QuickSql.Providers.PostgreSql;
 [QuickSqlProvider(DbKind.PostgreSql)]
 public sealed class PostgreSqlProvider : PostgreSqlProviderBase
 {
-    /// <summary>清单里的 <c>key</c>。assembly 的来路与"五颗 Npgsql 键里第一颗本尊键"写在类注释第六段与清单
-    /// $comment；与全部"未实测"行同一处境：刻意不写 <c>factoryType</c>，走"扫导出类型里第一个
+    /// <summary>内建表里的 <c>key</c>。assembly 的来路与"五颗 Npgsql 键里第一颗本尊键"写在类注释第六段与内建表
+    /// 注释；与全部"未实测"行同一处境：刻意不写 <c>factoryType</c>，走"扫导出类型里第一个
     /// <c>DbProviderFactory</c> 子类"那条兜底（理由与达梦那一行逐字相同）。</summary>
     public const string DriverKey = "postgresql";
 

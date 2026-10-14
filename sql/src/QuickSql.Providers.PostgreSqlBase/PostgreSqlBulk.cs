@@ -39,7 +39,7 @@ public sealed class PostgreSqlBulk : IBulkStrategy
     public PostgreSqlBulk(DbProviderFactory driverFactory)
     {
         // 与 SqlServerBulk / MySqlBulk 同一条纪律：构造期零反射，只记"工厂住在哪个程序集"。
-        // 这一族这句话比另两家更实：清单上 PG 血统五颗键共填 Npgsql 一颗 assembly，装载类找不找得到，
+        // 这一族这句话比另两家更实：内建表上 PG 血统五颗键共填 Npgsql 一颗 assembly，装载类找不找得到，
         // 全看现场装的到底是哪一支——TryResolve 的形状扫描就是那两种现场的分工处。
         _driver = driverFactory.GetType().Assembly;
     }

@@ -18,7 +18,7 @@ namespace QuickSql.TestInfra;
 ///
 /// <para>本机没有任何一台 PostgreSQL，清单里那颗 <c>postgresql</c> 键的 assembly（Npgsql，本族五颗键共用的那一份，
 /// 而本行是第一颗<em>本尊键</em>）与 <c>Kdbndp</c>、<c>DmProvider</c>、<c>MySqlConnector</c> 一样从未被解析成功过
-/// （§13.5 台账整行「未实测」），所以这里同样<em>没有</em> <see cref="SqlServer.DriverFromManifest"/> 的对应物，
+/// （§13.5 台账整行「未实测」），所以这里同样<em>没有</em> <see cref="SqlServer.Driver"/> 的对应物，
 /// 有了就会被误读成"这条解析路径验过"。</para>
 ///
 /// <para><b>【2026-09-29 改判 —— 原文照抄在前，改判在后】</b>上面那一段两句今天都不成立了：
@@ -50,16 +50,16 @@ public static class PostgreSql
         });
 
     /// <summary>走完整的运行期驱动解析链（清单 → 独立 <c>AssemblyLoadContext</c> → 工厂），与
-    /// <see cref="SqlServer.DriverFromManifest"/>、<see cref="Xugu.DriverFromManifest"/>、
-    /// <see cref="Sqlite.DriverFromManifest"/> 同一条路、同一条"不许直接 <c>new</c> 工厂"的理由。
+    /// <see cref="SqlServer.Driver"/>、<see cref="Xugu.Driver"/>、
+    /// <see cref="Sqlite.Driver"/> 同一条路、同一条"不许直接 <c>new</c> 工厂"的理由。
     ///
     /// <para><b>本行验的三件事</b>：清单里 <c>"postgresql"</c> 那一颗键读得出、程序集名 <c>Npgsql</c>
     /// 解析得出、交回来的工厂 <c>CreateConnection()</c> 连得上。它<em>不</em>验这一层写的任何一个字
     /// （那是集成册那批用例的活），也<em>不</em>把清单那一行读成"已验证"—— 那一行填的 <c>Npgsql</c>
     /// 是本族协议自己实现的驱动，所以本行不需要"按厂商读数改回程序集名"那一步，这是它与
     /// <c>opengauss</c>／<c>gaussdb</c>／<c>highgo</c>／<c>gbase8c</c> 四颗派生键唯一的差别。</para></summary>
-    public static DbProviderFactory DriverFromManifest()
-        => DriverRegistry.Load().Factory(PostgreSqlProvider.DriverKey);
+    public static DbProviderFactory Driver()
+        => new DriverRegistry().Factory(PostgreSqlProvider.DriverKey);
 
     /// <summary>集成测试的第四台目标库：<b>没有默认值</b>，与 <see cref="SqlServer.TestConnectionString"/>、
     /// <see cref="Xugu.TestConnectionString"/> 同一条判据。环境变量 <c>QUICKSQL_POSTGRES_CONNECTION</c> 优先，

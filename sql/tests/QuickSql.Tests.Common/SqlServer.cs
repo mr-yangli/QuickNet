@@ -63,14 +63,14 @@ public static class SqlServer
     /// <summary>走完整的运行期驱动解析链（清单 → <see cref="AssemblyLoadContext"/> → 工厂），
     /// §1.2 原则 3 与 §9.5 在 P0 的第一次真跑就是这一句。<b>不是</b> <c>new SqlClientFactory()</c>：
     /// 那样会把要验的东西绕过去。</summary>
-    public static DbProviderFactory DriverFromManifest()
-        => DriverRegistry.Load().Factory(SqlServerProvider.DriverKey);
+    public static DbProviderFactory Driver()
+        => new DriverRegistry().Factory(SqlServerProvider.DriverKey);
 
     /// <summary>注入已经在进程里的工厂（§9.5 的 AOT 干净路径）：调用方自己引用驱动包，
     /// 把 <c>DbProviderFactory</c> 交进来，编译期仍然没有驱动引用。</summary>
     public static DbProviderFactory Injected(DbProviderFactory factory)
     {
-        var registry = DriverRegistry.Load();
+        var registry = new DriverRegistry();
 
         registry.Register(SqlServerProvider.DriverKey, factory);
 

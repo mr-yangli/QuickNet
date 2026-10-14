@@ -9,7 +9,7 @@ namespace QuickSql.Providers.Sqlite;
 /// （SQLite 3.46.1 ∶ Microsoft.Data.Sqlite 9.0.0，两颗版本现场读出于 A0/A1/H1）。
 /// 这句只到"问过"为止，两处例外与 <c>SqliteProvider</c> 类抬头那一句同一条：其一，那些编号量的是
 /// <em>探针手写的语句</em>，本 provider 今天还没有把一条自己产出的文本发出去跑过（整格见本 csproj 的
-/// <c>Description</c> 与 <c>QuickSqlDrivers.json</c> 本家注）；其二，<c>DbCapabilities</c> 那一份清单里有
+/// <c>Description</c> 与 内建表 <c>BuiltinDrivers</c> 本家注）；其二，<c>DbCapabilities</c> 那一份清单里有
 /// 几颗本轮没设点位。
 /// 限定的话与 <c>SqliteTypes</c> 类抬头同一句：量的是这一对，不是"这一族的所有部署"。
 ///
@@ -35,7 +35,7 @@ namespace QuickSql.Providers.Sqlite;
 /// 而两家的来路不同：T-SQL 那一家是两段历史（v0.19–v0.31 原样递、v0.32 之后也绿），本家是当场四颗问的
 /// 【实测·E1/E2b/O/414】。<b>但本家这一位不是"两侧都认"的全部</b>：具名两侧都认，而<b>匿名那颗
 /// <c>?</c> 驱动直接拒</b>【实测·225】，尽管引擎自己支持 <c>?1</c> 那一族【实测·N】。
-/// "引擎支持而驱动不支持"这一格在本仓库是第一次有实测，它记 §14 与 <c>QuickSqlDrivers.json</c> 本家注：
+/// "引擎支持而驱动不支持"这一格在本仓库是第一次有实测，它记 §14 与 内建表 <c>BuiltinDrivers</c> 本家注：
 /// 换一颗直接绑 <c>sqlite3_bind_*</c> 的驱动，本家的前缀取向就不是唯一答案了。</para>
 ///
 /// <para><b>【三格零覆写，而它们各自是别的家覆写过的那三格】</b>恒假/恒真谓词（<c>1 = 0</c> ∶
@@ -185,5 +185,51 @@ public sealed class SqliteDialect(SqliteTypes types, SqliteKeys keys, SqliteValu
             + "… WHERE EXISTS (SELECT 1 FROM 源 WHERE …) 的关联形，而共用层不发那两种形状。"
             + "整批退回一句一实体由 SupportsJoinedWrites 决定（语义与合并档等价，§12.4 第 2 项），走到这里说明那颗开关被绕过了 —— "
             + "宁可报错也不能悄悄丢掉表源，那等于丢掉连接条件（§1.2 原则 4）。");
+    }
+
+    /// <summary><c>InsertOrUpdate</c> 在本家的发射：<b>复用共用层那颗 <c>INSERT … VALUES</c>（列清单、VALUES 形状与
+    /// 参数登记与 <c>InsertRange</c> 同一处真相），本家只补它后面那一段 <c>ON CONFLICT … DO UPDATE SET 列 = excluded.列</c></b>。
+    ///
+    /// <para><b>为什么句尾写在这里、而不是 PG 血统那一族的 <c>IBulkStrategy.UpsertClause</c> 槽</b>：本家整颗
+    /// <c>Bulk</c> 交回 <see langword="null"/>（§12.3 那句"没有可举证的参数预算 ⇒ 不报一颗假数字"，与那颗句尾槽无关地
+    /// 一起被挡在外面），所以它拿不到那颗槽——不是因为不支 upsert（库确实有 <c>ON CONFLICT</c>，四臂各量过
+    /// 【实测·第 2 轮 40 ∶ 41 ∶ 42 ∶ 43 ∶ 46】），而是因为槽长在另一颗接口上。于是内核那一条"先问句尾、交不出就交给
+    /// 方言整语句 emit"的分岔把本家送到了这里。<b>这一形与 PG 血统那一份 <c>PostgreSqlBulk.UpsertClause</c> 逐字同形</b>
+    /// （同一句 <c>ON CONFLICT (键) DO UPDATE SET … = excluded.…</c>），两家各写一份是因为 §2 那条"provider 之间禁止互引"
+    /// 让本家引用不到那一份——将来若把句尾从策略槽挪进方言层，两家能并成一条出路（§14）。</para>
+    ///
+    /// <para><b>档位口径</b>：这一句是本仓库第一条<em>由方言产出、发向 SQLite 的 upsert 文本</b>。它到"文本层已钉 +
+    /// 同形语法有活库旁证（PG 那一支 + 本类注释那四臂探针）"为止；<c>InsertOrUpdateEngine</c> 经这一颗发出的<b>那一条</b>
+    /// 具体语句还没有在一台活 SQLite 上跑过一次（探针量的是手写语句，不是本层产出），集成册补一场才算结清（§14、task #11）。</para></summary>
+    public override void Emit(in UpsertStatement upsert, SqlWriter writer)
+    {
+        // 共用层那份 INSERT：本家不发 Returning（回填那一档不在这条链上），所以 Returning 留空 = 逐字一条普通 INSERT … VALUES。
+        var insert = new InsertStatement { Table = upsert.Table, Columns = upsert.Columns, Rows = upsert.Rows };
+
+        base.Emit(in insert, writer);
+
+        writer.Append(" ON CONFLICT (");
+
+        for (var i = 0; i < upsert.Keys.Count; i++)
+        {
+            if (i > 0)
+                writer.Append(", ");
+
+            EmitIdentifier(writer, upsert.Keys[i].ColumnName);
+        }
+
+        writer.Append(") DO UPDATE SET ");
+
+        for (var i = 0; i < upsert.Settable.Count; i++)
+        {
+            if (i > 0)
+                writer.Append(", ");
+
+            var column = upsert.Settable[i].ColumnName;
+
+            EmitIdentifier(writer, column);
+            writer.Append(" = excluded.");
+            EmitIdentifier(writer, column);
+        }
     }
 }

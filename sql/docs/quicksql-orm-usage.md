@@ -11,10 +11,10 @@
 真实状态（三句，句句可核）：
 
 1. **文本层落地的 provider 有 16 颗叶子**：`src/` 下 16 个 `QuickSql.Providers.<库种>` 工程各暴露一个 `public const string DriverKey`（各家取值见 §5）。另有 3 个血统基类工程（`PostgreSqlBase`/`OracleBase`/`MySqlBase`）不是可寻址的库种。`DbKind` 枚举今天有 16 个值（`src/QuickSql.Abstractions/DbKind.cs`），与 16 颗叶子一一对应、**没有"有值而无 provider"的空档**（`Sqlite` 于 v0.37 第四笔落地补齐最后一格；原本占着的 `MariaDb` 值于 v0.37 第五笔从枚举撤下——本仓库裁"不立 MariaDB 这一档"，理由与重开条件见设计文档 §14）。
-2. **十六家里只有三家有真库见证，而且见证很窄。** SQL Server 一族的每一位能力都由集成层在两台实例上跑过（`CapabilityLedgerTests.cs` 类注释明写"T-SQL 那一族不进这份台账，不是漏记"）；虚谷有 7 位中的 4 位被钉为 `Live`，见证是把基线文本逐句敲进那台库；SQLite 有 5 位中的 3 位被钉为 `Live`（`Paging_LimitOffset`／`Returning`／`MultiStatement`），而这三颗走的是**另一条路**——集成册里 ORM 自己拼出来的语句真在临时文件库上跑过，没有一行手写文本参与，其中 `MultiStatement` 是这本账第一颗落在 DDL 侧的 `Live`（见证是事后翻库看到 `IX_QuickSqlOrder_CreatedAt` 在场）。其余十三家 `PinnedLive` 全是 0，**驱动从未在一台机器上解析成功过**（`QuickSqlDrivers.json` 各行 `$comment` 逐行自陈）。§4.2 把这三处的口径差异原样列出。
+2. **十六家里只有三家有真库见证，而且见证很窄。** SQL Server 一族的每一位能力都由集成层在两台实例上跑过（`CapabilityLedgerTests.cs` 类注释明写"T-SQL 那一族不进这份台账，不是漏记"）；虚谷有 7 位中的 4 位被钉为 `Live`，见证是把基线文本逐句敲进那台库；SQLite 有 5 位中的 3 位被钉为 `Live`（`Paging_LimitOffset`／`Returning`／`MultiStatement`），而这三颗走的是**另一条路**——集成册里 ORM 自己拼出来的语句真在临时文件库上跑过，没有一行手写文本参与，其中 `MultiStatement` 是这本账第一颗落在 DDL 侧的 `Live`（见证是事后翻库看到 `IX_QuickSqlOrder_CreatedAt` 在场）。其余十三家 `PinnedLive` 全是 0，**驱动从未在一台机器上解析成功过**（内建表 `BuiltinDrivers.cs` 各行注释逐行自陈）。§4.2 把这三处的口径差异原样列出。
 3. 离线证据是自产的：`tests/QuickSql.Tests.Dialects/golden/` 下七个目录共 125 份基线（sqlserver 51 / kingbase 18 / dameng 18 / mysql 11 / gbase8s 10 / xugu 6 / sqlite 11）。除 §4.2 点到的那几份之外，它们是"本仓库自己认为应该长这样"的锁，不是厂商确认——**SQLite 那一套 11 份也是自产基线：本家有活库，而活库跑的是 ORM 产出的语句（第 2 点那三颗 `Live`），不是把这 11 句原样重放**，所以"黄金样本 ↔ 真库执行"这一对在本家仍然没配上，配上的是另一条证据链（provider 产出 ↔ 真库执行）。其余九颗叶子（postgresql/opengauss/gaussdb/highgo/gbase8c/oracle/shentong/tidb/oceanbase）没有自己的 golden 目录，同形部分由 `DialectParityTests` 逐字对拍钉住。
 
-另有一句不在上面三句之内的：**与 SqlSugar 的对照另有一份** `docs/quicksql-vs-sqlsugar.md`——同一台真库、同一副逐字相同的表、十四格实测（墙钟那一多半格子八趟，`UseParameter` 窄表十二趟，计划缓存那一格是原八族四趟加本轮新开的七族两趟）加六面读码对照（含被这次对照打折的旧说法，以及三处对本文自己旧说法的翻案：§5.6／§5.7／§5.8；跨轮累计的名次句收回七处，记在 §1 第 4 条）。本文不搬那些数字，也不改本文的口径。
+另有一句不在上面三句之内的：**与 SqlSugar 的对照曾另有一份册子，该稿已下线删除**（82d6525 那一笔「fastsql-vs-sqlsugar.md 对照稿下线」；全文可用 `git show 82d6525^:sql/docs/fastsql-vs-sqlsugar.md` 读回）。本文凡引到它的地方（§3.2 批量块宽那一格）一律按**历史读数**对待——引用指的是出处，不是说盘上有这份文件；那十四格实测与六面读码对照的结论本文不搬，本文的口径也不改。
 
 所以本文的读法是：**接口形状可信；除 SQL Server 之外的执行结果基本未证。**
 
@@ -33,13 +33,36 @@
 
 ### 1.2 程序集清单与职责
 
-`QuickSql.Abstractions`（命名空间 `QuickSql` 与 `QuickSql.*`）是公开契约：`DbKind`、`DbCapabilities`、`IDbProvider` 与它身上那 11 颗子 SPI（连 `Kind` 与 `Capabilities` 共 13 格）、元数据契约、查询/写/跟踪接口。`QuickSql.Core`（命名空间 `QuickSql`）是内核：`QuickSqlOrm`、`DbContext`、QueryModel→AST→文本、驱动加载、物化、事务。`QuickSql.Generators` 是 G1 那张 Roslyn 增量生成器，把带 `[Table]` 的实体在编译期翻成契约。15 个 `QuickSql.Providers.<库种>` 叶子工程各家一册（方言、类型映射、键策略、DDL 发射），另有 `QuickSql.Providers.{PostgreSql,Oracle,MySql}Base` 三个血统工程承载族内共享的那一层，叶子只补差异。
+`QuickSql.Abstractions`（命名空间 `QuickSql` 与 `QuickSql.*`）是公开契约：`DbKind`、`DbCapabilities`、`IDbProvider` 与它身上那 11 颗子 SPI（连 `Kind` 与 `Capabilities` 共 13 格）、元数据契约、查询/写/跟踪接口。`QuickSql.Core`（命名空间 `QuickSql`）是内核：`QuickSqlOrm`、`DbContext`、QueryModel→AST→文本、驱动加载、物化、事务。`QuickSql.Generators` 是 G1 那张 Roslyn 增量生成器，把带 `[Table]` 的实体在编译期翻成契约。16 个 `QuickSql.Providers.<库种>` 叶子工程各家一册（方言、类型映射、键策略、DDL 发射），另有 `QuickSql.Providers.{PostgreSql,Oracle,MySql}Base` 三个血统工程承载族内共享的那一层，叶子只补差异。
 
 引用链单向：provider → `QuickSql.Core` → `QuickSql.Abstractions`（`src/QuickSql.Providers.SqlServer/QuickSql.Providers.SqlServer.csproj` 只有对 Core 的一行 `ProjectReference`）。
 
-### 1.3 应用侧要引用什么
+### 1.3 应用侧怎么装：NuGet 主路径
 
-`ProjectReference` 传递，所以引 Core + 用到的 provider 就够，Abstractions 跟着进来；生成器以分析器身份挂进去：
+22 颗库工程全部打包上 nuget.org，包 ID 与工程名逐字相同。先立两条纪律：
+
+- **预发布档不进默认解析**：全家都是 `-beta.N` 系列，`dotnet add package` 必须带 `--prerelease`，或者写死版本号，二选一。
+- **每重打一次包升一颗 beta**（`sql/Directory.Build.props` 注释里那条纪律）：同版本号不同内容的两颗包，消费方全局缓存里那颗会压住新打的——还原照样绿，拿到的却是旧二进制。对版本以源上实读为准：截至 2026-10-14，nuget.org 上最新是 `0.39.0-beta.1`，本仓库 props 已声明 `0.39.0-beta.2`（未重打重发）。
+
+装三包：
+
+```bash
+# ① 内核：QuickSqlOrm / DbContext / 查询链都在这（Abstractions 作为传递依赖跟着进来）
+dotnet add package QuickSql.Core --prerelease
+
+# ② provider：只装用得到的库种（nuspec 依赖把同版本的 Core 与血统基类包一起带进来）
+dotnet add package QuickSql.Providers.SqlServer --prerelease
+
+# ③ 源生成器：普通包安装即挂进编译——包内走 analyzers/dotnet/cs，
+#    不用像 ProjectReference 时代那样手写 OutputItemType="Analyzer"
+dotnet add package QuickSql.Generators --prerelease
+```
+
+包 ID 全集：`QuickSql.Abstractions` ∶ `QuickSql.Core` ∶ `QuickSql.Generators` ∶ 19 颗 `QuickSql.Providers.*`（16 颗可寻址叶子 + 3 颗血统基类包；血统包也在源上，它们是叶子包的编译期依赖，应用侧不直接装）。①严格说可省（②会带进来），显式写出来是为了版本口径一眼可见。③决定 G1 在不在：装了它，带 `[Table]` 的实体在编译期生成契约、物化零反射（接线见 §2.2「G1 接线」）；不装则全落 G2 反射，且 §1.8 那两行 `Create` 当场抛「生成器未挂进编译」。
+
+**驱动包不要指望 provider 带**（§1.2 原则 3）：22 颗包编译期一律不引用驱动，各库的 ADO.NET 驱动由应用侧自己装——包名表与 `drivers/` 摆放见 §1.4。
+
+另一条路是**仓库内源码引用**（tests ∶ samples ∶ benchmarks 走的就是这个形态）：`ProjectReference` 传递，引 Core + 用到的 provider 就够，Abstractions 跟着进来；生成器以分析器身份挂进去：
 
 ```xml
 <ProjectReference Include="..\src\QuickSql.Core\QuickSql.Core.csproj" />
@@ -51,59 +74,67 @@
 
 形态取自 `tests/QuickSql.Tests.Common/QuickSql.Tests.Common.csproj`（那里为了跨族对拍引了 18 个 provider 工程，普通应用只引自己要的那家）。
 
-**驱动程序集不要引。** `Directory.Packages.props` 里 `Microsoft.Data.SqlClient` 那行写着"驱动包只出现在 tests/"，`src/` 下任何 provider 都不编译期引用驱动（§1.2 原则 3）。要连库时驱动走 §1.4 那条运行期链，或者由宿主自己注入工厂（§1.6）。
-
-### 1.4 仓库真实布局与驱动摆放约定
+### 1.4 驱动怎么装：两条路，与仓库真实布局
 
 `QuickSql.slnx` 收 21 个 `src/` 工程 + 两个测试工程（`QuickSql.Tests.Dialects`、`QuickSql.Tests.Integration`）；`QuickSql.Tests.Common` 是被引用方而不是解决方案节点，基准测试工程刻意不入册。
 
-驱动 DLL 的约定目录是 **输出目录下的 `drivers/`**。信创现场换库不改代码、不改 csproj：把厂商那份 ADO.NET 程序集丢进 `drivers/` 即可，这是 `QuickSqlDrivers.json` 里 `path` 省略时的第一探测位（§1.5）。
+**路 A：NuGet 装驱动包。** 装上之后驱动程序集落在应用输出目录，解析链（§1.6）第 3 步那句 `Assembly.Load` 直接命中。各库种对应的包（「程序集」列是内建默认表 `BuiltinDrivers`（`src/QuickSql.Core/DriverLoading/BuiltinDrivers.cs`）点的名，解析就按这个名字找；「源上读数」列是 2026-10-14 实查 nuget.org 的最新稳定档，「本仓测试档」列是 `sql/Directory.Packages.props` 钉的版本）：
 
-清单文件本身**必须复制到输出目录**，否则 `DriverManifest.Load()` 静默返回 `Empty`，症状是"驱动不存在"这种看不出原因的红。仓库内的做法是从 `tests/QuickSql.Tests.Integration/QuickSql.Tests.Integration.csproj` 那行 `None Include + Link + CopyToOutputDirectory` 复刻的。清单的默认落点由 `DriverManifest.DefaultPath` 给出。
+| `DbKind` | 驱动包（NuGet ID） | 程序集 | 源上读数 | 本仓测试档 |
+| --- | --- | --- | --- | --- |
+| `SqlServer` | `Microsoft.Data.SqlClient` | 同名 | 7.1.1 | 7.1.0 |
+| `MySql` ∶ `TiDb` ∶ `OceanBase` | `MySqlConnector` | 同名 | 2.6.2 | 2.6.2 |
+| `PostgreSql` ∶ `OpenGauss` ∶ `GaussDb` ∶ `Highgo` ∶ `Gbase8c` | `Npgsql` | 同名 | 10.0.3 | 10.0.3 |
+| `Sqlite` | `Microsoft.Data.Sqlite` | 同名 | 9.0.x 稳定档 | 9.0.0 |
+| `Kingbase` | `Kdbndp`（金仓官方） | `Kdbndp` | 8.0.0 | 无测试档 |
+| `Oracle` | `Oracle.ManagedDataAccess.Core`（Oracle 官方） | `Oracle.ManagedDataAccess` | 23.26.301 | 无测试档 |
+| `Dameng` | `DmProvider`（达梦官方；**net10.0 上实测死路**，见下） | `DmProvider` | 2.0.0 | 无测试档 |
+| `Xugu` ∶ `Gbase8s` ∶ `ShenTong` | 无公开 NuGet 包（本仓可见范围内） | `XuguClient` ∶ `GBase.DataDB` ∶ `Oscar` | — | 厂商给件，走路 B |
 
-`drivers/` 只解决"托管程序集在哪"。虚谷那一族还要一份**原生同伴**（`xugusql.dll` / `libxugusql.so`），必须和托管那份一起放：只放托管时清单解析照样成功，要到 `Open` 才抛 `DllNotFoundException`（`QuickSqlDrivers.json` 的 xugu 行 `$comment`，v0.32 实测）。
+这张表的口径要说白：**「包在源上」≠「本仓连通过」。** `Kdbndp` ∶ `DmProvider` ∶ `Oracle.ManagedDataAccess.Core` 三颗的存在性是逐颗实查过的，而 §4.1 那十三家的驱动从未在一台机器上解析成功过——装上驱动包不改变那个口径，第一次连通仍要自己量。
 
-### 1.5 `QuickSqlDrivers.json` 逐字段
+实查比"存在性"再深一层，两颗过了、一颗翻车（2026-10-14，包内容逐颗开验 + 消费侧冒烟）：`Kdbndp` 8.0.0 包内是 `lib/net6.0/Kdbndp.dll`、`Oracle.ManagedDataAccess.Core` 23.26.301 是 `lib/net8.0/Oracle.ManagedDataAccess.dll`——两家程序集名与内建表逐字相同，`Create` 实测解析成功（文本层，读数在 §1.9）。**反例是达梦**：`DmProvider` 2.0.0 的包里只有 `lib/Dm.dll`（没有 TFM 文件夹，net10.0 上按 .NET Framework 回退还原、报 NU1701），程序集名 `Dm` 与内建表的 `DmProvider` 对不上，`Assembly.Load` 实测抛 `FileNotFoundException`——达梦的 NuGet 路今天不通，正解是路 B：厂商 .NET 版驱动按内建表点的名 `DmProvider.dll` 丢进 `drivers/`，或用 `DriverRegistry.Register("dameng", factory)` 注入那颗 `Dm` 程序集里的工厂自己验（那颗 Framework 时代的 IL 在 net10.0 上能不能走，本仓不背书）。
 
-```json
-{ "drivers": [
-  { "key": "sqlserver", "assembly": "Microsoft.Data.SqlClient",
-    "factoryType": "Microsoft.Data.SqlClient.SqlClientFactory" },
-  { "key": "dameng", "assembly": "DmProvider" }
-] }
+**路 B：`drivers/` 目录。** 信创现场换库不改代码、不改 csproj：把厂商那份 ADO.NET 程序集丢进**输出目录下的 `drivers/`**即可，文件名按内建表 `BuiltinDrivers` 点的那颗程序集名（探测位 `<root>/drivers/<assembly>.dll`，见 §1.5）。这是唯一那层"放对位置就认"的约定——内建表已经写死 16 颗 key 各自要找的程序集名，没有第二份配置文件要维护。
+
+零配置就是「`DbKind` + 连接串」装配起来（§1.8）：`DriverRegistry.Factory(key)` 先问内建表 `BuiltinDrivers.Find(key)`（16 颗 key 全在表上），拿到程序集名后按 §1.6 那条探测链找 DLL。**内建表是写死在代码里的默认，不是可编辑的配置**——要覆盖程序集名或工厂类型，只有一条 AOT 干净的路：`DriverRegistry.Register(key, factory)` 把已在进程里的工厂交进去（§1.6 末尾那一条）。
+
+`drivers/` 只解决"托管程序集在哪"。虚谷那一族还要一份**原生同伴**（`xugusql.dll` / `libxugusql.so`），必须和托管那份一起放：只放托管时装载照样成功，要到 `Open` 才抛 `DllNotFoundException`（内建表 `BuiltinDrivers.cs` 的 xugu 行注释，v0.32 实测）。
+
+### 1.5 内建默认表 `BuiltinDrivers` 逐行
+
+v0.39 起这份表写死在代码里（`src/QuickSql.Core/DriverLoading/BuiltinDrivers.cs`），不再是可编辑的配置文件——旧的 `QuickSqlDrivers.json` 那一层（含 `DriverManifest` 手解、`QUICKSQL_DRIVERS_CONFIG` 环境变量、`DriverRegistry.Load(configPath)`）已整层删除。16 颗 key 各一行，形状是 `record DriverRef(string Key, string AssemblyName, string? FactoryType)`：
+
+```csharp
+new("sqlserver", "Microsoft.Data.SqlClient", "Microsoft.Data.SqlClient.SqlClientFactory"),
+new("dameng",    "DmProvider",                null),
 ```
 
 | 字段 | 必填 | 含义 |
 | --- | --- | --- |
-| `drivers` | 是 | 数组，缺它整份清单不认 |
-| `key` | 是 | 与 `DbKind` 名同形的小写字符串；`DriverRegistry.Find` 大小写不敏感 |
-| `assembly` | 是 | 托管程序集名，也是 `drivers/<assembly>.dll` 的探测名 |
-| `path` | 否 | 显式文件路径；省略时走探测链 |
-| `factoryType` | 否 | `DbProviderFactory` 子类全名；省略时扫导出类型里第一个非抽象子类 |
-| `$comment` | 否 | 纯说明，解析器不读（15 行里 14 行带，sqlserver 那行没有） |
+| `Key` | 是 | 与 `DbKind` 名同形的小写字符串；`BuiltinDrivers.Find` 大小写不敏感 |
+| `AssemblyName` | 是 | 托管程序集名，也是 `drivers/<assembly>.dll` 的探测名 |
+| `FactoryType` | 否 | `DbProviderFactory` 子类全名；省略（`null`）时扫导出类型里第一个非抽象子类 |
 
-字段口径来自 `src/QuickSql.Core/DriverLoading/DriverRegistry.cs`：清单用 `JsonDocument` 手解（不引 `JsonSerializer`，避免反射），解出来的形状是 `record DriverRef(string Key, string AssemblyName, string? Path, string? FactoryType)`。
-
-`factoryType` 常被刻意省略：达梦行那句理由写得很直白 —— 按文档猜一个全名，可能把一次本来能成的解析变成"找不到类型"。
+`FactoryType` 常被刻意留 `null`：达梦行那句理由写得很直白 —— 按文档猜一个全名，可能把一次本来能成的解析变成"找不到类型"。要改这三格里的任何一格（换程序集名 ∶ 补工厂类型），今天只有一条路：`DriverRegistry.Register(key, factory)` 把宿主自己构造好的工厂注入进去（§1.6 末尾），内建表本身不给运行期覆盖。
 
 ### 1.6 解析顺序与失败行为
 
-清单文件的查找顺序：显式传入的 `path` → 环境变量 `QUICKSQL_DRIVERS_CONFIG` → `AppContext.BaseDirectory/QuickSqlDrivers.json`；三处都没有 ⇒ `DriverManifest.Empty`（不抛）。
+名字来源只有一处：内建表 `BuiltinDrivers.Find(key)`（`src/QuickSql.Core/DriverLoading/DriverRegistry.cs` 的 `Factory` 第一步）。表上没有这颗 key 就当场抛 `DriverNotAvailableException`，消息里点出内建表不认识它、并给出两条补救（丢 `drivers/` ∶ 用 `Register` 注入）；表上有才继续找那颗程序集。
 
 单颗 `key` 的解析顺序：
 
-1. 声明了 `path` ⇒ `Path.GetFullPath` 归一化后判存在；不存在直接抛 `DriverNotAvailableException`，消息里带那句"声明的驱动文件不存在"。归一化是 v0.32 补的分隔符坑：写 `drivers/XuguClient.dll`（正斜杠）时托管加载会成功、原生同伴却找不到，一路绿到 `Open` 才炸。
-2. 未声明 `path` ⇒ 探 `<root>/drivers/<assembly>.dll`，命中就用独立的 `DriverLoadContext` 加载。
-3. 没命中 ⇒ `Assembly.Load(new AssemblyName(assembly))`，`Microsoft.Data.SqlClient` 这类公开包走这一支。
-4. 工厂取法：先看目标类型上公开的静态 `Instance` 字段，没有再退到无参构造器。
+1. 探 `<root>/drivers/<assembly>.dll`，命中就用独立的 `DriverLoadContext` 加载（`<root>` 缺省是 `AppContext.BaseDirectory`，可由 `DriverRegistry(root)` 构造器改）。
+2. 没命中 ⇒ `Assembly.Load(new AssemblyName(assembly))`，`Microsoft.Data.SqlClient` 这类公开包走这一支。
+3. 工厂取法：声明了 `FactoryType` 就按全名 `GetType`，否则扫导出类型里第一个非抽象的 `DbProviderFactory` 子类；再看目标类型上公开的静态 `Instance` 字段，没有才退到无参构造器。
 
-失败会被缓存（同一颗 key 第二次不会重新试），异常消息带"程序集 {AssemblyName}，清单路径 {Path ?? "<probing>"}"，所以能一眼看出是谁替谁背的锅。入口是 `DriverRegistry.Load(configPath?)`，取工厂用 `Factory(key)`（标了 `RequiresUnreferencedCode`）与 `TryFactory(...)`。
+失败会被缓存（同一颗 key 第二次不会重新试），异常消息带"程序集 {AssemblyName}，内建默认，探测 {root/drivers}"，所以能一眼看出是谁替谁背的锅。入口是构造器 `new DriverRegistry(root?)`，取工厂用 `Factory(key)`（标了 `RequiresUnreferencedCode`）与 `TryFactory(...)`。
 
-另一条路完全绕开清单：`DriverRegistry.Register(key, factory)` 注入已经在进程里的工厂。生产上更常见的形态其实是这个 —— 宿主自己引用驱动包，把 `DbProviderFactory` 交出来；provider 的构造函数本来就吃工厂（`new SqlServerProvider(factory)`，见 `tests/QuickSql.Tests.Common/SqlServer.cs`）。
+另一条路完全绕开探测链：`DriverRegistry.Register(key, factory)` 注入已经在进程里的工厂。生产上更常见的形态其实是这个 —— 宿主自己引用驱动包，把 `DbProviderFactory` 交出来；provider 的构造函数本来就吃工厂（`new SqlServerProvider(factory)`，见 `tests/QuickSql.Tests.Common/SqlServer.cs`）。
 
 ### 1.7 一条真实的 AOT 约束
 
-内核不做 `Type.GetType(string)`、不按名字反射装配 provider：**provider 由调用方构造并交进 `QuickSqlOrmOptions.Provider`**（`tests/QuickSql.Tests.Common/SqlServer.cs` 的类注释把这件事叫"组装根本该做的事"）。运行期唯一带反射的入口是清单解析，而那一步是手解 JSON + 读 `Instance` 字段，不在热路径上。
+内核不做 `Type.GetType(string)`、不按名字反射装配 provider：**provider 由调用方构造并交进 `QuickSqlOrmOptions.Provider`**（`tests/QuickSql.Tests.Common/SqlServer.cs` 的类注释把这件事叫"组装根本该做的事"）。运行期唯一带反射的入口是驱动解析，而那一步是读内建表 + 扫导出类型 + 读 `Instance` 字段，不在热路径上。
 
 代价也写清楚了：`QuickSqlOrm` 的单参构造器（`src/QuickSql.Core/Orchestration/QuickSqlOrm.cs:94`）标了 `[RequiresUnreferencedCode]`/`[RequiresDynamicCode]`，因为它顺带建 G2 反射注册表；干净口是 `QuickSqlOrm(QuickSqlOrmOptions, IEntitySchemaRegistry)`（同文件 `:84`），**构造期零反射**。`Select<T>()`（`:185`）今天整条读路径仍带同一串标注 —— 那是入口税，G1 预翻译落地之前摘不掉（设计意图，不是已交付）。
 
@@ -115,13 +146,13 @@
 // (a) 工厂已经在手：DI 容器给了、或者 DriverRegistry 已经 Load 过
 var orm = QuickSqlOrm.Create(DbKind.MySql, "Server=...;Database=app;", SqlClientFactory.Instance);
 
-// (b) 一行到库：DbKind + 连接串，工厂由 QuickSqlDrivers.json 现场解析（走 §1.6 那条探测链）
+// (b) 一行到库：DbKind + 连接串，工厂由内建表 BuiltinDrivers 现场解析（走 §1.6 那条探测链）
 var orm = QuickSqlOrm.Create(DbKind.PostgreSql, "Host=...;Database=app;");
 ```
 
 **触发条件是"生成器挂进了编译"。** `src/QuickSql.Abstractions/Providers/ProviderRegistration.cs` 里那两颗（`[QuickSqlProvider(DbKind)]` 属性、`ProviderRegistry` 静态表）是登记面的运行时结构，实际填表的是 `src/QuickSql.Generators/ProviderRegistrationGenerator.cs`——它订阅 `context.CompilationProvider`、扫被引用程序集上带属性的 leaf 类（每颗 provider 类今天都同时带 `public const string DriverKey` 与 `public XxxProvider(DbProviderFactory)` 构造器，缺一颗就跳过），产一段带 `[ModuleInitializer]` 的 `QuickSql.Generated.GeneratedProviders`，每行一句 `ProviderRegistry.Register(DbKind.<X>, "<driverKey>", static f => new <Ns>.<Xxx>Provider(f));`。产出全是静态 `new` 的委托，零反射、AOT 与 trim 都安全（§1.7 那条原则一字未破）。
 
-**没挂生成器就零登记**，此时两行 `Create` 抛的是 `InvalidOperationException` 且消息点名"生成器 QuickSql.Generators 未作为 Analyzer 挂进编译"——症状可查，不是"驱动不存在"那种看不出原因的红。挂法与 §1.3 里 Roslyn 生成器那三行 `ProjectReference` 同一条：
+**没挂生成器就零登记**，此时两行 `Create` 抛的是 `InvalidOperationException` 且消息点名"生成器 QuickSql.Generators 未作为 Analyzer 挂进编译"——症状可查，不是"驱动不存在"那种看不出原因的红。挂法两条：NuGet 就是 §1.3 那行 `dotnet add package QuickSql.Generators --prerelease`（包内自带 `analyzers/dotnet/cs`，装上即挂）；仓库内源码引用是那三行 `ProjectReference`：
 
 ```xml
 <ProjectReference Include="..\src\QuickSql.Generators\QuickSql.Generators.csproj"
@@ -131,6 +162,20 @@ var orm = QuickSqlOrm.Create(DbKind.PostgreSql, "Host=...;Database=app;");
 **只登记你真引用的那几家。** provider 是编译期直接调用、不是按名字反射装配，所以引用图上没有的库种不会污染表；`ProviderRegistry.Registered` 读回来正好是"这个消费者能 `Create` 到哪几颗"的清单。这一句也就是 §1.7 那句"provider 由调用方构造"的编译期兑现：调用方从"亲手 new"降级到"引用一份程序集"，构造仍然静态、仍然可 AOT，只是这一行不写了。
 
 `Create` 走的是 §1.7 那条带 `[RequiresUnreferencedCode]`/`[RequiresDynamicCode]` 的 G2 兜底口（因为要顺带建反射注册表）。AOT 干净路径仍然是自己 new provider + `new QuickSqlOrm(options, schemas)`——`Create` 是给非 AOT 场景省事的糖，不是替代那条。
+
+### 1.9 换数据库：动的是哪三处，不动的是什么
+
+这一节的口径对着一个目标立：**同一份应用、同一副实体、同一批查询与写入代码，从一座库挪到另一座库**。动的只有三处：
+
+1. **csproj**：装目的库那颗 `QuickSql.Providers.*`（原来那颗去留随意——provider 是编译期登记，引用图上多一家就多一颗登记，不碰运行期），外加目的库的驱动（§1.4 路 A 或路 B）；
+2. **代码一处**：`DbKind.SqlServer` → 目的库的枚举值（入口就是 §1.8 那两颗 `Create` 重载或 DI 的 `AddQuickSqlOrm`）；
+3. **配置一处**：连接串。
+
+实体类 ∶ lambda ∶ `Select/Insert/Update/Delete` 链 ∶ `DbContext` ∶ 分表与读写分离的声明**一字不动**——引号 ∶ 分页 ∶ 参数前缀 ∶ `IDENTITY` 措辞这些方言差由 provider 吃掉。已知代价全部在两张现成的表里：§4.4 跨库迁移最容易踩的五格（折大写 ∶ 别名 ∶ 占位符 ∶ `OFFSET` 哨兵 ∶ `IDENTITY` 措辞），与 §3.2 的键回填能力表（**Oracle 血统要键即抛**，是换库时最硬的一格）。换库前还要读一遍 §2.4 的能力位口径：十六家里只有 SQL Server ∶ 虚谷 ∶ SQLite 有活库见证，其余十三家的方言文本层"该长这样"是本仓库自己认为的，不是厂商确认的。
+
+**不改代码的前提，是代码里没写库私有的东西。** 三类东西换库时不会被改写、也不会被报警：`WithSql` 的文本 ∶ `orm.Ado` 的文本（§3.1 逃生舱，"文本一颗不动"是它自己的纪律）、`[Column(DbTypes = "jsonb")]` 这种原生类型名直通（§2.2）。逃生舱每开一处，换库时就多一处要人工核对——这不是库的欠账，是舱的定价。
+
+**可重跑读数（2026-10-14，消费侧冒烟，包全部来自 nuget.org 的 `0.39.0-beta.1`）**：空 `dotnet new console` 工程，装 `QuickSql.Providers.SqlServer` ∶ `QuickSql.Generators` ∶ `Microsoft.Data.SqlClient` 三包，一只 `[Table]` 实体加一条 lambda 链（`Where`＋`OrderBy`＋`Skip/Take`），`QuickSqlOrm.Create(DbKind.SqlServer, 占位串)` 离线发出 `SELECT [t0].[Id], … OFFSET @p1 ROWS FETCH NEXT @p2 ROWS ONLY`——生成器普通包安装即挂进编译、驱动走内建表解析、零配置文件在场。再补装 `QuickSql.Providers.Kingbase`＋`Kdbndp` 与 `QuickSql.Providers.Oracle`＋`Oracle.ManagedDataAccess.Core`，**实体与 lambda 一字不改**、只换 `DbKind` 和连接串：金仓发 `LIMIT @p1 OFFSET @p2`（双引号、混合大小写原样），Oracle 发三层 `ROWNUM` 分页（标识符折大写 ∶ `:p0` 前缀 ∶ 别名不带 `AS`）——§4.4 那张五格表里的三格当场可见。反面也量到一颗：没装 provider 包的 `DbKind` 在 `Create` 当场抛，消息列已登记清单（"已登记：SqlServer, Dameng"），这就是 §1.8"只登记你真引用的那几家"那条设计。全程是 `ToSql()` 文本层读数，没有一条语句发进真库；达梦在 NuGet 驱动档上是死路（§1.4 那颗反例）。
 
 ## 2. 怎么配置
 
@@ -155,7 +200,7 @@ var orm = QuickSqlOrm.Create(DbKind.PostgreSql, "Host=...;Database=app;");
 
 ### 2.2 实体映射：两条路
 
-**路 A：标注。** 三种类 + 一个枚举，都在 `src/QuickSql.Abstractions/Metadata/QuickSqlAttributes.cs`：
+**路 A：标注。** 三种类 + 一个枚举，都在 `src/QuickSql.Abstractions/Metadata/QuickSqlAttributes.cs`，命名空间是 **`QuickSql.Metadata`**（Fluent 那一路在 `QuickSql.Metadata.Fluent`）——只 `using QuickSql;` 拿不到 `[Table]`，NuGet 冒烟里这一格实测绊过一次（§1.9）：
 
 - `[Table(string name)]`，属性 `Name`、`Schema?`、`Comment?`
 - `[Column(string? name = null)]`，属性 `Name`、`DbTypes`、`Length`、`Precision`、`Scale`、`IsNullable`/`IsPrimary`/`IsIdentity`（`TriState`：`Unset`/`Yes`/`No`）、`IsIgnore`、`Comment`
@@ -360,7 +405,7 @@ var sql = orm.Select<Order>().Where(o => o.Id == 7).ToSql();
 Console.WriteLine(sql);
 ```
 
-只产文本的话工厂可以换成任意不吃连接的 `DbProviderFactory`，或者按 §1.6 由清单解析（`SqlServer.DriverFromManifest()` 那一句就是走完整条链）。
+只产文本的话工厂可以换成任意不吃连接的 `DbProviderFactory`，或者按 §1.6 由内建表解析（`SqlServer.Driver()` 那一句就是走完整条链）。
 
 ### 3.1 读侧
 
@@ -552,7 +597,7 @@ await orm.Delete<Order>().Where(o => o.CreatedAt < cutoff).ExecuteAffrowsAsync()
 - **两扇判据，都是整批的。** `InsertEngine.Refusal`（`src/QuickSql.Core/Write/InsertEngine.cs:243-255`）先问通道在不在，再问**每一列**收不收：SQL Server 那一族收 14 种 CLR 形状（`SqlServerBulkCopy.cs:110-127`，`char`／`DateOnly`／`TimeOnly`／无符号那一族／`object` 不在内，枚举按底层整数判）。一列不合格 ⇒ 整批退 L3，**不是把那一列省掉**（省一列 = 那一列的值不进库）。
 - **`ExecuteAffrowsAsync` 走不了高速层，是拒而不是默默降级。** 它返回一颗 `int`，装不下"走了哪一层、几次往返、为什么"，而装载通道那一档根本不产文本 —— 所以 `_requested` 是 `Auto`/`CopyChannel` 时在方法体第一句拒（`InsertEngine.cs:107-110`；`WithBulk` 那一句当时不判，判的是执行口，而它是 `async` 方法，异常从 `await` 那里回来。建文本那句 `Plan(Backfill.None)` 在 `:112`，拒的那一条走不到它）。不调 `WithBulk` 时它默认文本层，`ExecuteBulkAsync` 默认 `Auto`（`InsertEngine.cs:33-34`）。`src/` 下今天唯一的调用点是跟踪器那一句（`src/QuickSql.Core/Tracking/EntityTracker.cs:815`），它不经过 `WithBulk`，`_requested` 是 null，走不到那句拒；而这条出口自己的签名上没有修剪税（对照另两颗带 `[RequiresUnreferencedCode]`/`[RequiresDynamicCode]` 的：`:89-90`、`:122-123`），所以上游不必跟着加警告。另外这一颗旋钮只在插入链上：`WithBulk` 今天只有 `IInsert<T>` 有成员，`IUpdate<T>` / `IDelete<T>` 上没有。
 - **`CopyChannel` 那一档付的三条语义。** ① 不产 SQL 文本：`Explain()` 交出的永远是文本层语句，层的问题问 `ExplainBulk()`（它不连库，但那一次反射查找照旧，所以修剪后的产物上它会报"没有通道"）；② 改写类钩子 `CudBuilding` / `ParameterBinding` 在这一档不适用（`InsertEngine.cs:224` 把这句写在 `Reason` 里）；③ 回填口 `ExecuteReturnKeysAsync` / `ExecuteIdentityAsync` **永不借道**，装载通道给不了库里生成的那些列（`IInsert.cs:34-37`）。
-- **`rowsPerRoundTrip` 只压不抬**（`IInsert.cs:44-47`）。文本层它是每块行数，装载通道那一档它是"每次递交几行"，实现为切成多次递交（`InsertEngine.cs:212-213`、`:154-157`）；通道内部怎么分批是驱动的事。**原子性照文本层那一条**：内核不为这一串递交开事务，所以没有环境事务时块与块之间不原子；有事务时每一次递交都重新走 `RentAsync`，而它见着环境槽位就交回那一条被事务独占的连接与事务（`src/QuickSql.Core/Execution/AdoExecutor.cs:510-516`），于是整串递交挂在同一颗事务上（真库那册的回滚用例断的就是这一格：库里没有那三行，而不是"没报错"）。**块宽的来源今天写死了口径**：默认每句参数颗数 = 预算的九成（SQL Server 恒 1 890 颗，与列数无关），而实测的"每句耗时 vs 每句颗数"**不是线性**——T-SQL 一台实例上同一批 2000 行 × 6 列扫出：每句 120 颗 151–224 ms、每句 1 890 颗 1 215–1 405 ms（八趟区间，见 `sql/docs/quicksql-vs-sqlsugar.md` §2.5）。所以"贴着预算上限"**不等于"划算的块宽"**：大批量要自己显式压 `rowsPerRoundTrip`（v0.38 第十四笔按用户裁决记下这一句，默认值与那一式都不改，裁决留给调用方；规格 §12.3 末那一格是同一条账的另一面）。
+- **`rowsPerRoundTrip` 只压不抬**（`IInsert.cs:44-47`）。文本层它是每块行数，装载通道那一档它是"每次递交几行"，实现为切成多次递交（`InsertEngine.cs:212-213`、`:154-157`）；通道内部怎么分批是驱动的事。**原子性照文本层那一条**：内核不为这一串递交开事务，所以没有环境事务时块与块之间不原子；有事务时每一次递交都重新走 `RentAsync`，而它见着环境槽位就交回那一条被事务独占的连接与事务（`src/QuickSql.Core/Execution/AdoExecutor.cs:510-516`），于是整串递交挂在同一颗事务上（真库那册的回滚用例断的就是这一格：库里没有那三行，而不是"没报错"）。**块宽的来源今天写死了口径**：默认每句参数颗数 = 预算的九成（SQL Server 恒 1 890 颗，与列数无关），而实测的"每句耗时 vs 每句颗数"**不是线性**——T-SQL 一台实例上同一批 2000 行 × 6 列扫出：每句 120 颗 151–224 ms、每句 1 890 颗 1 215–1 405 ms（八趟区间，出处是已下线的 SqlSugar 对照稿 §2.5，读回方式见 §0 那句）。所以"贴着预算上限"**不等于"划算的块宽"**：大批量要自己显式压 `rowsPerRoundTrip`（v0.38 第十四笔按用户裁决记下这一句，默认值与那一式都不改，裁决留给调用方；规格 §12.3 末那一格是同一条账的另一面）。
 - **通道少报了行就抛，但那一批不会撤销。** `written != report.RowCount` ⇒ `QuickSqlException`「报回 4/5 行…不能假设这一批完整落库」（`InsertEngine.cs:165-168`）；拦下的是"悄悄交出一个假数"，不是回滚。
 - **降级留痕今天只有两颗。** `BulkReport.Requested/Method/Degraded/Reason` + 订阅位 `QuickSqlAop.BulkDegraded`（`src/QuickSql.Abstractions/Aop/QuickSqlAop.cs:36`，只在真降级时派发；`Auto` 取到文本层**不算**降级）。规格里那句 `LogLevel.Warning` + OTel 标签（`docs/quicksql-orm-design.md:1487`）在这份代码里没有对象：仓库既无日志器也无 OTel。**防静默逐条的手段因此不是那句警告，而是 `FallbackPolicy.Never`**（`InsertEngine.cs:231-232`）+ CI 里订阅 `BulkDegraded` 并断言它一次都没响。
 - **反射找成员这件事踩过一次，写在这里当坑看。** 真库那支驱动的构造子收的是**具体**类型 `(SqlConnection, options, SqlTransaction)` 而不是 `(DbConnection, …, DbTransaction)`，超时属性叫 `BulkCopyTimeout` 而不是 `BulkTimeout`；按名字点错一处，`TryResolve` 就交回 null，而那个形状与"这一家没有装载类"**逐字同形**（同一条 `Reason`、同一个退层），离线册看不见。所以现在构造子按形状找（三个参数、连接与事务分别是 `DbConnection`/`DbTransaction` 的子类、中间那颗是驱动自己的 options 枚举），成员名一律由真库跑验。
@@ -571,6 +616,12 @@ await orm.Delete<Order>().Where(o => o.CreatedAt < cutoff).ExecuteAffrowsAsync()
 | **Oracle 系** | `false`（`OracleKeys.cs:46`） | `false`（`:86`） | **两个口子都关，直接抛** |
 
 也就是说：在 Oracle / 达梦 / 神通上要自增键（`ExplainKeys()`、`ExecuteReturnKeysAsync`、`SaveChanges` 里需要回填的插入档）今天**必然**拿到 `QuickSqlException`，消息是"没有可作为结果集发出的 OUTPUT/RETURNING"与那句"回读表达式从未被本仓库问证过"（`src/QuickSql.Providers.OracleBase/OracleKeys.cs:56`、`:92`）。抛而不是发一条"看着像在回填"的语句，是刻意的。
+
+**一句 upsert：`orm.InsertOrUpdate<T>().SetSource(…)`（v0.39）。** FreeSql 式独立链，数据走 `SetSource(一只实体)` 或 `SetSource(一批)` 而不是入口形参；出口 `ExecuteAffrowsAsync`（受影响行数）与诊断口 `Explain`（→ `BulkWritePlan`）、`ToSql`、`ToLogSql`。语义是"按主键没有就插、有就改"，写入清单等于可写列加主键列，主键既进插入清单又是冲突判定的键。**入口零反射税**（列来自契约、值来自编译好的委托；全局过滤器在场时是当场拒而不是叠进 `WHERE`，所以整条链一次表达式翻译都不做），与 `InsertRange`、`UpdateRange` 同档。它是 `UpdateRange(...).WithBulk(Upsert)` 那一句文本的另一扇门，同一把列尺子、同两道当场拒（一道是全局过滤器在场，一道是主键由库给值而调用方没带键，那种键的冲突判定出不来、写进去的会是一行新行而不是改了那一行），独立出来只为让"我要 upsert"这件事写在方法名上。回填那一档不在这条链上，要键走 `Insert` 的 `ExecuteReturnKeysAsync` 或先插后查。取值段的审计种类与 `CudBuilding`、`ParameterBinding` 回放都报 `update`（与 `UpdateRange` 的 upsert 档同一条），所以"只在插入时补 `CreatedAt`"那一类钩子语义今天分不开命中与否，留作后续。
+
+**发射形态由这一家自己定、调用方不选，共三形。** 句尾那一族（MySQL 血统三家 `ON DUPLICATE KEY UPDATE`、PG 血统六家 `ON CONFLICT … DO UPDATE SET … = EXCLUDED.…`）复用 `IBulkStrategy.UpsertClause`，发的是内核那条 `INSERT … VALUES` 再接一段尾巴，与已经跑绿的 `UpdateRange` upsert 档逐字同形，本条链不另拼一遍 `VALUES`。SQLite 也发 `ON CONFLICT` 那一形，可它整颗 `Bulk` 是 null（就是上面那颗预算表底下那句"没有可举证的参数预算 ⇒ `Bulk` 交回 null"），拿不到句尾那颗槽，于是这段尾巴长在方言的 `SqliteDialect.Emit(UpsertStatement)` 上，与 PG 那一份逐字同形而各写一份，只因为 §2 那条"provider 之间禁止互引"。`MERGE INTO` 那一族（SQL Server 的 T-SQL `MERGE … USING (VALUES …) … ;`、Oracle 血统三家与虚谷的 `MERGE … USING (SELECT … FROM dual UNION ALL …)`）由方言发一整句不同形状的语句，尾巴 `ON … WHEN MATCHED … WHEN NOT MATCHED …` 四家共用 `DialectBase.EmitMergeTail` 一处真相。GBase 8s 是唯一的例外，它没有 MERGE，本仓库对这一族的文档研究只立了 `UPDATE … WHERE EXISTS` 那条等价路，所以这一条链在它身上发的是每行一对语句：`UPDATE … WHERE 键 …` 紧跟 `INSERT … SELECT … FROM systables WHERE tabid = 1 AND NOT EXISTS (…)`，那颗 `systables WHERE tabid = 1` 是与 `Gbase8sKeys` 那颗 `DBINFO` 同源的单行字面源。
+
+**档位口径与见证，不许读成"全十六家实测过"。** 这条链这次在五家连得上库的 provider 上各跑了一回集成：SQL Server、MySQL、PostgreSQL、SQLite、虚谷五家的命中改与缺键插两支都落库读回（虚谷 180 里那 3 红是 `CascadePathTests` ∶ `SoftDeletePathTests` 的读侧 `unexpected LIKE` 与并发列回填两处既有缺口、与这条链无关）；没实例的 Oracle 血统三家与 GBase 8s 仍到文本层为止。SQL Server 那颗 T-SQL `MERGE` 已经在活库跑过、集成册那两条 `InsertOrUpdate_…` 用例命中改与缺键插两支都落库读回过逐格（`Microsoft.Data.SqlClient` 真驱动、授权实例）。这一格是活库抓出来的修法：SQL Server 编译整条 `MERGE` 时就验缺键那一支写了显式自增键、连"全命中而那一支根本不触发"也报 544，所以主键是自增列时方言把整句裹一对 `SET IDENTITY_INSERT … ON/OFF`（本家声明了那颗 `Identity_ExplicitInsert`），这一裹让显式自增键合法、两支才跑得通；目标位带 `WITH (HOLDLOCK)` 仍是那条有名并发缺口的文档缓解、是否真挡住要在活库并发跑一次才算结清；SQLite 这一颗已经在活库跑过——集成册 `QUICKSQL_TEST_PROVIDER=sqlite` 那一场里，命中改与缺键插两支各落库读回过逐格（`BulkWritePathTests` 那两条用例，SQLite 自建 scratch 库、Microsoft.Data.Sqlite 真驱动），本家那四臂探针旁证因此升成"这条链产出的那一句实测过"；Oracle 血统三家的 `MERGE` 连一台授权实例都没有，是纯文档口径；虚谷那颗 `MERGE` 的骨架早先只在活库跑过单行手工句（v0.32 探针 F-19，同一份日志里 `USING (VALUES …)` 反而是语法错，行集只能从 `USING (SELECT …)` 带），而这条链的命中改与缺键插两支今天都在活虚谷跑绿了（多行 `UNION ALL` 写显式主键这一格先前只当未复点而跳过，去掉那道守卫实测两支都过）；GBase 8s 那一对两条语句要的是一颗分号批，而本家 `SupportsMergedStatements` 取默认 false、这一族从未在一台机器上解析成功过。逐家新产出的文本已在离线黄金样本 `tests/QuickSql.Tests.Dialects/golden/` 下那五家（sqlserver、dameng、xugu、gbase8s、sqlite）的 `insert-or-update.sql` 钉成基线，形态与拒收断言在 `tests/QuickSql.Tests.Dialects/InsertOrUpdateLayerTests.cs`。黄金样本把"文本变了要有人显式承认"这件事钉住，不替"这一句在真库上跑得动"背书；把每家对应那颗 `Upsert_` 前缀的位补成 declared 是一颗后续账，分派不读那三位（读的是有没有句尾槽、方言覆没覆 `Emit(UpsertStatement)`），口径见 §2.4 与规格 §14。
 
 ### 3.3 会话、跟踪与 `SaveChanges`
 
@@ -774,20 +825,20 @@ DDL 按集群分组（`SchemaSyncer.cs:130` 的 `GroupByCluster`）：一次 `Sy
 
 ### 4.1 十三家的状态口径统一是"离线文本层，未实测"
 
-十六颗叶子里，十三家的驱动从未在一台机器上解析成功过，也没有一条语句在真库上执行过（`QuickSqlDrivers.json` 各行 `$comment` 逐行自陈）。达梦的 `DmProvider`、神通的 `Oscar`、GBase 8s 的 `GBase.DataDB` 这些程序集名各只有一处出处，而那不是现场读数。**把 provider 的存在读成"已适配/可直接上生产"是本文最不希望发生的事。**
+十六颗叶子里，十三家的驱动从未在一台机器上解析成功过，也没有一条语句在真库上执行过（内建表 `BuiltinDrivers.cs` 各行注释逐行自陈）。达梦的 `DmProvider`、神通的 `Oscar`、GBase 8s 的 `GBase.DataDB` 这些程序集名各只有一处出处，而那不是现场读数。**把 provider 的存在读成"已适配/可直接上生产"是本文最不希望发生的事。**
 
 ### 4.2 三家例外的读数走到哪里停（三处口径不一致，原样列出）
 
 - **SQL Server。** 装载链走完整过（`DriverLoadingTests` 按类型名断言解析到 `Microsoft.Data.SqlClient.SqlClientFactory`），集成层 `tests/QuickSql.Tests.Integration/` 那 17 个 .cs 是真打库的（目标串由环境变量 `QUICKSQL_TEST_CONNECTION` 或仓库根那份不入库的凭据文件给，两处都没有就抛）。**v0.38 第十一笔在这一家跑出一处源码缺陷并当场改掉**：`EnsureDatabaseExistsAsync` 原先只读连接串里的 `Database` 那一颗键（`src/QuickSql.Providers.SqlServer/SqlServerProvider.cs:81`），对着写 `Initial Catalog` 的串**静默不建库**（裸 `DbConnectionStringBuilder` 不做同义词归一，所以取不到值就 return），症状要到"连不上那座库"才现形——现在两颗键都读（:118 那颗 `ReadCatalog`），同值取一，两颗给出不同名字时抛并点名两颗。这一格的见证是活库（两座真库由这条通路建出来，见 §3.7），**离线册今天没有它**：那一条要的是"字符串进、决策出"的可断言形状，而这一格断的是"库建出来了没有"。能力台账类注释里那句是它的自我口径：**"T-SQL 那一族不进这份台账，这不是漏记：它的每一位都由集成套件在两台真库上跑过"**（`CapabilityLedgerTests.cs` 第 100 行附近）。
-- **虚谷。** 清单解析成功（`XuguClient`，工厂落到 `XuguClient.XGProviderFactory`）、`Open` 成功、目录可读。台账把 7 位中的 4 位钉成 `Live`，见证是三份基线在活库上执行通过（`paging-skip-only.sql` 1/1 句、`ddl-alter-and-comment.sql` 3/3 句、`ddl-order.sql` 1/1 句）；`ddl-qualified.sql` 那一形跑过而**失败**（`E4002` 模式不存在紧随 `E5021`），台账写明败因在"不建库、不建模式"的授权侧而不是文本侧，所以本版不修它。剩下的 `Returning` 一位仍是 `OfflineText`，理由是键回填那一整档缺 SPI 槽位、集成层按名 skip。
-- **SQLite。** 清单解析成功（`Microsoft.Data.Sqlite`，工厂落到 `Microsoft.Data.Sqlite.SqliteFactory`），而这是这份清单上第一颗 `factoryType` 从活机器读回来而非照文档写的键。集成层用 `QUICKSQL_TEST_PROVIDER=sqlite` 打到一座临时文件库（`Sqlite.ScratchConnectionString`，本家"实例"就是一个文件，夹具只在被点名的这条显式通路上自建，`TestConnectionString` 那道闸门一个字不动）。台账把 5 位中的 3 位钉成 `Live`（`Paging_LimitOffset`／`Returning`／`MultiStatement`），见证与前两家不同——是 ORM 自己拼出的语句跑过，不是基线文本被手敲进库；`MultiStatement` 那颗靠事后翻库（`IX_QuickSqlOrder_CreatedAt` 在场）认。剩下两位不翻档且各因不同：`Schemas` 是"发得出而带限定的那一形今天没被执行过"（留在 `OfflineText`），`Identity_ExplicitInsert` 连可发的文本都没有（Core 直接抛，留在 `VendorDoc`）。集成那一场是 `95 / E0 / F0 / S14`（14 颗具名 skip：并发令牌 12 + T-SQL 裁判文本 2）。**v0.38 第十一笔复点：SQLite 那族现在是 `131 / E0 / F0 / S29`，SQL Server 那族是 `131 / E0 / F0 / S5`**——场数每加一册就涨，那一串 95 是 SQLite 那一笔落地时的快照，本文把它留着是为了对上账，不代表现在跑出来的还是它。**注意：本家有活库，但 `golden/sqlite/*.sql` 那 11 份没被原样重放过——翻 `Live` 的那条链与"黄金样本↔真库执行"那条链在这里是两条，别把前者读成后者。**
-- **三处口径要指认：** `QuickSqlDrivers.json` 的 xugu 行 `$comment` 写的是"跑的是 SELECT 1 与两颗 GetSchema，provider 发的 SQL 一条都没有"，而上面那份台账把 4 位记为 `Live`；SQL Server 那半同样只有测试侧的自述；SQLite 那半的 `$comment`（若仍是接入时那句"未实测"）也与本笔翻的三颗 `Live` 不同步。规格 §13.4/§13.5 才是那三本账的落点。**本文不替三边裁哪个更准**，要上生产的话这三处得先对齐。
-- 顺带量出的两格约束：`TryEnsureLoaded` 只创建不打开连接，挡不住原生同伴缺失（bare 那颗反证）；清单 `path` 用正斜杠时托管加载会成功、原生库找不到，要到 `Open` 才炸。
+- **虚谷。** 内建表解析成功（`XuguClient`，工厂落到 `XuguClient.XGProviderFactory`）、`Open` 成功、目录可读。台账把 7 位中的 4 位钉成 `Live`，见证是三份基线在活库上执行通过（`paging-skip-only.sql` 1/1 句、`ddl-alter-and-comment.sql` 3/3 句、`ddl-order.sql` 1/1 句）；`ddl-qualified.sql` 那一形跑过而**失败**（`E4002` 模式不存在紧随 `E5021`），台账写明败因在"不建库、不建模式"的授权侧而不是文本侧，所以本版不修它。剩下的 `Returning` 一位仍是 `OfflineText`，理由是键回填那一整档缺 SPI 槽位、集成层按名 skip。
+- **SQLite。** 内建表解析成功（`Microsoft.Data.Sqlite`，工厂落到 `Microsoft.Data.Sqlite.SqliteFactory`），而这是内建表上第一颗 `FactoryType` 从活机器读回来而非照文档写的键。集成层用 `QUICKSQL_TEST_PROVIDER=sqlite` 打到一座临时文件库（`Sqlite.ScratchConnectionString`，本家"实例"就是一个文件，夹具只在被点名的这条显式通路上自建，`TestConnectionString` 那道闸门一个字不动）。台账把 5 位中的 3 位钉成 `Live`（`Paging_LimitOffset`／`Returning`／`MultiStatement`），见证与前两家不同——是 ORM 自己拼出的语句跑过，不是基线文本被手敲进库；`MultiStatement` 那颗靠事后翻库（`IX_QuickSqlOrder_CreatedAt` 在场）认。剩下两位不翻档且各因不同：`Schemas` 是"发得出而带限定的那一形今天没被执行过"（留在 `OfflineText`），`Identity_ExplicitInsert` 连可发的文本都没有（Core 直接抛，留在 `VendorDoc`）。集成那一场是 `95 / E0 / F0 / S14`（14 颗具名 skip：并发令牌 12 + T-SQL 裁判文本 2）。**v0.38 第十一笔复点：SQLite 那族现在是 `131 / E0 / F0 / S29`，SQL Server 那族是 `131 / E0 / F0 / S5`**——场数每加一册就涨，那一串 95 是 SQLite 那一笔落地时的快照，本文把它留着是为了对上账，不代表现在跑出来的还是它。**注意：本家有活库，但 `golden/sqlite/*.sql` 那 11 份没被原样重放过——翻 `Live` 的那条链与"黄金样本↔真库执行"那条链在这里是两条，别把前者读成后者。**
+- **三处口径要指认：** 内建表 `BuiltinDrivers.cs` 的 xugu 行注释写的是"跑的是 SELECT 1 与两颗 GetSchema，provider 发的 SQL 一条都没有"，而上面那份台账把 4 位记为 `Live`；SQL Server 那半同样只有测试侧的自述；SQLite 那半的行注释（若仍是接入时那句"未实测"）也与本笔翻的三颗 `Live` 不同步。规格 §13.4/§13.5 才是那三本账的落点。**本文不替三边裁哪个更准**，要上生产的话这三处得先对齐。
+- 顺带量出的一格约束：`TryEnsureLoaded` 只创建不打开连接，挡不住原生同伴缺失（bare 那颗反证）。旧清单那格"`path` 用正斜杠时托管加载会成功、原生库找不到，要到 `Open` 才炸"的坑已随 `path` 字段一起消失——探测名由内建表拼 `<assembly>.dll`，分隔符不再经过任何人的手。
 
 ### 4.3 已知的模型空档（都在 `src/` 里可读）
 
 1. **SPI 没有"库的版本"槽位**。虚谷的 `COMPATIBLE_MODE`、PG 的内核版本段、MySQL 的 `sql_mode` 都改方言假设，而 `IDbProvider` 那 11 颗子 SPI 里没有一格承接（规格 §14 那格点名）。后果：同一家不同版本上，本文的文本层结论可能整体不成立。
-2. **SPI 没有"兼容模式"槽位**，今天已有 13 颗未建模参数在册（§14 那份名单）。最要紧的三颗：金仓 Oracle 兼容模式（一个连接串参数换掉整族方言假设，`src/QuickSql.Providers.Kingbase/KingbaseProvider.cs:19` 附近类注释自陈）、MySQL 的 `GuidFormat=BinaryUuid`（`CHAR(36)` 变 `BINARY(16)`，`MySqlTypes.cs:22`）、OceanBase 的"双模"（清单上那颗 `oceanbase` 键只在连接建在 MySQL 模时成立）。
+2. **SPI 没有"兼容模式"槽位**，今天已有 13 颗未建模参数在册（§14 那份名单）。最要紧的三颗：金仓 Oracle 兼容模式（一个连接串参数换掉整族方言假设，`src/QuickSql.Providers.Kingbase/KingbaseProvider.cs:19` 附近类注释自陈）、MySQL 的 `GuidFormat=BinaryUuid`（`CHAR(36)` 变 `BINARY(16)`，`MySqlTypes.cs:22`）、OceanBase 的"双模"（内建表上那颗 `oceanbase` 键只在连接建在 MySQL 模时成立）。
 3. **三颗 UPSERT 位里两颗置着、一颗空着，而三句发射器都没有。** `Upsert_MergeInto` 在 SQL Server 那行（`src/QuickSql.Providers.SqlServer/SqlServerProvider.cs:46`）、`Upsert_OnConflict` 在 PG 那行（`PostgreSqlProviderBase.cs:53`）、`Upsert_OnDuplicate` 在枚举里有位而 MySQL 系的掩码没置它（`MySqlProviderBase.cs:113` 那五行里没有）。链式接口 `IInsert<T>`/`IUpdate<T>` 上没有任何对应成员，而 `.OnConflict(` 这一形在 `src/` 下一处都没有 —— 全仓库 `OnConflict` 一词只有三处命中：枚举那颗（`DbCapabilities.cs:18`）、PG 血统的掩码（`PostgreSqlProviderBase.cs:53`）、类注释里那一句（`PostgreSqlProviderBase.cs:18`）。位说的是"库有这个能力"，不是"本库会发这句"，两者之间今天没有闸门 —— 别按位选路。
 4. **`Cte` 与 `WindowFunctions` 有声明、没接线**：掩码上 PG 系与 SQL Server 各置了这两位（`PostgreSqlProviderBase.cs:54`、`SqlServerProvider.cs:48`），而 `IQuery<T>` 上没有 CTE 入口、窗口函数也没有可点名的 API（`CountMethod.CountOverWindow` 那一档连自家 count 优化都没接：`src/QuickSql.Core/Query/QueryEngine.cs:446` 直接抛，那颗 switch 的注释自陈"没实现就别让它看起来能用"）。
 5. **`MultiStatement` 有第二份声明了，但仍是一颗没人读来分派的位**：v0.37 第四笔之前只有 SQL Server 声明（`SqlServerProvider.cs:49`），今天 SQLite 也声明它（`SqliteProvider.cs`，七家第二份），而这一份背后第一次挂上真实发射——`SqliteCodeFirst.EmitCreateTable` 把建表＋建索引串成一句 ` ; `-分隔的文本，集成夹具 `tests/QuickSql.Tests.Integration/Database.cs:1134-1137` 那句 `ExecuteNonQuery` 把它整个发进活库跑过（这就是 §4.2 那三颗 `Live` 里 `MultiStatement` 那颗的来路）。但 `grep -rn "MultiStatement" src/` 命中的仍是声明与注释、**没有一处按这颗位走岔路**：走的是"这一族的发射器本来就把两句串起来"那条硬路径，不是"读了位才决定串不串"。所以它从"空判"改口成"有产出、仍零决策消费者"，性质与前几版一样——别按这颗位选路。写侧真正按方言分派的是 `ISqlDialect.SupportsJoinedWrites`。
@@ -821,9 +872,9 @@ DDL 按集群分组（`SchemaSyncer.cs:130` 的 `GroupByCluster`）：一次 `Sy
 
 ## 5. provider 总表
 
-能力位颗数取自各家掩码（§2.4 的声明处），manifest assembly 取自 `QuickSqlDrivers.json`。状态列除三格例外一律"离线文本层，未实测"（例外的口径见 §4.2）。
+能力位颗数取自各家掩码（§2.4 的声明处），assembly 取自内建表 `BuiltinDrivers.cs`。状态列除三格例外一律"离线文本层，未实测"（例外的口径见 §4.2）。
 
-| 库种 | `DbKind` | `DriverKey` | 清单 `assembly` | 血统 | 位 | 状态 |
+| 库种 | `DbKind` | `DriverKey` | 内建表 `assembly` | 血统 | 位 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
 | SQL Server | `SqlServer` | `sqlserver` | `Microsoft.Data.SqlClient` | 独立 | 17 | 全部位有活库执行见证（两台实例，集成层自述；见 §4.2） |
 | PostgreSQL | `PostgreSql` | `postgresql` | `Npgsql` | PG | 14 | 离线文本层，未实测 |
@@ -842,4 +893,4 @@ DDL 按集群分组（`SchemaSyncer.cs:130` 的 `GroupByCluster`）：一次 `Sy
 | GBase 8s | `Gbase8s` | `gbase8s` | `GBase.DataDB` | 独立 | 4 | 离线文本层，未实测；档位按【文档·IBM】 |
 | SQLite | `Sqlite` | `sqlite` | `Microsoft.Data.Sqlite` | 独立 | 5 | 装载/连通实测（临时文件库）；5 位中 3 位有活库执行见证，且三颗都是 ORM 产出的语句跑过而非基线重放（§4.2） |
 
-`DbKind` 枚举的 16 个值今天全部有 provider、清单行、掩码对应，无空档（原 `MariaDb` 那一个值已于 v0.37 第五笔撤下——本仓库不立 MariaDB 这一档，理由见设计文档 §14）。OceanBase 的 Oracle 模同样没有键（那颗叶子在规格里被裁了后置）。
+`DbKind` 枚举的 16 个值今天全部有 provider、内建表行、掩码对应，无空档（原 `MariaDb` 那一个值已于 v0.37 第五笔撤下——本仓库不立 MariaDB 这一档，理由见设计文档 §14）。OceanBase 的 Oracle 模同样没有键（那颗叶子在规格里被裁了后置）。

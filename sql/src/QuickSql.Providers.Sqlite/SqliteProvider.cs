@@ -18,8 +18,8 @@ namespace QuickSql.Providers.Sqlite;
 /// §2 那条"provider 之间禁止互引"在这里的表现为 <see cref="SqliteConnectorFactory"/> 是第七份逐字同形的拷贝。</para>
 ///
 /// <para><b>构造期不反射</b>：<see cref="DbProviderFactory"/> 由 Core 的 <c>DriverRegistry</c> 按
-/// <c>QuickSqlDrivers.json</c> 解析后注入，所以本程序集编译期不认识 <c>Microsoft.Data.Sqlite</c>（§1.2 原则 3）。
-/// <b>而这一家把清单 $comment 里那句"公开包走默认探测路径"那一支第一次走通了</b>：另三颗单层家里，
+/// 内建表 <c>BuiltinDrivers</c> 解析后注入，所以本程序集编译期不认识 <c>Microsoft.Data.Sqlite</c>（§1.2 原则 3）。
+/// <b>而这一家把内建表注释 里那句"公开包走默认探测路径"那一支第一次走通了</b>：另三颗单层家里，
 /// T-SQL 那一家是 P0 主靶、程序集由 <c>tests/QuickSql.Tests.Integration</c> 的引用带进输出目录；
 /// 虚谷那一家在 v0.32 结算日解析成功过，走的是另一支——把厂商那两颗 DLL 手动摆进
 /// <c>&lt;输出目录&gt;/drivers/</c>（§9.1 那一行第五列有整段账）；GBase 8s 那一家到今天仍然<em>从未在
@@ -27,7 +27,7 @@ namespace QuickSql.Providers.Sqlite;
 /// <c>restore</c> 得到、<c>SqliteFactory.Instance</c> 拿到、工厂当场造出
 /// <c>SqliteConnection</c> 与 <c>SqliteCommand</c>【实测·A0 ∶ A0b】，程序集名与版本现场读回
 /// <c>Microsoft.Data.Sqlite 9.0.0.0</c>、引擎 <c>sqlite_version() = 3.46.1</c>【实测·A0c ∶ A1】。
-/// 也就是说清单里那颗 <c>factoryType</c> 在本家<em>写得出实名</em>；另两家只能省略它走
+/// 也就是说内建表里那颗 <c>factoryType</c> 在本家<em>写得出实名</em>；另两家只能省略它走
 /// "扫导出类型里第一个 <c>DbProviderFactory</c> 子类"那条兜底，而虚谷那一家连实名都读到过仍省着 ——
 /// 那道差额记在 <see cref="DriverKey"/> 那一段。</para>
 ///
@@ -171,11 +171,11 @@ namespace QuickSql.Providers.Sqlite;
 [QuickSqlProvider(DbKind.Sqlite)]
 public sealed class SqliteProvider : IDbProvider
 {
-    /// <summary>清单里的 <c>key</c>。<c>assembly</c> 写 <c>Microsoft.Data.Sqlite</c>、<c>factoryType</c>
+    /// <summary>内建表里的 <c>key</c>。<c>assembly</c> 写 <c>Microsoft.Data.Sqlite</c>、<c>factoryType</c>
     /// 写 <c>Microsoft.Data.Sqlite.SqliteFactory</c> —— 后一颗名字是<em>现场读到的</em>而不是文档口径
-    /// （出处就是第二段那四颗 A0 系列）。按"名字读过而清单不写"这一格本家排第三：<c>sqlserver</c> 那一行
+    /// （出处就是第二段那四颗 A0 系列）。按"名字读过而内建表不写"这一格本家排第三：<c>sqlserver</c> 那一行
     /// 从第一天就写着实名，虚谷在 v0.32 结算日也当场读到过工厂实名（<c>XuguClient.XGProviderFactory</c>，
-    /// §9.1 那一行第五列）而它的清单行照旧省着那颗，<b>本行是第一次把现场读到的实名写进清单</b>。
+    /// §9.1 那一行第五列）而它的内建表行照旧省着那颗，<b>本行是第一次把现场读到的实名写进内建表</b>。
     /// 名字与 <see cref="DbKind.Sqlite"/> 的 <c>ToString().ToLowerInvariant()</c> 一致，
     /// 所以 <c>key</c> 不需要额外映射表。</summary>
     public const string DriverKey = "sqlite";

@@ -6,7 +6,7 @@ namespace QuickSql.Providers.PostgreSqlBase;
 /// <summary>连接与命令的创建（§4）。<b>类体与 T-SQL 那一族的那一份同形，而且这是故意的重复</b>：
 /// provider 之间禁止互引（§2），所以"只有 ADO 抽象层虚调用"这一段没法共用，只能各写一份 ——
 /// 它同时也是一个证据：这一层没有任何一处需要知道对面是哪一家。
-/// 驱动实例由 Core 的 <c>DriverRegistry</c> 按 <c>QuickSqlDrivers.json</c> 在运行期解析后注入（§1.2 原则 3），
+/// 驱动实例由 Core 的 <c>DriverRegistry</c> 按 内建表 <c>BuiltinDrivers</c> 在运行期解析后注入（§1.2 原则 3），
 /// 热路径上没有反射，也没有字符串找类型。</summary>
 public sealed class PostgreSqlConnectorFactory(DbProviderFactory factory) : IConnectorFactory
 {

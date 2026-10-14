@@ -9,7 +9,7 @@ namespace QuickSql.TestInfra;
 ///
 /// <para>它是第四档，存在的理由与金仓、达梦那两份<em>同一条</em>：本机没有任何一台 MySQL 血统的实例
 /// （§13.4 授权的只有两台 SQL Server），清单里那一行的程序集名 <c>MySqlConnector</c> 也从未被解析成功过
-/// （§13.5 台账里这一行整行「未实测」），所以这里<em>没有</em> <see cref="SqlServer.DriverFromManifest"/>
+/// （§13.5 台账里这一行整行「未实测」），所以这里<em>没有</em> <see cref="SqlServer.Driver"/>
 /// 的对应物 —— 有了它就会被误读成"这条解析路径验过"。这一家与另两家不一样的地方只有一处：
 /// 清单里那一行是三行「未实测」里唯一公开、MIT 且 AOT 友好的驱动（sqlserver 那一颗同样公开且 MIT，
 /// 但它不在"未实测"这三行里 —— 本条上一版写作"四行里唯一"，交账时按清单自己第一行推翻），
@@ -25,7 +25,7 @@ namespace QuickSql.TestInfra;
 /// 而 <c>SELECT VERSION()</c> 交 <c>8.4.8</c>、<c>@@version_comment</c> 交
 /// <c>MySQL Community Server - GPL</c>【实测·S-01 ∶ S-02，<c>obj/logs/v37-my-recon-1.log</c>】；
 /// ② "<c>MySqlConnector</c> 从未被解析成功过"——清单里 <c>"mysql"</c> 那一行经 <c>DriverRegistry</c>
-/// 解析出了工厂（<see cref="DriverFromManifest"/> 现在有了，与 <see cref="PostgreSql"/> 走过的是同一道改判）；
+/// 解析出了工厂（<see cref="Driver"/> 现在有了，与 <see cref="PostgreSql"/> 走过的是同一道改判）；
 /// ③ "那一天要补的是连接串解析"——那一天到了，而它确实<em>先</em>撞在解析上：这一颗驱动的连接串构建器
 /// <b>不吃 URI 形</b>（<c>MySqlConnectionStringBuilder("mysql://…")</c> 报
 /// <c>Format of the initialization string</c>），与 <see cref="PostgreSql"/> 那一族"URI 直接就是合法连接串"
@@ -49,16 +49,16 @@ public static class MySql
         });
 
     /// <summary>走完整的运行期驱动解析链（清单 → 独立 <c>AssemblyLoadContext</c> → 工厂），与
-    /// <see cref="SqlServer.DriverFromManifest"/>、<see cref="Xugu.DriverFromManifest"/>、
-    /// <see cref="PostgreSql.DriverFromManifest"/> 同一条路、同一条"不许直接 <c>new</c> 工厂"的理由。
+    /// <see cref="SqlServer.Driver"/>、<see cref="Xugu.Driver"/>、
+    /// <see cref="PostgreSql.Driver"/> 同一条路、同一条"不许直接 <c>new</c> 工厂"的理由。
     ///
     /// <para><b>本行验的三件事</b>：清单里 <c>"mysql"</c> 那一颗键读得出、程序集名 <c>MySqlConnector</c>
     /// 解析得出、交回来的工厂 <c>CreateConnection()</c> 连得上。清单那一行刻意<em>不</em>写
     /// <c>factoryType</c>（<c>MySqlProvider.DriverKey</c> 的注释写的就是这个省略），于是走
     /// "扫导出类型里第一个 <c>DbProviderFactory</c> 子类"那条兜底 —— 本行是那条兜底在本仓库
     /// <b>第一次真跑通</b>：前三家各有 <c>factoryType</c> 或厂商产物，只有这一颗是靠扫描命中的。</para></summary>
-    public static DbProviderFactory DriverFromManifest()
-        => DriverRegistry.Load().Factory(MySqlProvider.DriverKey);
+    public static DbProviderFactory Driver()
+        => new DriverRegistry().Factory(MySqlProvider.DriverKey);
 
     /// <summary>集成测试的第五台目标库：<b>没有默认值</b>，与 <see cref="SqlServer.TestConnectionString"/>、
     /// <see cref="Xugu.TestConnectionString"/>、<see cref="PostgreSql.TestConnectionString"/> 同一条判据。

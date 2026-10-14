@@ -15,9 +15,9 @@ namespace QuickSql.Providers.MySqlBase;
 /// MariaDB 这一档已从 <c>DbKind</c> 撤下、本仓库不立（撤档理由与重开条件记设计文档 §14），<c>AUTO_ID_CACHE</c> 那格 TiDB 叶子没领。
 ///
 /// <para><b>构造期不反射</b>：<see cref="DbProviderFactory"/> 由 Core 的 <c>DriverRegistry</c> 按
-/// <c>QuickSqlDrivers.json</c> 解析后注入，所以本程序集编译期不认识 <c>MySqlConnector</c>（§1.2 原则 3）。
+/// 内建表 <c>BuiltinDrivers</c> 解析后注入，所以本程序集编译期不认识 <c>MySqlConnector</c>（§1.2 原则 3）。
 /// 那一颗程序集名与达梦那一格同一处境：按 §9.1 的清单写的，从未在一台机器上解析成功过，
-/// 所以清单里同样<em>不写</em> <c>factoryType</c>。</para>
+/// 所以内建表里同样<em>不写</em> <c>factoryType</c>。</para>
 ///
 /// <para>各槽位共用同一批实例（与另四族同一条纪律）：<c>Expressions.Register</c> 的覆写必须同时对翻译器
 /// 和方言生效，各 new 一份就会出现"注册了却不改行为"的幽灵 bug。</para>

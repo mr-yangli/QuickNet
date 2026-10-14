@@ -18,14 +18,14 @@ namespace QuickSql.Providers.Gbase8s;
 /// 那一种是族里有基类而这一叶不接，本家是族里压根没有基类。</para>
 ///
 /// <para><b>构造期不反射</b>：<see cref="DbProviderFactory"/> 由 Core 的 <c>DriverRegistry</c> 按
-/// <c>QuickSqlDrivers.json</c> 解析后注入，所以本程序集编译期不认识 <c>GBase.DataDB</c>（§1.2 原则 3）。
+/// 内建表 <c>BuiltinDrivers</c> 解析后注入，所以本程序集编译期不认识 <c>GBase.DataDB</c>（§1.2 原则 3）。
 /// 那颗程序集名<em>只</em>来自 §9.1 那一行第四列，从未在一台机器上解析成功过，而且本家比另五家薄一层：
-/// 连"官方发布名有两档出处"都没有，所以清单里<em>不写</em> <c>factoryType</c>（理由与达梦那一行逐字相同），
+/// 连"官方发布名有两档出处"都没有，所以内建表里<em>不写</em> <c>factoryType</c>（理由与达梦那一行逐字相同），
 /// 省略它走"扫导出类型里第一个 <c>DbProviderFactory</c> 子类"那条兜底。<b>而这一家的兜底今天不可验证</b>：
 /// 虚谷那一格至少写着"厂商参考页上有 <c>XGProviderFactory.Instance</c> 这个名字"【文档】，
-/// 本家连那一颗工厂类的名字都没读到 —— 也就是说这一整条驱动路径（清单 → <c>AssemblyLoadContext</c> →
-/// 扫工厂类）第一次有一个键是<em>纯按清单存在</em>的。<c>DriverPathTests</c> 那一支量的正是这一格，
-/// 而它量的是"清单里这一行解析得开吗"，答案在拿到驱动包之前恒为"解析不开"。</para>
+/// 本家连那一颗工厂类的名字都没读到 —— 也就是说这一整条驱动路径（内建表 → <c>AssemblyLoadContext</c> →
+/// 扫工厂类）第一次有一个键是<em>纯按内建表存在</em>的：这一行名字解析得开吗，答案在拿到驱动包之前恒为
+/// "解析不开"，而离线侧只钉得到"内建表里有这一行"（<c>BuiltinDriverTests</c>），钉不到"这一行解析得开"。</para>
 ///
 /// <para>各槽位共用同一批实例（与另五族同一条纪律）：<c>Expressions.Register</c> 的覆写必须同时对翻译器
 /// 和方言生效，各 new 一份就会出现"注册了却不改行为"的幽灵 bug。</para>
@@ -105,11 +105,11 @@ namespace QuickSql.Providers.Gbase8s;
 [QuickSqlProvider(DbKind.Gbase8s)]
 public sealed class Gbase8sProvider : IDbProvider
 {
-    /// <summary>清单里的 <c>key</c>。<c>assembly</c> 按 §9.1 那一行第四列写 <c>GBase.DataDB</c>，
+    /// <summary>内建表里的 <c>key</c>。<c>assembly</c> 按 §9.1 那一行第四列写 <c>GBase.DataDB</c>，
     /// 而它从未在一台机器上解析成功过（上一段有这一格的完整处境）。名字与
     /// <see cref="DbKind.Gbase8s"/> 的 <c>ToString().ToLowerInvariant()</c> 一致，所以 <c>key</c> 那一颗
     /// 不需要额外映射表 —— <b>这一条在本家是<em>真的</em>省了一格</b>：另五家有几个键要靠
-    /// <c>$comment</c> 说明"名字与库种的对应是按清单写的"，本家是六家里第一个"名字就是自己"而
+    /// 内建表注释说明"名字与库种的对应是按内建表写的"，本家是六家里第一个"名字就是自己"而
     /// 不需要解释的一颗（因为它没有血统、没有别名、也没有第二家共享同一个基类名）。</summary>
     public const string DriverKey = "gbase8s";
 
@@ -160,7 +160,7 @@ public sealed class Gbase8sProvider : IDbProvider
 
     /// <summary>没有批量策略（类注释倒数第二条）。这一格与 <c>OracleProviderBase</c> 同一档而不同因：
     /// 那一族的兜底是"驱动有数组绑定而这一族没有"，这一家是"读到过名字而没读到可报的颗数"。</summary>
-    /// <remarks><b>【本笔表态】</b>批量阶梯铺开时这一家两档都不接，理由与清单上它那一颗键同一处境：
+    /// <remarks><b>【本笔表态】</b>批量阶梯铺开时这一家两档都不接，理由与内建表上它那一颗键同一处境：
     /// <b>L1</b> —— 这一族文档面读到过装载一族的<em>名字</em>（Informix 的 ESO 接口那一支），读到的是 C 接口
     /// 而不是托管 API，托管那面连一颗可反射的类型名都没有，而程序集本身从未解析成功过；
     /// <b>Merged</b> —— 默认 false，本家连一句能内联的字面量文法都没在活库上验过。

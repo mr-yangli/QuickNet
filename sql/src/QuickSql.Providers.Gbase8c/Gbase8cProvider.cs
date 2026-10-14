@@ -41,12 +41,12 @@ namespace QuickSql.Providers.Gbase8c;
 /// 表达无形状（无缝）—— 神通那笔"有明写分岔而分岔在发射面之外"与第三笔"没有缝裁决就无可表达的形状"
 /// 两句此前各量各的，本笔在同一颗壳上相遇。</para>
 ///
-/// <para><b>清单那颗 <c>assembly</c> 的名字来路是这一份清单里的第三种来路的第二颗</b>：填 <c>Npgsql</c>。
+/// <para><b>内建表那颗 <c>assembly</c> 的名字来路是这一份内建表里的第三种来路的第二颗</b>：填 <c>Npgsql</c>。
 /// 金仓行写的是厂商文档名（Kdbndp），opengauss／gaussdb 两颗共享的是邻家库种的兼容臂，而瀚高与本行
 /// 两颗的来路都是行内那三个字"兼容 PG"（第四列原词逐字相同）——线协议就是 PG 的，Npgsql 是血统协议
 /// 自己的驱动，不借邻家的臂。于是 PG 血统凑齐"四颗键、同一份 assembly"，与 mysql／tidb／oceanbase
 /// 那三键同构而更<em>分岔</em>一档：那三颗共享的是同族协议的真 primary，这四颗里面来路两种各占两颗
-/// （兼容臂 ∶ 直称 primary ＝ 2 ∶ 2），这个区别留在清单 $comment 里不抹平。GBase 自己分发的托管驱动
+/// （兼容臂 ∶ 直称 primary ＝ 2 ∶ 2），这个区别留在内建表注释 里不抹平。GBase 自己分发的托管驱动
 /// 叫什么，本仓库没有可引读数——不猜名字（达梦那一行立的纪律），现场按厂商读数改回。整行"未实测"，
 /// 刻意不写 <c>factoryType</c>（理由与达梦那一行逐字相同）。</para>
 ///
@@ -57,7 +57,7 @@ namespace QuickSql.Providers.Gbase8c;
 [QuickSqlProvider(DbKind.Gbase8c)]
 public sealed class Gbase8cProvider : PostgreSqlProviderBase
 {
-    /// <summary>清单里的 <c>key</c>。assembly 的来路与"第三种来路的第二颗"写在类注释第六段与清单 $comment；
+    /// <summary>内建表里的 <c>key</c>。assembly 的来路与"第三种来路的第二颗"写在类注释第六段与内建表注释；
     /// 与全部"未实测"行同一处境：刻意不写 <c>factoryType</c>，走"扫导出类型里第一个
     /// <c>DbProviderFactory</c> 子类"那条兜底（理由与达梦那一行逐字相同）。</summary>
     public const string DriverKey = "gbase8c";

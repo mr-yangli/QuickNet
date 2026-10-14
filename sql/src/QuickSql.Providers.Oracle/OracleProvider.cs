@@ -44,17 +44,17 @@ namespace QuickSql.Providers.Oracle;
 /// （<c>OracleFamilyProbe</c>）实例化，而此前那十颗探针里<em>只有那一颗</em>传的是一颗"有枚举值、
 /// 没有 provider"的库种——<see cref="DbKind.Oracle"/>，其余各颗传的都是自家叶子自己的值。
 /// 换句话说这一族的"空壳基线"今天一直是由一颗影子本尊量的，而本尊到场之后影子有了本体：
-/// 两者今天只剩 CLR 类型名与清单键两颗可分辨的差异，产出的每一个字节都相同，
+/// 两者今天只剩 CLR 类型名与内建表键两颗可分辨的差异，产出的每一个字节都相同，
 /// <em>连异常文案都相同</em>（<c>EmitJoinedSources</c> 那句带的是 <c>{Kind}</c>，两侧同为 Oracle）。
 /// 所以"叶与基类逐字同形"这一格从今天起由一颗真 provider 守着，探针退为"abstract 基类可实例化"那一格的见证；
 /// 那句"没有一种库种叫基类"的自辩（同一处注释）由本笔就地自纠——它字面仍真（枚举里没有一颗叫"基类"），
 /// 但它作为"所以只能靠探针"的理由已经不成立了。</para>
 ///
-/// <para><b>清单那颗 <c>assembly</c> 的来路是第四种，也是最薄的一种</b>：填 <c>Oracle.ManagedDataAccess</c>，
+/// <para><b>内建表那颗 <c>assembly</c> 的来路是第四种，也是最薄的一种</b>：填 <c>Oracle.ManagedDataAccess</c>，
 /// 而这颗名字在本仓库的出处既不是厂商文档（金仓的 <c>Kdbndp</c>、达梦的 <c>DmProvider</c>、神通的 <c>Oscar</c> 那一档），
 /// 也不是邻家的兼容臂（openGauss／GaussDB 那两颗），更不是"血统协议自己实现的驱动"（Npgsql 那五颗），
 /// 而是<em>本仓库自家类注释里的一句话</em>——<c>OracleProviderBase</c> 第二段那句"本程序集编译期不认识
-/// <c>Oracle.ManagedDataAccess</c>"。它是清单里第一颗"名字的唯一出处在我们自己写的注释里"的键，
+/// <c>Oracle.ManagedDataAccess</c>"。它是内建表里第一颗"名字的唯一出处在我们自己写的注释里"的键，
 /// 而这一档薄到什么程度可以这么读：另三种来路都指向一个库外的权威（厂商、邻家行、协议），本行指向的那份权威
 /// 是本页文档。处境照旧：从未解析成功过、刻意不写 <c>factoryType</c>（理由与达梦那一行逐字相同，
 /// 而本行连一颗有文档出处的工厂类名都没有——虚谷那一行至少读到过 <c>XGProviderFactory.Instance</c>）、
@@ -69,8 +69,8 @@ namespace QuickSql.Providers.Oracle;
 [QuickSqlProvider(DbKind.Oracle)]
 public sealed class OracleProvider : OracleProviderBase
 {
-    /// <summary>清单里的 <c>key</c>。assembly 那颗 <c>Oracle.ManagedDataAccess</c> 的来路与"第四种来路"
-    /// 写在类注释第六段与清单 $comment；照旧刻意不写 <c>factoryType</c>，走"扫导出类型里第一个
+    /// <summary>内建表里的 <c>key</c>。assembly 那颗 <c>Oracle.ManagedDataAccess</c> 的来路与"第四种来路"
+    /// 写在类注释第六段与内建表注释；照旧刻意不写 <c>factoryType</c>，走"扫导出类型里第一个
     /// <c>DbProviderFactory</c> 子类"那条兜底（理由与达梦那一行逐字相同）。</summary>
     public const string DriverKey = "oracle";
 

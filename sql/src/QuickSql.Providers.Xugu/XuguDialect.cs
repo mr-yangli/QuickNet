@@ -223,4 +223,62 @@ public sealed class XuguDialect(XuguTypes types, XuguKeys keys, XuguValues value
             + "整批退回一句一实体由 SupportsJoinedWrites 决定（语义与合并档等价，§12.4 第 2 项），走到这里说明那颗开关被绕过了 —— "
             + "宁可报错也不能悄悄丢掉表源，那等于丢掉连接条件（§1.2 原则 4）。");
     }
+
+    /// <summary>源与目标的别名（都<em>不带 <c>AS</c></em>，与 <see cref="SourceAliasKeyword"/> 那颗空格同源，
+    /// 也与本家类注释第二条那份产物 <c>MERGE INTO t1 USING (…) t2 ON (…)</c> 的形状逐字对上）。</summary>
+    const string MergeTarget = "t0";
+
+    const string MergeSource = "qsrc";
+
+    /// <summary><c>InsertOrUpdate</c> 在本家的发射：<b>虚谷的 <c>MERGE INTO … USING (SELECT … FROM dual UNION ALL …) …</c></b>，
+    /// 与 Oracle 血统那一颗同形（本家是"像 Oracle"的第三枚指纹是 <c>DUAL</c>、类注释第二条）。为什么不发
+    /// <c>USING (VALUES …)</c> 那一形：v0.32 在活库上正问过，<c>SELECT * FROM (VALUES …) AS t(id, nm)</c> 交
+    /// <c>syntax error, unexpected VALUES</c>【实测·<c>obj/logs/v32-recon-funcs-14-plain.log</c> F-20】，
+    /// 而行集只能从 <c>USING (SELECT …)</c> 那一格带——同一份日志的 F-19 交出 <c>MERGE INTO … USING (SELECT 1 AS "ID") S
+    /// ON (…) WHEN MATCHED THEN UPDATE SET …</c> 在执行通过（<c>AFFECTED=0</c>，那条 ON 没配上任何行，但语法与执行两级都过）。
+    /// <c>ON</c> ∶ <c>WHEN</c> 两支的去向由共用层 <see cref="DialectBase.EmitMergeTail"/> 发，不收分号。</summary>
+    ///
+    /// <para><b>档位口径（这一格比 Oracle 那一颗多一分实测、又少一分）</b>：<c>MERGE INTO … USING (SELECT … ) …
+    /// ON … WHEN MATCHED</c> 这个<em>骨架</em>在活虚谷上跑过（F-19），所以它不是纯文档形状；
+    /// 而 F-19 跑的是<em>单行、手工写</em>的那一颗 <c>SELECT 1 AS "ID"</c>——本层产出的是<b>多行 <c>UNION ALL</c> ∶
+    /// 目标起别名 <c>t0</c> ∶ 由 <c>InsertOrUpdateEngine</c> 拼的那一整句</b>，这三处增量今天都没在那台库上复点过。
+    /// 于是这一格读作"骨架有活库旁证、本层产出的那一条完整语句未实测"，重开条件：连那台 192.168.0.228 的虚谷
+    /// 把 <c>InsertOrUpdate</c> 跑一次（§14、集成册补一场）。</para></summary>
+    public override void Emit(in UpsertStatement upsert, SqlWriter writer)
+    {
+        writer.Append("MERGE INTO ");
+        EmitTableName(writer, upsert.Table.Table);
+        writer.Append(' ');
+        EmitIdentifier(writer, MergeTarget);
+
+        // USING (SELECT :p0 AS "col0", :p1 AS "col1" FROM dual UNION ALL SELECT …) qsrc
+        writer.Append(" USING (");
+
+        for (var row = 0; row < upsert.Rows.Count; row++)
+        {
+            if (row > 0)
+                writer.Append(" UNION ALL ");
+
+            writer.Append("SELECT ");
+
+            var cells = upsert.Rows[row];
+
+            for (var column = 0; column < cells.Count; column++)
+            {
+                if (column > 0)
+                    writer.Append(", ");
+
+                EmitExpression(cells[column]!, writer);
+                writer.Append(" AS ");
+                EmitIdentifier(writer, upsert.Columns[column].ColumnName);
+            }
+
+            writer.Append(" FROM dual");
+        }
+
+        writer.Append(") ");
+        EmitIdentifier(writer, MergeSource);
+
+        EmitMergeTail(writer, MergeTarget, MergeSource, upsert, semicolon: false);
+    }
 }

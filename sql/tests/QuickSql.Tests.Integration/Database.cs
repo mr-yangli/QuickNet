@@ -120,11 +120,11 @@ static class Database
     /// （<c>TrackingPathTests</c> 那颗低预算包壳、<c>ConcurrencyPathTests</c> 的第二会话）。</summary>
     public static DbProviderFactory Driver => Family switch
     {
-        Target.Xugu => Xugu.DriverFromManifest(),
-        Target.Sqlite => Sqlite.DriverFromManifest(),
-        Target.PostgreSql => PostgreSql.DriverFromManifest(),
-        Target.MySql => MySql.DriverFromManifest(),
-        _ => SqlServer.DriverFromManifest(),
+        Target.Xugu => Xugu.Driver(),
+        Target.Sqlite => Sqlite.Driver(),
+        Target.PostgreSql => PostgreSql.Driver(),
+        Target.MySql => MySql.Driver(),
+        _ => SqlServer.Driver(),
     };
 
     static QuickSqlOrm BuildOrm(DbProviderFactory factory)
@@ -141,7 +141,7 @@ static class Database
     ///
     /// <para><b>为什么要公开它</b>：<c>TrackingPathTests</c> 那颗低预算包壳要的就是这一档 —— 它把
     /// provider 掰一层再交给 <see cref="OrmWith"/>。从前它写的是
-    /// <c>LowBudgetProvider.Around(SqlServer.Provider(SqlServer.DriverFromManifest()), 6)</c>，
+    /// <c>LowBudgetProvider.Around(SqlServer.Provider(SqlServer.Driver()), 6)</c>，
     /// 也就是<em>用例自己点一家</em>；第五家第一跑它就把语句写进了 SQL Server、把断言问进了虚谷
     /// （同一场里 <c>Database.Rows</c> 走的是缝）。收成这一颗之后，"包壳包的是哪一家的 provider"
     /// 与"这一跑在哪一家"从此不可能不一致。</para></summary>
@@ -162,7 +162,7 @@ static class Database
     ///
     /// <para><b>它补的是一格真缺陷，不是一颗便利品</b>：本层有三处"要一台独立的 ORM"的地方
     /// （钩子是进程内状态、低预算包壳会污染共享那一份），而三处从前都写成
-    /// <c>Provider = SqlServer.Provider(SqlServer.DriverFromManifest())</c> 配
+    /// <c>Provider = SqlServer.Provider(SqlServer.Driver())</c> 配
     /// <c>ConnectionString = SqlServer.TestConnectionString</c>。<c>QUICKSQL_TEST_PROVIDER=xugu</c> 那一跑里
     /// 这三处的<em>写</em>落在 192.168.0.102、<em>读</em>落在 TESTDB，于是
     /// <c>WritePathTests.Audit_fills_the_same_value_either_way…</c> 得到
@@ -501,11 +501,11 @@ static class Database
     {
         try
         {
-            // 走完整清单链（QuickSqlDrivers.json → 独立 AssemblyLoadContext → DbProviderFactory），
+            // 走完整解析链（内建表 BuiltinDrivers → 独立 AssemblyLoadContext → DbProviderFactory），
             // §1.2 原则 3 与 §9.5 的第一次真跑就是这一句，而不是 new SqlClientFactory()。
             // v0.32 第二格起这一句按 <see cref="Family"/> 分岔：第五家走的是 XuguClient 那一行，
             // 而它是<em>本仓库交付入库的那份厂商产物</em>（src/QuickSql.Providers.Xugu/Driver/），
-            // 所以"清单行有效"这件事在两家各有证人，少一家都少一半。
+            // 所以"内建表那一行有效"这件事在两家各有证人，少一家都少一半。
             var factory = Driver;
             var orm = BuildOrm(factory);
 

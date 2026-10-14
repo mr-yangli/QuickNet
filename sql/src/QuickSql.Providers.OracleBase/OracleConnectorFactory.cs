@@ -12,7 +12,7 @@ namespace QuickSql.Providers.OracleBase;
 /// 它的驱动带一份<em>原生</em>同伴（<c>xugusql.dll</c> / <c>libxugusql.so</c>），
 /// 所以"托管程序集加载成功"在那一家不等于"能用"—— 同一段代码在五家里的<em>用途</em>权重变了，
 /// 形状没变（见 <c>XuguConnectorFactory</c> 类注释）。
-/// 驱动实例由 Core 的 <c>DriverRegistry</c> 按 <c>QuickSqlDrivers.json</c> 在运行期解析后注入（§1.2 原则 3），
+/// 驱动实例由 Core 的 <c>DriverRegistry</c> 按 内建表 <c>BuiltinDrivers</c> 在运行期解析后注入（§1.2 原则 3），
 /// 热路径上没有反射，也没有字符串找类型。</summary>
 public sealed class OracleConnectorFactory(DbProviderFactory factory) : IConnectorFactory
 {

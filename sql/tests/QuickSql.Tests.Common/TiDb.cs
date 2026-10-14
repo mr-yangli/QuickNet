@@ -9,7 +9,7 @@ namespace QuickSql.TestInfra;
 /// <para>它是 MySQL 血统的第二颗叶子，存在的理由与 <see cref="MySql"/> 那一份<em>同一条而更弱一档</em>：
 /// 本机没有任何一台 TiDB 实例（§13.4 授权的只有两台 SQL Server 与一台虚谷），清单里那颗 <c>tidb</c> 键
 /// 与 <c>mysql</c> 键共用同一份 <c>MySqlConnector</c> 程序集名，而这个名字从未被解析成功过
-/// （§13.5 台账里这一行整行「未实测」），所以这里同样<em>没有</em> <see cref="SqlServer.DriverFromManifest"/>
+/// （§13.5 台账里这一行整行「未实测」），所以这里同样<em>没有</em> <see cref="SqlServer.Driver"/>
 /// 的对应物 —— 有了它就会被误读成"这条解析路径验过"，而这一家连"第一次真库实测最可能落"那句话都轮不上
 /// （那句说的是 mysql 那一行：它排在 tidb 之前，理由写在清单自己那两行的 $comment 里）。</para>
 ///

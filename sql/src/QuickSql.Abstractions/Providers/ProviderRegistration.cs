@@ -26,9 +26,9 @@ public static class ProviderRegistry
 
     static readonly System.Collections.Concurrent.ConcurrentDictionary<DbKind, Entry> Map = new();
 
-    /// <summary>登记一颗 provider。<paramref name="driverKey"/> 是它在 <c>QuickSqlDrivers.json</c>
+    /// <summary>登记一颗 provider。<paramref name="driverKey"/> 是它在 内建表 <c>BuiltinDrivers</c>
     /// 与 <see cref="QuickSql.DriverLoading.DriverRegistry"/> 里的那颗字符串键，用于
-    /// <c>QuickSqlOrm.Create(DbKind, string)</c> 走清单解析时找出工厂。</summary>
+    /// <c>QuickSqlOrm.Create(DbKind, string)</c> 走内建表解析时找出工厂。</summary>
     public static void Register(DbKind kind, string driverKey, Func<DbProviderFactory, IDbProvider> build)
     {
         ArgumentNullException.ThrowIfNull(driverKey);

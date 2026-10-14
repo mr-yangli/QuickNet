@@ -1001,7 +1001,7 @@ else
 {
     // 组装根自己造 provider（§12.7 F：内核不做 Type.GetType(string)），且走清单里 "sqlserver" 那一行的
     // 运行期解析，而不是直接 new SqlClientFactory()——绕开清单就等于绕开这里要示范的那条链。
-    var mssqlProvider = new SqlServerProvider(DriverRegistry.Load().Factory(SqlServerProvider.DriverKey));
+    var mssqlProvider = new SqlServerProvider(new DriverRegistry().Factory(SqlServerProvider.DriverKey));
 
     // 同一份输入开成两台，而不是中途改一颗开关：那些选项是 init-only，用法上就是"启动期定死"。
     var asUsual = MssqlOrm(mssqlProvider, mssql, false);

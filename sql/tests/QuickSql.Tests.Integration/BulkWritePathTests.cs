@@ -868,4 +868,60 @@ public sealed class BulkWritePathTests
         Console.WriteLine($"[bulk-write-timing] rows={Count} merged_ms={mergedMs.ToString(CultureInfo.InvariantCulture)} " +
                           $"single_ms={singleMs} in_list_ms={inListMs} posture={Posture}");
     }
+
+    // ── InsertOrUpdate 独立链（§5.4 写侧、v0.39 第二笔） ───────────────
+
+    /// <summary>这一批的键全在库里，所以无论句尾 ∶ MERGE ∶ <c>WHERE EXISTS</c>，走的都是"命中就改"那一支，
+    /// 不碰缺键插入（那一支在 SQL Server 上撞自增列的显式键限制，见下一条）。这条判的是文本层看不见的两件事：
+    /// 那条链发的语句在真驱动上<em>执行得过吗</em>、改的每一格是不是入参那一格。缺键那一支归下一条。</summary>
+    [Fact]
+    public async Task InsertOrUpdate_updates_the_rows_whose_key_is_already_there()
+    {
+        Database.Ready();
+
+        var note = tag("insert-or-update-arm");
+        var landed = await Seed(note, 3);
+        var batch = changed(landed, note);
+
+        await Orm.InsertOrUpdate<Order>().SetSource(batch).ExecuteAffrowsAsync(TestContext.Current.CancellationToken);
+
+        // 不断 affrows 的绝对数（各家命中计数口径不同：MySQL 的 ON DUPLICATE 命中一行算 2），
+        // 只断库里落成的样子——那才是"换库不改代码"要钉的等价面。三行都还在、逐列是改过的那一份。
+        var stored = Stored(note);
+        Assert.Equal(3, stored.Count);
+
+        for (var i = 0; i < batch.Length; i++)
+            SameWritten(batch[i], stored[batch[i].Id]);
+    }
+
+    /// <summary>缺键那一支才见真章：库里没有的那一颗键落成一行新行。五家连得上的库都跑——
+    /// SQLite ∶ PG ∶ MySQL 收显式自增键；SQL Server 靠方言裹上去的 <c>SET IDENTITY_INSERT ON/OFF</c>
+    /// （见 <c>SqlServerDialect</c> 那颗抬头）；虚谷走它那颗 <c>MERGE</c> 的 INSERT 那一支。
+    /// <c>ghost</c> 取"刚被本用例删掉的那一颗"以避开 PG 序列上沿那一格（判据同上面那句）。</summary>
+    [Fact]
+    public async Task InsertOrUpdate_inserts_the_key_that_was_not_there()
+    {
+        Database.Ready();
+
+        var note = tag("insert-or-update-insert");
+        var landed = await Seed(note, 4);
+        var absent = landed[^1];
+
+        await Orm.DeleteRange(Keys([absent])).WithBulk(BulkWriteMethod.Merged)
+            .ExecuteBulkAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(3, Stored(note).Count);
+
+        Order[] batch = [.. changed(landed[..3], note), ghost(absent, note)];
+
+        await Orm.InsertOrUpdate<Order>().SetSource(batch).ExecuteAffrowsAsync(TestContext.Current.CancellationToken);
+
+        var stored = Stored(note);
+
+        // 前三行改了、那颗缺席的键插了进来 ⇒ 库里四行，逐行逐格是入参那一份。
+        Assert.Equal(4, stored.Count);
+
+        for (var i = 0; i < batch.Length; i++)
+            SameWritten(batch[i], stored[batch[i].Id]);
+    }
 }

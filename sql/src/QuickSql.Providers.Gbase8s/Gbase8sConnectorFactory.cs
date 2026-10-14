@@ -13,9 +13,9 @@ namespace QuickSql.Providers.Gbase8s;
 /// 那句判据的可核形式仍然是一行 grep：<c>grep -c "factory.CreateConnection" src/QuickSql.Providers.*/*.cs</c>
 /// 数得到几份，就是几份同形拷贝。</para>
 ///
-/// <para>驱动实例由 Core 的 <c>DriverRegistry</c> 按 <c>QuickSqlDrivers.json</c> 在运行期解析后注入
+/// <para>驱动实例由 Core 的 <c>DriverRegistry</c> 按 内建表 <c>BuiltinDrivers</c> 在运行期解析后注入
 /// （§1.2 原则 3），热路径上没有反射。这一族的程序集名 <c>GBase.DataDB</c> 只来自 §9.1 那一行第四列，
-/// <b>从未在一台机器上解析成功过</b>，清单里也刻意不写 <c>factoryType</c>（理由与达梦、神通那两行逐字相同：
+/// <b>从未在一台机器上解析成功过</b>，内建表里也刻意不写 <c>factoryType</c>（理由与达梦、神通那两行逐字相同：
 /// 省略它走"扫导出类型里第一个 <c>DbProviderFactory</c> 子类"那条兜底，比猜一个全名更容易成）。
 /// 它比另五家还薄一格的处境要说死：这一族连<em>托管程序集名</em>都只有 §9.1 那一列支持，
 /// 而 <c>XuguClient</c> 那一格在 v0.32 已经被实测翻成"同名"（§9.5）—— 所以本行今天没有那半格旁证。</para>

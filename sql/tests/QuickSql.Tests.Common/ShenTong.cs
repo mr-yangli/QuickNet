@@ -15,7 +15,7 @@ namespace QuickSql.TestInfra;
 ///
 /// <para>本机没有任何一台神通，清单里那颗 <c>shentong</c> 键的 assembly（Oscar，§9.1 行 902 第四列原词）
 /// 与 <c>Kdbndp</c>、<c>DmProvider</c>、<c>MySqlConnector</c> 一样从未被解析成功过（§13.5 台账整行「未实测」），
-/// 所以这里同样<em>没有</em> <see cref="SqlServer.DriverFromManifest"/> 的对应物，有了就会被误读成
+/// 所以这里同样<em>没有</em> <see cref="SqlServer.Driver"/> 的对应物，有了就会被误读成
 /// "这条解析路径验过"。</para>
 ///
 /// <para>连接串占位符复用 <see cref="SqlServer.OfflineConnectionString"/>：

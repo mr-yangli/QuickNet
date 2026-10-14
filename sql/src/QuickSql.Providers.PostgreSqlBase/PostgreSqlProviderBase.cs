@@ -9,7 +9,7 @@ namespace QuickSql.Providers.PostgreSqlBase;
 /// 金仓/openGauss/瀚高共享这一份，各自只覆写真正分岔的那几处。
 ///
 /// <b>构造期不反射</b>：<see cref="DbProviderFactory"/> 由 Core 的 <c>DriverRegistry</c> 按
-/// <c>QuickSqlDrivers.json</c> 解析后注入，所以本程序集编译期不认识 <c>Npgsql</c> 也不认识 <c>Kdbndp</c>
+/// 内建表 <c>BuiltinDrivers</c> 解析后注入，所以本程序集编译期不认识 <c>Npgsql</c> 也不认识 <c>Kdbndp</c>
 /// （§1.2 原则 3）。
 ///
 /// 各槽位共用同一批实例（与 <c>SqlServerProvider</c> 同一条纪律）：<c>Expressions.Register</c> 的覆写

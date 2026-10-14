@@ -36,12 +36,6 @@
     <ProjectReference Include="..\QuickSql.Tests.Common\QuickSql.Tests.Common.csproj" />
   </ItemGroup>
 
-  <ItemGroup>
-    <!-- 不复制到输出目录的话，DriverManifest.Load() 在测试进程里永远拿到 Empty，
-         §9.5 的运行期解析链就一次也没真跑过。Link 只在输出目录还原一份，仓库根仍是唯一真相。 -->
-    <None Include="..\..\QuickSqlDrivers.json" Link="QuickSqlDrivers.json" CopyToOutputDirectory="PreserveNewest" />
-  </ItemGroup>
-
   <PropertyGroup>
     <!-- 【v0.33】原生同伴按平台选路的那一颗：win / X64 / Arm64 三个取值，默认由构建主机算出，
          命令行 -p:XuguHostPlatform=… 可强制（全局属性压过下面两句），三条分支因此都能被求值测试摸到。
@@ -52,9 +46,9 @@
 
   <ItemGroup>
     <!-- 虚谷那一份驱动：把厂商交付物（src/QuickSql.Providers.Xugu/Driver/，本仓库只存字节、编译期不引用）
-         Link 到输出目录的 drivers/ 下 —— 这正是清单注释里"信创现场把 DLL 丢进 drivers/"那一手的仓库内复刻，
+         Link 到输出目录的 drivers/ 下 —— 这正是"信创现场把 DLL 丢进 drivers/"那一手的仓库内复刻，
          让 §9.5 的运行期解析链在集成层也真跑一次，而不是靠某台机器上手工拷过的一份副本。
-         托管那一份与原生同伴必须<em>一起</em>放：只有前者时清单解析照样成功、要到 Open 才抛
+         托管那一份与原生同伴必须<em>一起</em>放：只有前者时解析照样成功、要到 Open 才抛
          DllNotFoundException（v0.32 第一格 bare 那颗反证），那种红读起来像"库连不上"。
          只有 QUICKSQL_TEST_PROVIDER=xugu 那一跑会用到它们；SQL Server 那一跑不认识 drivers/ 里的这两颗，
          所以这一句不会把默认路径变成"依赖第五家的产物"。

@@ -11,7 +11,7 @@ namespace QuickSql.TestInfra;
 /// 「本机没有任何一台虚谷实例（§13.4 授权的只有两台 SQL Server），清单里那一行的程序集名 <c>XuguClient</c>
 /// 也从未被解析成功过」—— 前一句 v0.31 翻（授权清单添了第三台，正是一台虚谷），后一句 v0.32 翻
 /// （经 <c>DriverRegistry</c> 解析成功，六格摆法里五格各连上一次，出处 <c>obj/logs/v32-matrix-*-open.log</c>）。
-/// <b>而"这里没有 <see cref="SqlServer.DriverFromManifest"/> 的对应物"那一格也在同一版翻了</b>：原句是
+/// <b>而"这里没有 <see cref="SqlServer.Driver"/> 的对应物"那一格也在同一版翻了</b>：原句是
 /// "有了它就会被误读成这条解析路径验过"，中间一版换成的理由是"验它的是探针、不是这一层"，而 v0.32 第二格
 /// 把集成层开了一条虚谷通路（<c>tests/QuickSql.Tests.Integration/Database.cs</c> 的家族缝），
 /// 走的就是<em>这一层</em>产出的文本，所以这一颗组装根现在有身份了。<b>"有身份"要说清是哪一格的身份</b>：
@@ -44,16 +44,16 @@ public static class Xugu
             ConnectionString = connectionString ?? (factory is null ? SqlServer.OfflineConnectionString : TestConnectionString),
         });
 
-    /// <summary>走完整的运行期驱动解析链（清单 → 独立 <c>AssemblyLoadContext</c> → 工厂），与
-    /// <see cref="SqlServer.DriverFromManifest"/> 同一条路、同一条"不许直接 <c>new</c> 工厂"的理由：
+    /// <summary>走完整的运行期驱动解析链（内建表 <c>BuiltinDrivers</c> → 独立 <c>AssemblyLoadContext</c> → 工厂），与
+    /// <see cref="SqlServer.Driver"/> 同一条路、同一条"不许直接 <c>new</c> 工厂"的理由：
     /// 那样会把要验的东西绕过去。这里验的东西具体是三件事，缺一件这一句就不算绿：
-    /// <c>Driver/QuickSqlDrivers.json</c> 里 <c>"xugu"</c> 那一行读得出、程序集名 <c>XuguClient</c> 解析得出、
+    /// 内建表里 <c>"xugu"</c> 那一行读得出、程序集名 <c>XuguClient</c> 解析得出、
     /// 交回来的工厂 <c>CreateConnection()</c> 连得上（<c>src/QuickSql.Providers.Xugu/Driver/</c> 是 v0.31 入库的
-    /// 厂商产物，清单那颗 <c>path</c> 由 <c>DriverManifest.DefaultPath</c> 定位）。
+    /// 厂商产物，由 tests 的 csproj <c>Link</c> 进输出目录的 <c>drivers/</c>，探测名就是内建表那颗程序集名）。
     /// 出处：<c>obj/logs/v32-matrix-*-open.log</c>（六格摆法）与 <c>obj/logs/v32-recon-meta-2.log</c> 头三行
     /// （那一跑的 <c>FACTORY=</c> 一行印的就是这里交回的工厂类型）。</summary>
-    public static DbProviderFactory DriverFromManifest()
-        => DriverRegistry.Load().Factory(XuguProvider.DriverKey);
+    public static DbProviderFactory Driver()
+        => new DriverRegistry().Factory(XuguProvider.DriverKey);
 
     /// <summary>集成测试的第三台目标库：<b>同样没有默认值</b>。环境变量 <c>QUICKSQL_XUGU_CONNECTION</c> 优先，
     /// 其次仓库根的 <see cref="LocalConnectionFile"/>（第一行非 <c>#</c> 内容即连接串，含本机凭据、不入库，
@@ -64,7 +64,7 @@ public static class Xugu
     /// "同一批用例在两台/三台上各跑一遍"这种可并排的账 —— 串开的代价只是多一个名字，共用的代价是账对不上。
     /// <b>还有一层：这一家连的就是本仓库交付的那份厂商产物</b>（<c>Driver/</c> 目录），所以这一颗串配上了
     /// 也只说明"这台实例可达"，不说明"这台实例上跑的就是我们写的第五族"—— 后者由上面那颗
-    /// <see cref="DriverFromManifest"/> 与集成层那条家族缝一起证。</para></summary>
+    /// <see cref="Driver"/> 与集成层那条家族缝一起证。</para></summary>
     public static string TestConnectionString
         => ResolveConnectionString() ?? throw new InvalidOperationException(
                $"没有配置虚谷集成测试目标库：设环境变量 QUICKSQL_XUGU_CONNECTION，或在仓库根放 {LocalConnectionFile}" +
