@@ -416,22 +416,36 @@ builder.Services.AddQuickSqlOrm(DbKind.SqlServer, connectionString, b =>
 
 四句口径，每句都有用例（`tests/QuickSql.Tests.Dialects/DiAssemblyTests.cs` 7 颗）：① **每个作用域解析跑一次**，同一个作用域里再取一次不重跑；② **跑的就是交回给调用方的那一只实例**，不是另建一只再装配；③ **清单是 `AddQuickSqlOrm` 那一刻的快照**，返回之后再往同一个 `List` 里添的那些不生效；④ **不查重** —— 同一颗钩子登记两遍就跑两遍，跑到第二遍若撞上 `Behaviors` 那句「同一把键注册两次当场拒」，抛在这次解析上（异常原样透出，`GetRequiredService` 不包一层）。今天它是同步 `Action`，没有 async 落点：装配里要异步初始化（先从远端取租户配置那一类）得宿主自己决定怎么同步等，本库不在解析路径上代开 `await`。**分界在哪**：本来就是启动期常量的那几格（`Replicas` ∶ `Clusters` ∶ `Model` ∶ `PagingOrdering` ∶ `SchemaSync`）照旧在 builder 上直给，走 `AfterBuild` 的只有"要问当前请求才知道"的那三格。
 
-### 2.6 事务：三形态
+### 2.6 事务：四形态
 
 `src/QuickSql.Core/Orchestration/QuickSqlOrm.cs`：
 
 ```csharp
-using var tran = orm.BeginTransaction();            // (1) 显式，:316，默认 ReadCommitted
+using var tran = orm.BeginTransaction();            // (1) 显式，:386，默认 ReadCommitted
 await orm.Insert(row).ExecuteAffrowsAsync();
 tran.Commit();                                      // IQuickSqlTransaction { Completed, Commit(), Rollback() }
 
-using var ambient = orm.BeginAmbientTransaction();  // (3) 环境事务，:329，同一 AsyncLocal 槽位
+using var ambient = orm.BeginAmbientTransaction();  // (3) 环境事务，:399，同一 AsyncLocal 槽位
 
-var result = await orm.ExecuteInTransactionAsync(async ct => { ... }); // (2) 返回 TransactionResult；:334
+using var pinned = orm.BeginSessionTransaction();   // (4) 钉在这只 orm 上，:412（另有一颗点名集群的 :416）
+await orm.Insert(row).ExecuteAffrowsAsync();
+pinned.Commit();
+
+var result = await orm.ExecuteInTransactionAsync(async ct => { ... }); // (2) 返回 TransactionResult；:422
 if (!result.Success) Log(result.Exception);         // TransactionResult { Success, ErrorMessage, Exception }
 ```
 
-泛型重载 `ExecuteInTransactionAsync<T>(...)` 返回 `TransactionResult<T>`（多一颗 `Value`；:358）。`DbContext` 会加入环境事务（会话里的语句走的正是那条被事务独占的连接，`AdoExecutor.cs:511-516` 那一支）。
+泛型重载 `ExecuteInTransactionAsync<T>(...)` 返回 `TransactionResult<T>`（多一颗 `Value`）。`DbContext` 会加入环境事务（会话里的语句走的正是那条被事务独占的连接，`AdoExecutor.cs` 的 `RentAsync` 那一支）。
+
+**形态 (1)(2)(3) 的归属是「开它的那一刻所在的执行流」**，而 `AsyncLocal` 那一笔只由**同步被调方**回到调用方的帧——异步被调方哪怕全程只 `await` 已完成的 Task，写进去的值父帧与兄弟帧都看不见（`IQuickSqlTransaction` 抬头 v0.12 那条实测；`CreateSharedContext` 那一格同一条纪律的另一面）。于是有一种写法必然踩空：**装配层在自己的 async 帧里开事务，语句却由调用方那一帧发**。ABP 的工作单元正是这一形——`IDbContextProvider` 解析上下文时 `Begin`，回到仓储那一帧槽位已经空了，后面的语句各拿各的池连接自动提交。症状不是报错，是「一场工作单元一次提交」静默退化：中途抛异常时前半段的写已经落库。
+
+**形态 (4) 补的就是这一格：归属从「流」扩成「流 *或* 实例」**。`BeginSessionTransaction()` 在 `AdoExecutor` 上挂一场事务（`AdoExecutor.cs:67` 那颗 `SessionTransaction`，`QuickSqlTransaction.For(executor)` 在帧里找不到自己的环境事务时回退读它，`QuickSqlTransaction.cs:97`），所以从这只 orm 发出的语句无论落在哪一帧都进同一场。三条边界：
+
+- **槽位挂在实例上而不是类型上**：两只 orm 共用一条流时各钉各的，跨 executor 想塞进对方的事务仍然当场拒（与形态 (1) 那句「两个 orm 实例不能互相塞」同一条判据）；
+- **一只实例只钉一场**：已经钉着再钉当场抛（"同一只实例上钉两场，一次提交就不成立了"）；提交/回滚/`Dispose` 一律摘钩，摘完之后下一条语句归它自己，也还能再钉一场；
+- **同一只实例上不要并发使**：一条连接一个 `DbTransaction`，`Task.WhenAll` 扇出的分支要各自开流或各自建实例（与 `CreateSharedContext` 抬头那条一样，不设闸门）。
+
+活库见证在 `tests/QuickSql.Tests.Integration/SessionTransactionPathTests.cs`：子帧钉的场，父帧的写进得去（回滚后第二条连接一行都读不到）；同一形状换成只认执行流的形态 (3)，那句写就泄漏成一次自提——这一格要 MVCC，SQLite 上写事务占住整库，三颗按引擎的界跳过。
 
 **事务钉在一座集群上**（v0.38 第十一笔，§3.7）：`BeginTransaction()` 开在缺省集群 `main`，另有第二颗重载 `BeginTransaction(string cluster, IsolationLevel = ReadCommitted, TransactionPropagation = Requires)`（:324）点名开在哪一座。规则是**一场事务只有一条连接**，所以：
 
@@ -472,7 +486,7 @@ if (!result.Success) Log(result.Exception);         // TransactionResult { Succe
   o.Note = "改一下";
   await db.SaveChangesAsync();
   ```
-- **事务** —— `orm.BeginTransaction()` 显式、`orm.ExecuteInTransactionAsync(async ct => {…})` 包一段、`orm.BeginAmbientTransaction()` 环境事务（`DbContext` 会并入）。事务钉在一座集群上，跨集群嵌套当场拒。→ 详见 §2.6、§3.7
+- **事务** —— `orm.BeginTransaction()` 显式、`orm.ExecuteInTransactionAsync(async ct => {…})` 包一段、`orm.BeginAmbientTransaction()` 环境事务（`DbContext` 会并入）、`orm.BeginSessionTransaction()` 把事务钉在这只 orm 上（装配层隔着一层 async 开事务、语句却由调用方那一帧发时用的就是这颗；→ §2.6）。事务钉在一座集群上，跨集群嵌套当场拒。→ 详见 §2.6、§3.7
 - **分表 / 读写分离 / 换库** —— 分表 `[SplitTable]` 注解 + 链式 `.SplitTable(片)`（§3.6）；读写分离在 `QuickSqlOrmOptions.Replicas`∶`Clusters` 声明、运行期按主从路由（§3.7）；换库只动 csproj 那颗 provider ∶ 一处 `DbKind` ∶ 连接串，实体与链一字不动（§1.9，踩坑见 §4.4）。
 
 ### 3.0 最小可离线跑通的例子

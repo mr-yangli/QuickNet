@@ -398,6 +398,24 @@ public sealed class QuickSqlOrm
     /// 只是调用方想说的是"后面所有调用自动进来"，而不是"我要亲手 commit 这一笔"。</summary>
     public IQuickSqlTransaction BeginAmbientTransaction() => Ado.BeginTransaction(IsolationLevel.ReadCommitted);
 
+    /// <summary>形态 (4)：开一场事务并<b>钉在这只 orm 上</b>（归属跟实例，不跟执行流）。
+    /// <para>什么时候用这一颗：调用方<b>不是</b>语句的父帧，而是隔着一层 async 装配把它装上——
+    /// ABP 的工作单元就是这一形：provider 在自己的帧里 <c>Begin</c>，回到仓储那一帧时
+    /// <see cref="System.Threading.AsyncLocal"/> 那一笔已经看不见了（<see cref="IQuickSqlTransaction"/>
+    /// 抬头 v0.12 那条实测），于是每句各拿各的池连接自动提交。钉在实例上之后，
+    /// 凡是从这只 orm 发出的语句都进同一场，跨不跨帧都一样。</para>
+    /// <para>与形态 (1)(3) 的分工没变：一条 <c>DbConnection</c> + 一个 <c>DbTransaction</c>、
+    /// 保存点嵌套与集群闸门同一条判据；orm 实例本来就按会话活，收口仍是<em>唯一那一场</em>
+    /// （已经钉过再钉当场拒），结束（提交/回滚/<c>Dispose</c>）时自动摘钩。
+    /// 同步方法、<b>同一只实例上不要并发使</b>，两条纪律与
+    /// <see cref="CreateSharedContext{TContext}"/> 抬头那条一样。</para></summary>
+    public IQuickSqlTransaction BeginSessionTransaction(IsolationLevel level = IsolationLevel.ReadCommitted)
+        => Ado.BeginSessionTransaction(DataSourceRouting.DefaultCluster, level);
+
+    /// <summary>钉住一座集群开会话事务（§16.4 与形态 (4) 的合体）：语句要落别座集群的，仍然当场拒。</summary>
+    public IQuickSqlTransaction BeginSessionTransaction(string cluster, IsolationLevel level = IsolationLevel.ReadCommitted)
+        => Ado.BeginSessionTransaction(cluster, level);
+
     /// <summary>形态 (2)：不抛异常、返回结果对象（对齐 SqlSugar 的 <c>UseTran</c>）。
     /// <b>回滚失败不在这里吞</b>：<c>Dispose</c> 兜底回滚，那一步炸了就让它抛出去 ——
     /// "事务已回滚"这个结论必须由事务自己证明，不能由一个 <c>Success = false</c> 代替。</summary>

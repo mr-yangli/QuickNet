@@ -54,6 +54,34 @@ public sealed partial class AdoExecutor
 
     internal static void UnbindSessionConnection(DbConnection connection) => _sessionConnections.Value?.Remove(connection);
 
+    /// <summary>形态 (4)：<b>钉在这只 executor（也就是这一只 <see cref="QuickSql.QuickSqlOrm"/>）上的那场事务</b>。
+    /// <para>环境槽位跟的是执行流，异步被调方写下的那一笔回不到调用方的帧（v0.12 实测，见
+    /// <see cref="IQuickSqlTransaction"/> 抬头）；装配层——ABP 的工作单元——正好是这种形状：它在自己的
+    /// async 帧里开事务，回到仓储那一帧时槽位是空的，于是「一场工作单元一次提交」悄悄退化成了每句自提。
+    /// 这一格把归属从「流」扩成「流 <em>或</em> 实例」：<see cref="QuickSqlTransaction.For"/> 在帧里找不到
+    /// 自己的环境事务时，回退读这里。</para>
+    /// <para><b>槽位挂在实例上而不是类型上</b>，与 <see cref="QuickSqlOrm.CreateSharedContext{TContext}"/>
+    /// 同一分工：两只 orm 共用一条流时各钉各的，互不串（跨 executor 想塞进对方的事务仍然当场拒）。
+    /// 归属不是线程安全的——同一实例上的并发分支共用一条连接、一个 <c>DbTransaction</c>，
+    /// 要并发照旧各自开流或各自建实例，这一档不设闸门。</para></summary>
+    internal QuickSqlTransaction? SessionTransaction { get; private set; }
+
+    /// <summary>把根事务钉到本实例上。<see cref="QuickSqlOrm.BeginSessionTransaction"/> 唯一会调它的地方，
+    /// 所以「谁钉的」与「钉了几场」都只有一条路。</summary>
+    internal void BindSessionTransaction(QuickSqlTransaction transaction)
+    {
+        SessionTransaction = transaction;
+        transaction.SessionScoped = true;
+    }
+
+    /// <summary>摘钩。只摘自己那一场：<c>RequiresNew</c> 那一族里内层结束时外层仍在位，
+    /// 按引用比一次才不会把别人钉的那场抹掉。</summary>
+    internal void UnbindSessionTransaction(QuickSqlTransaction transaction)
+    {
+        if (ReferenceEquals(SessionTransaction, transaction))
+            SessionTransaction = null;
+    }
+
     /// <summary>在<b>调用方的同步帧</b>里挂上这流的写后读戳子，返回一个"关掉它"的把手（会话释放用）。
     /// 已经挂着就复用那一枚 —— 两只 DbContext 嵌套时共用同一份"写过哪些集群"的账，
     /// 因为要防的那件事（读完自己刚写的旧值）跨会话也一样成立。</summary>
@@ -446,6 +474,29 @@ public sealed partial class AdoExecutor
                 ConnectionRelease.Release(connection);
             throw;
         }
+    }
+
+    /// <summary>形态 (4)：开一场事务并<b>钉在本 executor 上</b>——归属跟实例走，不跟执行流走。
+    /// 帧里那一份照旧也装上（同一个机制），所以开它的那一帧与它的所有下游都进这场事务，
+    /// 而<em>父帧与兄弟帧</em>靠 <see cref="SessionTransaction"/> 那一格回来。
+    /// <para>与 <see cref="BeginTransaction(string,IsolationLevel,TransactionPropagation)"/> 的分工：那颗说的是
+    /// 「我在这段代码里亲手收口」，这颗说的是「这段工作单元/这只会话底下就是一场事务」。
+    /// 已经钉过就当场拒——同一实例上钉两场，「一次提交」那句话就又是假的。</para></summary>
+    public QuickSqlTransaction BeginSessionTransaction(string cluster, IsolationLevel level = IsolationLevel.ReadCommitted)
+    {
+        ArgumentNullException.ThrowIfNull(cluster);
+
+        if (QuickSqlTransaction.For(this) is { } existing)
+            throw new QuickSqlException(
+                $"这只 orm 已经在事务里（集群 {existing.Cluster}），不能再钉一场会话事务：同一只实例上钉两场，"
+                + "「一场工作单元一次提交」就不成立了。要先把手里那场收掉，或者按集群各开一只 orm。");
+
+        var transaction = BeginTransaction(cluster, level, TransactionPropagation.Requires);
+
+        // 根事务才钉实例；保存点事务（这一颗不会走到，因为上面已经拒了嵌套）共用外层那一条归属。
+        BindSessionTransaction(transaction);
+
+        return transaction;
     }
 
     /// <summary>在<em>已经被这条事务占有</em>的连接上发一句文本保存点（三口文本由方言给，见

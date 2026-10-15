@@ -48,6 +48,11 @@ public sealed class QuickSqlTransaction : IQuickSqlTransaction
 
     readonly QuickSqlTransaction? _suspended;
 
+    /// <summary>这场事务除了在当前帧里，还钉在自己的 executor 上（形态 (4)，由
+    /// <see cref="AdoExecutor.BindSessionTransaction"/> 置位）。根事务结束时据此摘钩。
+    /// 只有根事务会拿到 <c>true</c>：保存点事务共用外层的连接与归属，不重复钉。</summary>
+    internal bool SessionScoped;
+
     /// <summary>保存点发号器：每在这条事务上创建一个嵌套保存点就 +1。只根事务持有它，
     /// 保存点事务共享外层的计数器（通过 <c>parent._nextSavepointId++</c>）。
     /// 单调递增不回退：即使保存点被回滚了，那个号码也不再使用，避免名称碰撞。</summary>
@@ -83,9 +88,16 @@ public sealed class QuickSqlTransaction : IQuickSqlTransaction
     }
 
     /// <summary>当前帧可见的环境事务，<b>且必须属于这个 executor</b>。两个 orm 实例（两套库）共享同一个
-    /// async 帧时，把语句塞进另一家库的事务里是"查不出来"级别的错：它不报错，只是数据少了一半。</summary>
+    /// async 帧时，把语句塞进另一家库的事务里是"查不出来"级别的错：它不报错，只是数据少了一半。
+    /// <para><b>帧里没有、但这只实例钉着一场时，回退读那一场</b>（形态 (4)，见
+    /// <see cref="AdoExecutor.SessionTransaction"/>）：归属从「开它的那一刻所在的执行流」扩成
+    /// 「流 <em>或</em> 实例」，为的是装配层（ABP 的工作单元）那一类写法——它在自己的 async 帧里开事务，
+    /// 回到调用方那一帧时槽位已经空了（<see cref="IQuickSqlTransaction"/> 抬头那条实测纪律），
+    /// 于是后面的语句全落在事务外。判据仍只有一条：句柄归这只 executor，或者归它自己钉的那一场。</para></summary>
     internal static QuickSqlTransaction? For(AdoExecutor executor)
-        => _ambient.Value is { } ambient && ReferenceEquals(ambient.Executor, executor) ? ambient : null;
+        => _ambient.Value is { } ambient && ReferenceEquals(ambient.Executor, executor)
+            ? ambient
+            : executor.SessionTransaction;
 
     /// <summary>不管属不属于谁 —— 只要帧里有环境事务。用于判是否需要创建保存点而不是新开事务。</summary>
     internal static bool HasAmbient => _ambient.Value is not null;
@@ -184,6 +196,11 @@ public sealed class QuickSqlTransaction : IQuickSqlTransaction
 
         // 根事务：如果有被挂起的环境事务（RequiresNew），恢复它；否则清空槽位。
         _ambient.Value = _suspended;
+
+        // 钉在实例上的那一场（形态 (4)）：结束即摘钩，否则这只 orm 之后的语句会走进一条已结束的
+        // 事务里。谁钉的谁来摘——只有根事务持有实例归属，保存点事务共用外层那一条。
+        if (SessionScoped)
+            Executor.UnbindSessionTransaction(this);
 
         _transaction.Dispose();
 
