@@ -224,6 +224,17 @@ public interface IQuery<T> : IAsyncEnumerable<T>
 
     Task<List<T>> ToListAsync(CancellationToken ct = default);
 
+    /// <summary><see cref="ToListAsync"/> 的数组形态：<b>同一颗咽喉</b> —— 同一条模型、同一句 SQL、
+    /// 同一处跟踪与缓存落点、同样只发一条语句，换的只是交回来的 CLR 形状。<b>它不省一趟，反而多一次
+    /// 整段拷贝</b>：物化那一路落的本来就是 <c>List&lt;T&gt;</c>，缓存里存的也是那一只
+    /// （<c>cache.Set(key, rows, ttl)</c>），所以"少一次拷贝"要的是 <see cref="ToListAsync"/>。
+    /// 这一颗值的是<em>交出去之后改不动</em> —— 长度定死，而且拿到的不是缓存里那一只，
+    /// 调用方 <c>Add</c>/<c>Clear</c> 不会顺着改到下一次命中交回来的结果。
+    /// 同步孪生口是 <see cref="ToArray"/>，与 <see cref="ToList"/> 同一档 <c>sync-over-async</c>。
+    /// <b>只落在 arity 1 这一档</b>：联表链上那几颗带投影的 <c>ToListAsync&lt;TResult&gt;(projector)</c>
+    /// 没有对应物，要数组就 <c>Select(projector)</c> 回到单表链再调这一颗。</summary>
+    Task<T[]> ToArrayAsync(CancellationToken ct = default);
+
     Task<T?> FirstOrDefaultAsync(CancellationToken ct = default);
 
     Task<int> CountAsync(CancellationToken ct = default);
@@ -246,6 +257,11 @@ public interface IQuery<T> : IAsyncEnumerable<T>
     IAsyncEnumerable<T> ToAsyncEnumerable(int batchSize);
 
     List<T> ToList();
+
+    /// <summary><see cref="ToArrayAsync"/> 的同步口，与 <see cref="ToList"/> 同一档 <c>sync-over-async</c>
+    /// （异步可用时优先 <c>ToArrayAsync</c>）。<b>它不是"少付一次拷贝"的那条路</b>：走的仍是同一条
+    /// <c>Rows</c> 加末尾那一次 <c>ToArray()</c>，比 <see cref="ToList"/> 多的那一趟整段拷贝与异步那颗逐字相同。</summary>
+    T[] ToArray();
 
     T? FirstOrDefault();
 

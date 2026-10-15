@@ -44,7 +44,7 @@
 先立两条与版本口径有关的纪律，它们决定了装包命令怎么写：
 
 - **预发布档不进默认解析**：全家都是 `-beta.N` 系列，`dotnet add package` 必须带 `--prerelease`，或者在 `PackageReference` 里写死版本号——二选一，否则会报"找不到稳定版本"。
-- **每重打一次包升一颗 beta**（`sql/Directory.Build.props` 注释里那条纪律）：同版本号不同内容的两颗包，消费方全局缓存里那颗会压住新打的——还原照样绿，拿到的却是旧二进制。对版本以源上实读为准：截至 2026-10-15，nuget.org 上最新是 `0.39.0-beta.15`，与本仓库 props 声明的那颗逐字相同。
+- **每重打一次包升一颗 beta**（`sql/Directory.Build.props` 注释里那条纪律）：同版本号不同内容的两颗包，消费方全局缓存里那颗会压住新打的——还原照样绿，拿到的却是旧二进制。对版本以源上实读为准：截至 2026-10-16，nuget.org 上最新是 `0.39.0-beta.15`，而本仓库 props 已声明 `0.39.0-beta.16`——这一笔只升了声明，22 颗包的重打与推送都还没做，所以**装包按源上那颗写**，下面 csproj 示例里的三行版本号就是这个口径（等 beta.16 真的上了源，这一句与那三行要一起翻）。
 
 主路径的最小 csproj（SQL Server 为例，换库只把 provider 那颗换成目的库、驱动包跟着换）：
 
@@ -468,7 +468,7 @@ if (!result.Success) Log(result.Exception);         // TransactionResult { Succe
 
 下面这张速查把"要做的事"对到"用哪条链"，每行都给了能直接抄的最小写法与详解去处。装配根（`new QuickSqlOrm(options)` 或 `QuickSqlOrm.Create(DbKind, 连接串)`）与 NuGet 装包见 §1，`orm` 是单例、`DbContext` 才按请求 Scoped（§2.1）。**先记一条总口径**：接口形状可信，执行结果除五家有库的 provider 外基本未证（§0、§4.1）。
 
-- **查询（读侧）** —— `orm.Select<T>()` 起手，`Where` / `OrderBy` / `Skip`·`Take` / `Select` 投影 / `Include`·`IncludeMany` 导航 / `GroupBy`·`Having` 分组，出口 `ToListAsync`·`FirstOrDefaultAsync`·`CountAsync`·`ToPagedAsync`。库**不是 `IQueryable`**，别塞进 LINQ 生态。`orm.Ado.QueryAsync<T>(文本, new {…})` 是写不出的句子走原生 SQL 的逃生舱。→ 详见 §3.1
+- **查询（读侧）** —— `orm.Select<T>()` 起手，`Where` / `OrderBy` / `Skip`·`Take` / `Select` 投影 / `Include`·`IncludeMany` 导航 / `GroupBy`·`Having` 分组，出口 `ToListAsync`·`ToArrayAsync`·`FirstOrDefaultAsync`·`CountAsync`·`ToPagedAsync`。库**不是 `IQueryable`**，别塞进 LINQ 生态。`orm.Ado.QueryAsync<T>(文本, new {…})` 是写不出的句子走原生 SQL 的逃生舱。→ 详见 §3.1
   ```csharp
   var page = await orm.Select<Order>()
       .Where(o => o.State == OrderState.Paid)
@@ -536,7 +536,7 @@ var q = orm.Select<Order>()
 - 联表：arity 递增的 `LeftJoin<T2>(on)` / `InnerJoin<T2>(on)`，形参按 FROM 位置解析，产出 `IQuery<T1, T2>`（再到 `IQuery<T1, T2, T3>`），其后 `Select((a, b) => ...)`
 - 导航：`Include<TProp>` 与它那一条链上的 `ThenInclude<TProp>`（每层一张 `LEFT JOIN`）、`IncludeMany<TDetail>`（v0.39 第三笔起可以再往<em>下一层</em>挂：`ThenIncludeMany<TProp>`；第四笔起同一层<em>旁边</em>还能挂一根引用：`ThenInclude<TProp>` —— 两颗都见下面"集合导航可以一层一层挂上去"那一格）、`AsSplitQuery(int navigateBatchSize = 20)`；**另加 v0.39 起"不点名也带"的那一档** —— 在谓词 / 投影 / 排序键里读到一条**引用**导航的**成员**，库按契约自动补 `LEFT JOIN`，不用 `Include`、也不用自己写 `LeftJoin`（下面那一格）
 - 其它：`As(string alias)`、`Distinct()`、`AsNoTracking()`、`IgnoreQueryFilters()`、`IgnoreQueryFilter<TFilter>()`（按注册键点名，可叠；见上面「全局过滤器」那一格）、`WithCache(string, TimeSpan)`、`WithSql(string sql, object? args = null)`（把 FROM 那一段换成你自己写的 SELECT，外面一层仍归库；见下面"表源那一格"）
-- 出口：`ToListAsync`/`FirstOrDefaultAsync`/`CountAsync`/`ToAsyncEnumerable(int batchSize)`，以及同步的 `ToList`/`FirstOrDefault`/`Count`；类型本身还是 `IAsyncEnumerable<T>`。计数一族（`Count`/`LongCount`/`Any` 与它们的异步对照）遇到分组、`Distinct` 或带 `Skip/Take` 的链时，会把整句包成派生表内层再数（上面那一段与下面"表源那一格"），不会照着原模型换一个 `COUNT(*)`。这一族的后四颗（`AnyAsync`/`LongCountAsync`/`Any`/`LongCount`）到 v0.38 第十九笔才真的长在 `IQuery<T>` 上，`Any` 发的仍是同一条 `COUNT(*)`，`COUNT(*) > 0` 在 CLR 侧判，`WHERE EXISTS(…)` 反形还没有入口
+- 出口：`ToListAsync`/`ToArrayAsync`/`FirstOrDefaultAsync`/`CountAsync`/`ToAsyncEnumerable(int batchSize)`，以及同步的 `ToList`/`ToArray`/`FirstOrDefault`/`Count`；类型本身还是 `IAsyncEnumerable<T>`。**数组那一颗与列表那一颗是同一颗咽喉**（同一条模型、同一句 SQL、同样只发一条语句、同一处跟踪与缓存落点），换的只是交回来的 CLR 形状，所以它**不省一趟、反而多一次整段拷贝**——物化那一路落的本来就是 `List<T>`，缓存里存的也是那一只；要"少一次拷贝"用 `ToListAsync`，要"交出去之后改不动"（长度定死、而且拿到的不是缓存里那一只，调用方 `Add`/`Clear` 改不到下一次命中）用 `ToArrayAsync`。同步那一颗 `ToArray()` 与 `ToList()` 同一档 `sync-over-async`，**多的那趟拷贝与异步那颗逐字相同**（它不是"少付一次拷贝"的路）。联表 arity 上没有带投影的对应物，要数组就 `Select(projector)` 回到单表链再调。计数一族（`Count`/`LongCount`/`Any` 与它们的异步对照）遇到分组、`Distinct` 或带 `Skip/Take` 的链时，会把整句包成派生表内层再数（上面那一段与下面"表源那一格"），不会照着原模型换一个 `COUNT(*)`。这一族的后四颗（`AnyAsync`/`LongCountAsync`/`Any`/`LongCount`）到 v0.38 第十九笔才真的长在 `IQuery<T>` 上，`Any` 发的仍是同一条 `COUNT(*)`，`COUNT(*) > 0` 在 CLR 侧判，`WHERE EXISTS(…)` 反形还没有入口
 
 **引用导航在谓词 / 投影 / 排序键里自动补 `LEFT JOIN`（v0.39，规格 §5.2 那条落地记录）。**
 

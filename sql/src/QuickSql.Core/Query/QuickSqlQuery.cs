@@ -145,6 +145,8 @@ public class QuickSqlQuery<T> : IQuery<T>, IEngineCarrier
 
     public Task<List<T>> ToListAsync(CancellationToken ct = default) => Engine.ListAsync<T>(ct);
 
+    public Task<T[]> ToArrayAsync(CancellationToken ct = default) => Engine.ArrayAsync<T>(ct);
+
     public Task<T?> FirstOrDefaultAsync(CancellationToken ct = default) => Engine.FirstAsync<T>(ct);
 
     public Task<int> CountAsync(CancellationToken ct = default) => Engine.CountAsync(ct);
@@ -162,6 +164,8 @@ public class QuickSqlQuery<T> : IQuery<T>, IEngineCarrier
     /// 连接与钩子逻辑）。所有 await 都走 <c>ConfigureAwait(false)</c>，所以在没有同步上下文宿主里不会死锁；
     /// 但它在 WinForms/ASP.NET 经典模型下会占住一个线程，异步可用时请优先用 <c>*Async</c>。</summary>
     public List<T> ToList() => Blocking(() => Engine.ListAsync<T>(default));
+
+    public T[] ToArray() => Blocking(() => Engine.ArrayAsync<T>(default));
 
     public T? FirstOrDefault() => Blocking(() => Engine.FirstAsync<T>(default));
 

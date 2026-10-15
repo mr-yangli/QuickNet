@@ -1,3 +1,4 @@
+using QuickSql.Aop;
 using QuickSql.Query;
 using QuickSql.TestInfra;
 using Xunit;
@@ -814,5 +815,75 @@ public class ReadPathTests
 
             Assert.Equal(expectedSkus, loadedSkus);
         }
+    }
+
+    /// <summary>数组出口 <c>ToArrayAsync</c>（与它的同步孪生 <c>ToArray()</c>）在真库上的读数。
+    /// 它与 <c>ToListAsync</c> 是<b>同一颗咽喉</b>
+    /// （同一条模型、同一条 <c>QueryEngine.Rows</c>、只在末尾多一次整段拷贝），所以这一条要证的不是
+    /// "又一条读路径对了"，而是<b>换了交回来的 CLR 形状之后没有顺手换掉别的</b>：发出去的语句逐字节
+    /// 就是列表口那一句、而且只发一条；行数与逐格值与列表口一致；同步口与异步口读回同一串行。
+    /// 另外三件只有数组这一档问得出的事
+    /// 也在这里 —— 每次交的是新数组（改一只不会改到另一只）、空集交零长数组而不是 <c>null</c>、
+    /// 以及投影两档（标量与构造器 DTO）都落得成 <c>T[]</c>，即物化那一侧没有为数组另开一支。
+    /// "多一次整段拷贝"那笔成本记在契约注释上，不在这里量（分配那一册归
+    /// <c>MaterializationAllocationTests</c>）。</summary>
+    [Fact]
+    public async Task The_array_exit_reads_the_same_rows_through_the_same_throat_as_the_list_exit()
+    {
+        Database.Ready();
+
+        var ct = TestContext.Current.CancellationToken;
+        var list = await Tagged().OrderBy(o => o.Id).ToListAsync(ct);
+
+        Assert.Equal(Database.Orders.Length, list.Count);
+
+        var sent = new List<string>();
+        var aop = new QuickSqlAop { Executing = e => sent.Add(e.Sql.Text) };
+
+        var rows = await Database.OrmWith(aop).Select<Order>()
+            .Where(o => o.Note == Database.Tag)
+            .OrderBy(o => o.Id)
+            .ToArrayAsync(ct);
+
+        // 判据一：行数与逐格值。Id 之外还要比 Amount 与 PaidAt —— 只比 Id 的话，
+        // "数组那一格没填全"这类缺陷读不出来（它与列表口共用同一个 reader，所以红只可能是拷贝那一步）。
+        Assert.Equal(list.Count, rows.Length);
+        Assert.Equal(list.Select(o => o.Id), rows.Select(o => o.Id));
+        Assert.Equal(list.Select(o => o.Amount), rows.Select(o => o.Amount));
+        Assert.Equal(list.Select(o => o.PaidAt), rows.Select(o => o.PaidAt));
+
+        // 判据二："同一颗咽喉"的字面意思 —— 只发一条，而那一条与列表口那一条逐字节相等。
+        Assert.Single(sent);
+        Assert.Equal(Tagged().OrderBy(o => o.Id).ToSql(), sent[0]);
+
+        // 判据二·补：同步孪生口（<c>ToArray()</c>，与 <c>ToList()</c> 同一档 sync-over-async）走的是同一条路，
+        // 值逐格一致 —— 两颗各发各的句子或各自物化一份的话，这里读到的是不同的行序。
+        Assert.Equal(list.Select(o => o.Id), Tagged().OrderBy(o => o.Id).ToArray().Select(o => o.Id));
+
+        // 判据三：每次交新数组，交出去之后内容归调用方。缓存那一格存的是 List 本身
+        // （所以命中时列表口交出去的可能就是缓存里那一只），这一颗的可见后果就在这里量。
+        var again = await Tagged().OrderBy(o => o.Id).ToArrayAsync(ct);
+
+        Assert.NotSame(rows, again);
+
+        rows[0] = null!;
+
+        Assert.Equal(list[0].Id, again[0].Id);
+
+        // 空集交零长数组而不是 null：调用方那句 foreach 不该先问一次 null。
+        Assert.Empty(await Tagged().Where(o => o.Id == int.MinValue).ToArrayAsync(ct));
+
+        // 投影两档：标量与构造器 DTO 都落得成数组。
+        Assert.Equal(
+            list.Select(o => o.CustomerName),
+            await Tagged().OrderBy(o => o.Id).Select(o => o.CustomerName).ToArrayAsync(ct));
+
+        var summaries = await Tagged().OrderBy(o => o.Id)
+            .Select(o => new OrderSummary(o.Id, o.CustomerName, o.Amount))
+            .ToArrayAsync(ct);
+
+        Assert.Equal(list.Count, summaries.Length);
+        Assert.Equal(list.Select(o => o.Id), summaries.Select(s => s.Id));
+        Assert.Equal(list.Select(o => o.Amount), summaries.Select(s => s.Amount));
     }
 }

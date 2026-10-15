@@ -945,6 +945,17 @@ sealed class QueryEngine
 
     public Task<List<TResult>> ListAsync<TResult>(CancellationToken ct) => Rows<TResult>(Effective(), ct);
 
+    /// <summary><see cref="ListAsync"/> 的数组形态：同一条 <see cref="Rows{TResult}"/>，只在末尾多一次整段拷贝。
+    /// <b>写 <c>ToArray()</c> 而不是 <c>[.. rows]</c> 是读法上的取舍，钱上逐字相同</b>：源已经是一只
+    /// <c>List&lt;T&gt;</c>，集合表达式按 <c>Count</c> 一次分配到位（30 元素那一颗两侧都量到 264 B/次），
+    /// 而 §12.8 "v0.11 就是按这句话下的刀，刀落在这三处" 第 2 条批的那个倍增阶梯要的源是<em>迭代器</em>
+    /// （同一颗量具上 <c>[.. rows.Select(…)]</c> 是 336 B/次）。这两个数出自本笔的一次性探针
+    /// （Release、<c>GC.GetAllocatedBytesForCurrentThread</c>、10 万次取均），<b>没进门禁台账，别当钉用</b>。
+    /// 拷贝落在这一层而不是链式对象上，为的是 "交出去的那一只不是缓存里那一只" 这件事全仓只有一处说法
+    /// （缓存那格 <c>Store</c> 存的是 <c>List&lt;TResult&gt;</c> 本身，所以命中时列表口交出去的就是它）。</summary>
+    public async Task<TResult[]> ArrayAsync<TResult>(CancellationToken ct)
+        => (await Rows<TResult>(Effective(), ct).ConfigureAwait(false)).ToArray();
+
     /// <summary>内部行数帽（<c>First</c> 取 1、<c>Single</c> 取 2 判重复，§5.7）。帽不走 §9.4 的序策略：
     /// "任意一行"本来就是 LINQ 语义，为此要求用户补序只会变成噪音（方言侧的占位序见
     /// <c>DialectBase.EmitPagingOrdering</c>）。</summary>
