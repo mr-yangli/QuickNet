@@ -117,6 +117,14 @@ static class EntityFactsBuilder
             if (IsExplicitlyIgnored(property))
                 continue;
 
+            // 没有写口 ⇒ 既落不回值也不是数据：ABP 那一族实体上的
+            // <c>public bool RequiresManualGrading => Type == …</c> 是算法，不是列。
+            // 这一格按"有没有设置器"问，而不是按"设置器公不公开"：{ get; protected set; }
+            // 与 { get; init; } 都落得回值（表达式树编译不受可访问性限制），把它们一起摘掉
+            // 会让整族 ABP 实体的键与明细列凭空消失。反射侧 ReadMembers 同一位置同一判据。
+            if (property.SetMethod is null)
+                continue;
+
             if (!IsColumnShape(property.Type))
             {
                 // 两格导航都收，收在<em>同一份列表</em>里按声明序：反射侧那一格是按 MetadataToken 序
@@ -204,7 +212,7 @@ static class EntityFactsBuilder
             : maxLength is not null ? (Number(maxLength, 0, "Length") ?? 0, $"[MaxLength({Number(maxLength, 0, "Length") ?? 0})]")
             : (0, "未声明，交给 provider 默认");
 
-        var (isNullable, nullableNote) = NullableOf(type, property, column, required);
+        var (isNullable, nullableNote, nullabilityDeclared) = NullableOf(type, property, column, required);
 
         // 没打标记就不写来源：G2 侧那一格同样是 null，而 §13.11 的对拍比的是整个 ColumnFacts——
         // 这里多写一句常量就是「两侧各自都合理、但文本不一样」。
@@ -221,6 +229,7 @@ static class EntityFactsBuilder
             LengthNote = lengthNote,
             IsNullable = isNullable,
             NullableNote = nullableNote,
+            NullabilityDeclared = nullabilityDeclared,
             IsPrimary = Tri(column, "IsPrimary") == 1 || Find(declared, DataKey) is not null,
             DeclaredIdentity = Tri(column, "IsIdentity") switch { 1 => true, 2 => false, _ => null },
             IsConcurrencyToken = concurrency,
@@ -275,11 +284,13 @@ static class EntityFactsBuilder
     }
 
     /// <summary>可空性的五档判定，顺序与 <c>ContractResolver.ResolveNullable</c> 一字不差
-    /// （第一档 Fluent 在编译期不存在，所以从自研属性起）。</summary>
-    static (bool, string) NullableOf(ITypeSymbol type, IPropertySymbol property, AttributeData? column, AttributeData? required)
+    /// （第一档 Fluent 在编译期不存在，所以从自研属性起）。第三颗是"这句非空到底有没有人说过" ——
+    /// 可空上下文之外（<see cref="NullableAnnotation.None"/>）说的是"我没表过态"，
+    /// 它把 §10.6 的必填尺子摘掉，而不改列的形状。</summary>
+    static (bool, string, bool) NullableOf(ITypeSymbol type, IPropertySymbol property, AttributeData? column, AttributeData? required)
     {
         if (Tri(column, "IsPrimary") == 1)
-            return (false, "[Column(IsPrimary=Yes)] ⇒ 非空");
+            return (false, "[Column(IsPrimary=Yes)] ⇒ 非空", true);
 
         if (Tri(column, "IsNullable") is 1 or 2)
         {
@@ -289,18 +300,25 @@ static class EntityFactsBuilder
                 ? required is not null
                     ? "WARN: [Required] 与 [Column(IsNullable=Yes)] 矛盾，按优先级取自研属性"
                     : "[Column(IsNullable=Yes)]"
-                : "[Column(IsNullable=No)]");
+                : "[Column(IsNullable=No)]", true);
         }
 
         if (required is not null)
-            return (false, "[Required]");
+            return (false, "[Required]", true);
 
         if (type.IsValueType && !IsNullableValue(type))
-            return (false, "值类型非 Nullable ⇒ 非空列");
+            return (false, "值类型非 Nullable ⇒ 非空列", true);
 
-        // 反射侧读的是 NullabilityInfoContext 的 WriteState；可空值类型那一档它给的就是 Nullable。
-        return (IsNullableValue(type) || property.NullableAnnotation == NullableAnnotation.Annotated,
-            IsNullableValue(type) || property.NullableAnnotation == NullableAnnotation.Annotated ? "C# 可空 ⇒ 可空列" : "C# 非空 ⇒ 非空列");
+        // 反射侧读的是 NullabilityInfoContext 的 WriteState（三态：Unknown / NotNull / Nullable），
+        // 可空值类型那一档它给的就是 Nullable；而编译期这一侧的 <see cref="NullableAnnotation.None"/>
+        // 正是 WriteState=Unknown 那一格：可空上下文之外（<c>#nullable disable</c>、没带可空元数据的
+        // 引用程序集，整份 ABP 框架代码都在这一格）。两侧在这一格必须同形（§13.11 的逐字段对拍）。
+        if (property.NullableAnnotation == NullableAnnotation.None)
+            return (false, "C# 没表过态（可空上下文之外）⇒ 建表按非空列，不落必填尺子", false);
+
+        var annotated = IsNullableValue(type) || property.NullableAnnotation == NullableAnnotation.Annotated;
+
+        return (annotated, annotated ? "C# 可空 ⇒ 可空列" : "C# 非空 ⇒ 非空列", true);
     }
 
     /// <summary>「被显式排除」= 自研 <c>[Column(IsIgnore=true)]</c> 或 <c>[NotMapped]</c>。

@@ -1561,10 +1561,22 @@ sealed class QueryEngine
 
         var source = Effective();
         var method = Resolve(page, options?.CountMethod ?? CountMethod.Auto);
-        var offset = (page - 1) * size;
 
-        // Q4：多取一行判有无下一页，省掉整条 count —— 大表上那条 count 就是每次翻页一次全表扫描（§5.12）。
-        var items = source with { Offset = offset, Limit = method == CountMethod.SkipTotal ? size + 1 : size };
+        // 偏移与"多取一行"两步都按 long 算再收回 int：size + 1 与 (page - 1) * size 在 int.MaxValue
+        // 那一档翻成 int.MinValue，而发出去的句子是 LIMIT -2147483648 —— 库只能以
+        // "LIMIT must not be negative"（PG 2201W）收尾，读起来像库坏了，其实是这里溢的。
+        // 而 int.MaxValue 不是假想档：消费侧那一族仓储的"取全部"缺省就是它（现场一次可授权角色列表撞到的）。
+        var offset = (long)(page - 1) * size;
+
+        if (offset > int.MaxValue)
+            throw new QuickSqlException(
+                $"第 {page} 页、每页 {size} 行的偏移是 {offset}，超出 int 上限：这一页在任何库里都不存在。"
+                + "请回退页号或改用键集分页（Skip/Take 到这一档已经没有意义）。");
+
+        // 探下一页那一行：页大小已经顶到 int 上限时不再多取 —— 那一档下面不可能再放得下一整页，
+        // 而多取一行会给库发一条负 LIMIT。此时 HasNext 恒 false，是这句话的本意而不是失真。
+        var peek = method == CountMethod.SkipTotal && size < int.MaxValue ? 1 : 0;
+        var items = source with { Offset = (int)offset, Limit = size + peek };
         var rows = await Rows<TResult>(items, ct).ConfigureAwait(false);
 
         if (method == CountMethod.SkipTotal)

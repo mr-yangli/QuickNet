@@ -99,8 +99,17 @@ public sealed partial class AdoExecutor
 
     public int CommandTimeoutSeconds { get; }
 
+    /// <summary>预容量的天花板（行）。读多少行是库给的答案，而<em>开多大数组</em>是这里自己的事：
+    /// 上限取 8192 是因为 §12.8 那几枚钉都在 1 000 行那一档（一次扩容到 8192 只需要 13 次翻倍），
+    /// 而"取全部"那一档（<c>Take(int.MaxValue)</c>）照抄会把进程在读第一行之前就按死。</summary>
+    const int MaxPreallocatedRows = 8192;
+
     /// <summary><paramref name="expectedRows"/> 取自模型的 <c>Take(n)</c>：预容量是 §12.7 E 的硬要求，
-    /// 传 null 表示行数确实未知（无 <c>Take</c> 的全量查询）。</summary>
+    /// 传 null 表示行数确实未知（无 <c>Take</c> 的全量查询）。
+    /// <b>而这一颗预容量是按上限收着的</b>：<c>Take(n)</c> 说的是"最多读 n 行"，不是"给我准备 n 行的数组"——
+    /// 消费侧那颗 <c>pageSize = int.MaxValue</c> 的"取全部"照抄过来会在读第一行之前就
+    /// <c>OutOfMemoryException</c>（Array dimensions exceeded supported range），
+    /// 而那一发本来只该回几行。超过这一格仍按 §12.7 E 预容量，只是不再按库外的数字开数组。</summary>
     public async Task<List<T>> QueryAsync<T>(DialectSql sql, Func<DbDataReader, T> map, ExecutionTag tag, int? expectedRows, CancellationToken ct)
     {
         BeforeExecute(sql, tag);
@@ -112,7 +121,7 @@ public sealed partial class AdoExecutor
 
         try
         {
-            var list = new List<T>(expectedRows ?? 0);
+            var list = new List<T>(expectedRows is > 0 and var wanted ? Math.Min(wanted, MaxPreallocatedRows) : 0);
 
             if (Aop.Materialized is { } materialized)
             {

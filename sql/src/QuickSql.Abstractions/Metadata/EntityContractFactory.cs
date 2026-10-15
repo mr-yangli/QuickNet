@@ -28,6 +28,14 @@ public sealed record ColumnFacts
 
     public required string NullableNote { get; init; }
 
+    /// <summary>这一列的"非空"究竟是谁说的。<b>默认 true</b>（Fluent∶自研 <c>[Column]</c>∶<c>[Required]</c>∶
+    /// 可空上下文里的 <c>string</c> 都是表过态）。唯一落 <c>false</c> 的是<b>可空上下文之外</b>那一格：
+    /// <c>#nullable disable</c> 或没带可空元数据的引用程序集（整份 ABP/DDD 框架代码天天在这一格上），
+    /// 那里读出来的是"我没说过"，不是"我说了非空"。
+    /// <b>它只摘掉必填尺子，不改列的形状</b>：建表照旧发非空列，动那一格等于替现库批量
+    /// <c>DROP NOT NULL</c>，而那不是这句话的本意。</summary>
+    public bool NullabilityDeclared { get; init; } = true;
+
     public required bool IsPrimary { get; init; }
 
     /// <summary>null = 没有任何一层显式说过自增与否，交给「整型主键 ⇒ 自增」约定（要等 provider 定完类型才能判）。</summary>
@@ -67,6 +75,7 @@ public sealed record ColumnFacts
         LengthSemantics = LengthSemantics.Char,
         Unicode = true,
         IsNullable = IsNullable,
+        NullabilityDeclared = NullabilityDeclared,
         IsPrimary = IsPrimary,
         IsIdentity = false,
         IsConcurrencyToken = IsConcurrencyToken,
@@ -142,16 +151,19 @@ public static class EntityContractFactory
     /// <param name="indexes">按优先级从低到高给出（注解在前、Fluent 在后），同名时后者覆盖前者。</param>
     /// <param name="relationships">引用导航的声明。成员名 → 列名在这里换算，与索引同一个出口，
     /// 所以「外键指向了一个没映射的属性」在两条路径上是同一句话。</param>
+    /// <param name="integralPrimaryKeyAutoIncrement">约定那一档给不给「整型主键 ⇒ 自增」。默认 true 与这一格
+    /// 落地之前逐字同形；<b>false</b> 是给"主键由客户端生成"那一族库（雪花编号）留的装配声明，
+    /// 它只挪约定 —— 注解与 Fluent 表过态的列照旧赢过它，与 §10.2 那条优先级链同形。</param>
     public static EntityContract Build(Type clrType, TableInfo table, IReadOnlyList<ColumnFacts> columns, IReadOnlyList<IndexFacts> indexes,
-        IReadOnlyList<RelationshipFacts> relationships, ITypeMap types)
+        IReadOnlyList<RelationshipFacts> relationships, ITypeMap types, bool integralPrimaryKeyAutoIncrement = true)
     {
         var resolved = new ColumnContract[columns.Count];
 
         for (var i = 0; i < columns.Count; i++)
-            resolved[i] = Complete(columns[i], table, types);
+            resolved[i] = Complete(columns[i], table, types, integralPrimaryKeyAutoIncrement);
 
         if (!Array.Exists(resolved, static c => c.IsPrimary))
-            ApplyKeyConvention(resolved, clrType.Name);
+            ApplyKeyConvention(resolved, clrType.Name, integralPrimaryKeyAutoIncrement);
 
         // 分表这一格要等列算完才判得动（"分片键指向了一颗没映射的属性"要拿列清单比），
         // 而它一改就得改 table 本身，所以放在这里、在契约成形之前。
@@ -189,12 +201,14 @@ public static class EntityContractFactory
         return split with { ColumnName = column.ColumnName };
     }
 
-    static ColumnContract Complete(ColumnFacts facts, TableInfo table, ITypeMap types)
+    static ColumnContract Complete(ColumnFacts facts, TableInfo table, ITypeMap types, bool integralPrimaryKeyAutoIncrement)
     {
         var withStorage = types.ApplyStorageDefaults(facts.ToProvisional(table));
 
         // 自增要等类型定下来才能判定：主键 + 整型，且没有任何一层显式说过不是。
-        var identity = facts.DeclaredIdentity ?? (facts.IsPrimary && IsIntegral(withStorage.ClrType));
+        // 装配口说"这一族库的整型主键归客户端给号"时，约定那一半让位给声明，声明那一半原样保留。
+        var identity = facts.DeclaredIdentity
+                       ?? (integralPrimaryKeyAutoIncrement && facts.IsPrimary && IsIntegral(withStorage.ClrType));
 
         return withStorage with
         {
@@ -205,7 +219,7 @@ public static class EntityContractFactory
         };
     }
 
-    static void ApplyKeyConvention(ColumnContract[] columns, string entityName)
+    static void ApplyKeyConvention(ColumnContract[] columns, string entityName, bool integralPrimaryKeyAutoIncrement)
     {
         var index = Array.FindIndex(columns, c =>
             string.Equals(c.MemberName, "Id", StringComparison.OrdinalIgnoreCase)
@@ -219,7 +233,10 @@ public static class EntityContractFactory
         columns[index] = found with
         {
             IsPrimary = true,
-            IsIdentity = IsIntegral(found.ClrType),
+            // 命中 Id/{Entity}Id 形态只补「谁是键」这一半；自增那一半不许把高优先层的声明盖掉 ——
+            // 上面那一档（Complete）已经按声明算过一次，这里只允许约定往"归库给"的方向添，
+            // 装配口说这一族库归客户端给号时，只有真表过态自增的列才留得下来。
+            IsIdentity = found.IsIdentity || (integralPrimaryKeyAutoIncrement && IsIntegral(found.ClrType)),
             Origin = new OriginTrace(MetadataLayer.Convention, $"{found.MemberName} 命中 Id/{{Entity}}Id 形态"),
         };
     }
@@ -333,7 +350,15 @@ public static class EntityContractFactory
 public static class ContractRules
 {
     public static void Required(ColumnContract column, List<ValidationFailure> failures)
-        => failures.Add(new ValidationFailure(column.MemberName, "required", $"{column.MemberName} 不可为空（列 {column.ColumnName}，来源 {column.Origin}）"));
+    {
+        // "没表过态"不是一句"可以说非空"的许可（§10.6 的尺子量的是声明）：可空上下文之外读回来的
+        // 非空形状不挡写入，否则 ABP/DDD 那一族实体的合法 null 会被一次没说过的话拒掉。
+        // 判据只在这一处，G1 生成的校验器与 G2 的反射校验器因此不会各说一句。
+        if (!column.NullabilityDeclared)
+            return;
+
+        failures.Add(new ValidationFailure(column.MemberName, "required", $"{column.MemberName} 不可为空（列 {column.ColumnName}，来源 {column.Origin}）"));
+    }
 
     /// <summary>量纲用列自己声明的那把尺子，不是 <c>string.Length</c>（§10.4）。</summary>
     public static void Length(ColumnContract column, string value, List<ValidationFailure> failures)

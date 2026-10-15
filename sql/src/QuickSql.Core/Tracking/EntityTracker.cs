@@ -207,6 +207,36 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
     /// 反方向的错（该写而没写）才是不能接受的，所以这个位只朝安全的方向偏。</remarks>
     public bool MayHaveWrites => _mayHaveWrites;
 
+    /// <remarks><b>它看的是状态，不是语句</b>：本档里既有 <see cref="EntityState.Added"/> 又有
+    /// <see cref="EntityState.Deleted"/> 就是「这一轮同一张表既占位又腾位」，而库里那条业务唯一索引
+    /// （行号、位置、编码那一类）只认得到<em>此刻</em>表里有什么 —— 先插就撞上还赖在表里的那一行。
+    /// 一条 Added 之后又被 <c>Remove</c> 掉的行在 <see cref="ApplyState"/> 那一格已经转成 Detach 了，
+    /// 所以这里不会为它多报一次「两边都有」。</remarks>
+    public bool HasInsertsAndDeletes
+    {
+        get
+        {
+            if (!_mayHaveWrites)
+                return false;
+
+            var added = false;
+            var deleted = false;
+
+            foreach (var node in _order)
+            {
+                if (node.State == EntityState.Added)
+                    added = true;
+                else if (node.State == EntityState.Deleted)
+                    deleted = true;
+
+                if (added && deleted)
+                    return true;
+            }
+
+            return false;
+        }
+    }
+
     public bool HasTempKeys => _temps is { Count: > 0 };
 
     /// <summary>依赖方手里那颗值问这一档：它是不是本档发的临时键、换得出的真实键是哪一颗。

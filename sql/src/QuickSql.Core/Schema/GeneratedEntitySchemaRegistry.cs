@@ -28,8 +28,10 @@ public sealed class GeneratedEntitySchemaRegistry : IEntitySchemaRegistry
     readonly TypeTable<object> _schemas = new();
     readonly TypeTable<object> _validators = new();
     readonly TypeTable<Func<DbDataReader, ReadPlan, object>> _readers = new();
+    readonly bool _integralPrimaryKeyAutoIncrement;
 
-    public GeneratedEntitySchemaRegistry(IDbProvider provider, GeneratedEntityLookup lookup, EntitySchemaOptions? options = null, ModelConfiguration? model = null)
+    public GeneratedEntitySchemaRegistry(IDbProvider provider, GeneratedEntityLookup lookup, EntitySchemaOptions? options = null, ModelConfiguration? model = null,
+        bool integralPrimaryKeyAutoIncrement = true)
     {
         ArgumentNullException.ThrowIfNull(provider);
         ArgumentNullException.ThrowIfNull(lookup);
@@ -37,7 +39,8 @@ public sealed class GeneratedEntitySchemaRegistry : IEntitySchemaRegistry
         _types = provider.Types;
         _lookup = lookup;
         Options = options ?? new EntitySchemaOptions();
-        Resolver = new ContractResolver(provider, model);
+        _integralPrimaryKeyAutoIncrement = integralPrimaryKeyAutoIncrement;
+        Resolver = new ContractResolver(provider, model, integralPrimaryKeyAutoIncrement);
         _fallback = new EntitySchemaRegistry(Resolver, Options);
     }
 
@@ -86,7 +89,8 @@ public sealed class GeneratedEntitySchemaRegistry : IEntitySchemaRegistry
     {
         var metadata = Find(clrType)!;
 
-        return EntityContractFactory.Build(metadata.ClrType, metadata.Table, metadata.Columns, metadata.Indexes, metadata.Relationships, _types);
+        return EntityContractFactory.Build(metadata.ClrType, metadata.Table, metadata.Columns, metadata.Indexes, metadata.Relationships, _types,
+            _integralPrimaryKeyAutoIncrement);
     }
 
     object BuildSchema(Type clrType)

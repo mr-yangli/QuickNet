@@ -74,6 +74,10 @@ sealed class ColumnModel
 
     public string NullableNote = "";
 
+    /// <summary>"非空"这句话有没有人说过。<c>false</c> = 可空上下文之外（<c>NullableAnnotation.None</c>），
+    /// 与反射侧 <c>NullabilityState.Unknown</c> 同一格；只摘必填尺子，不改列的形状。</summary>
+    public bool NullabilityDeclared = true;
+
     public bool IsPrimary;
 
     /// <summary>null ⇒ 交给「整型主键 ⇒ 自增」约定，由运行期的 <c>EntityContractFactory</c> 判定。</summary>

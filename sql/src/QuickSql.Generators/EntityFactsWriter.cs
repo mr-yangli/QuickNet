@@ -204,6 +204,9 @@ static class EntityFactsWriter
              .AppendLine("                LengthNote = " + Lit(column.LengthNote) + ",")
              .AppendLine("                IsNullable = " + Bool(column.IsNullable) + ",")
              .AppendLine("                NullableNote = " + Lit(column.NullableNote) + ",")
+             // "非空这句话说过没有"（缺省 true）：可空上下文之外那一格落 false，只摘必填尺子、不改列的形状。
+             // 与反射侧的 NullabilityDeclared 同形，§13.11 的逐字段对拍比的是这一格。
+             .AppendLine("                NullabilityDeclared = " + Bool(column.NullabilityDeclared) + ",")
              .AppendLine("                IsPrimary = " + Bool(column.IsPrimary) + ",")
              .AppendLine("                DeclaredIdentity = " + Bool(column.DeclaredIdentity) + ",")
              .AppendLine("                Precision = " + Num(column.Precision) + ",")

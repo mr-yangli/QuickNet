@@ -74,6 +74,11 @@ interface ITypeTracker
     /// 于是只读过数据的会话不会为每个类型各扫三遍。</summary>
     bool MayHaveWrites { get; }
 
+    /// <summary>这一档这一轮<em>同时</em>欠着插入和删除 —— 「腾位再占位」那句提前删除的触发条件。
+    /// 判据只有状态两格（<see cref="EntityState.Added"/> 与 <see cref="EntityState.Deleted"/> 各至少一行），
+    /// 不去问库里有没有唯一索引：这一档要的是「要不要换个先后」，而换了先后对没有唯一索引的表也是中性的。</summary>
+    bool HasInsertsAndDeletes { get; }
+
     int DetectChanges();
 
     void Clear();

@@ -39,6 +39,15 @@ public sealed class MetadataEquivalenceTests
     [InlineData(typeof(SessionToken))]
     [InlineData(typeof(InventoryItem))]
     [InlineData(typeof(LegacyShipment))]
+    // 可空上下文之外那一格（<c>NullabilityDeclared</c>）是这一册里唯一"两侧各读一份元数据"的字段：
+    // G1 问的是 Roslyn 的 <c>NullableAnnotation.None</c>，G2 问的是 <c>NullabilityInfoContext</c> 的
+    // <c>Unknown</c>。两个名字不同的东西必须在契约上落成同一个值，否则同一份代码在两条启动路径上
+    // 一条挡写入、一条放行 —— 而那种分叉不改变任何一条 SQL 的文本。
+    [InlineData(typeof(ObliviousRow))]
+    [InlineData(typeof(SpokenRow))]
+    // 只读计算属性那一档（<c>Expression must be writeable</c> 那颗真 500 的来路）：两侧都要把它摘掉，
+    // 而摘的位置在链上第几格也算形状 —— 反射侧先判显式排除再判写口，生成器同一次序才有对拍意义。
+    [InlineData(typeof(ComputedMemberRow))]
     [InlineData(typeof(BareReport))]
     [InlineData(typeof(AuditRow))]
     [InlineData(typeof(Project))]
@@ -141,7 +150,7 @@ public sealed class MetadataEquivalenceTests
         {
             var c = contract.Columns[i];
 
-            lines.Add($"[{i}] {c.MemberName} clr={c.ClrType.Name} col={c.ColumnName} len={c.LengthSemantics}:{c.MaxChars?.ToString() ?? "-"}/{c.MaxBytes?.ToString() ?? "-"}B unicode={c.Unicode} null={c.IsNullable} key={c.IsPrimary} identity={c.IsIdentity} conc={c.IsConcurrencyToken} prec={c.Precision?.ToString() ?? "-"}/{c.Scale?.ToString() ?? "-"} store={c.StoreTypeName ?? "-"} comment={c.Comment ?? "-"}"
+            lines.Add($"[{i}] {c.MemberName} clr={c.ClrType.Name} col={c.ColumnName} len={c.LengthSemantics}:{c.MaxChars?.ToString() ?? "-"}/{c.MaxBytes?.ToString() ?? "-"}B unicode={c.Unicode} null={c.IsNullable} spoken={c.NullabilityDeclared} key={c.IsPrimary} identity={c.IsIdentity} conc={c.IsConcurrencyToken} prec={c.Precision?.ToString() ?? "-"}/{c.Scale?.ToString() ?? "-"} store={c.StoreTypeName ?? "-"} comment={c.Comment ?? "-"}"
                 + (withOrigin ? $" origin={c.Origin}" : ""));
         }
 

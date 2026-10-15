@@ -32,18 +32,74 @@ public sealed class PostgreSqlValues : IValueBinder
     {
         // Size 在这一家没有意义（驱动按值自己算），但 AdoParameter 的形状要与 T-SQL 那一侧一致，
         // 否则参数对拍会比不出"两边各要了几颗参数"。hint 原样带上：值级钩子要按列改写参数。
-        return new AdoParameter(name, Normalize(value), DbTypeOf(value, hint), SizeOf(value), hint);
+        //
+        // DbType 跟着<em>换形之后</em>那一颗走，但只在那一形真的换了的时候：时刻那一格可能把
+        // DateTime 换成 DateTimeOffset（带时区的列），型别必须跟着换 —— 否则交出去的是偏移而对
+        // 驱动说 DateTime2，撞回同一句拒收。其余情形仍按原值取型，null 那一格才不会被折成 DBNull 的型。
+        var shaped = Normalize(value, hint);
+
+        return new AdoParameter(
+            name,
+            shaped,
+            DbTypeOf(value is DateTime ? shaped : value, hint),
+            SizeOf(value),
+            hint);
     }
 
-    static object? Normalize(object? value) => value switch
+    static object? Normalize(object? value, ColumnContract? hint) => value switch
     {
         null => DBNull.Value,
 
         // 驱动不会替我们转：直接传枚举实例会被当成字符串或报错，而列上是 INTEGER（§9.3）。
         { } typed when typed.GetType().IsEnum => EnumAsIntegral(typed),
 
+        // 带偏移的时刻要与列同型（下面那一句），裸时刻要与列同型（同一句的返）。
+        DateTime moment => BareOrOffset(moment, hint),
+
         var typed => typed,
     };
+
+    /// <summary><b>这一句只改交出去的那一形的说法，不改它表示的时刻。</b>
+    ///
+    /// <para>本家给 <c>DateTime</c> 选的存储型是 <c>TIMESTAMP(3)</c>（不带时区，<c>GetStoreType</c> 那一格），
+    /// 而 Npgsql 6 起按 <c>DateTime.Kind</c> 分型：<c>Kind=Utc</c> 只肯进带时区那一型，写进裸
+    /// <c>timestamp</c> 就在绑定当场抛 <c>ArgumentException: Cannot write DateTime with Kind=UTC to
+    /// PostgreSQL type 'timestamp without time zone'</c>。现场是一颗真业务库：那一族的列全是
+    /// <c>timestamp without time zone</c>，而 ABP 的时钟交回的是 <c>Kind=Utc</c> 的钟面 ——
+    /// 症状是宿主启动就死、一次登录写一条安全日志就 500，而库里一个字节都没进去。
+    /// 旧底座（SqlSugar）发的是它自己那一份参数对象，这一格从来量不到。</para>
+    ///
+    /// <para><b>裸列</b>收"一串钟面，无所谓时区"，所以把 <c>Utc</c> 的说法摘掉
+    /// （<c>SpecifyKind(Unspecified)</c>）是逐字节同文的改写；换成 <c>Local</c> 才是数据改写 ——
+    /// 钟面会被挪掉本机那几个小时。<b>带时区的列</b>反过来：那一列存的是瞬时，而驱动按
+    /// <c>DbType</c> 认型（<c>DbType.DateTime2</c> 就是裸那一型，钟面再怎么说也换不了它），
+    /// 所以那一列要的是换成 <c>DateTimeOffset</c> 的同一瞬时 —— 偏移按 <c>Kind</c> 说：
+    /// <c>Utc</c> 与没表过态的都记成零偏移（后者那一格与读侧 <c>TypedReadTests</c> 钉住的
+    /// "不猜成 UTC"是<em>另一句话</em>：写侧这一列本来就只收瞬时，猜与不猜都得到一个瞬时），
+    /// <c>Local</c> 保留本机偏移。两形的分界只看列声明出来的那个型，不看 CLR 型自己怎么说。</para>
+    ///
+    /// <para>读侧对应的两臂在 <c>TypedReadTests</c>（<c>ValueConverter</c> 那一族）。钉在
+    /// <c>PostgreSqlTimestampBindingTests</c>（离线五臂：两形各一臂、已经对型的两形不许被动、
+    /// <c>DateTimeOffset</c> 原样递、文本逐字节同形、别家不受影响）与
+    /// <c>PostgreSqlTimestampPathTests</c>（真 PG 一行进去、库里读回同一串钟面）。</para></summary>
+    static object? BareOrOffset(DateTime moment, ColumnContract? hint)
+    {
+        var store = hint?.StoreTypeName;
+
+        var wantsOffset = store is not null
+                          && (store.Contains("timestamptz", StringComparison.OrdinalIgnoreCase)
+                              || store.Contains("with time zone", StringComparison.OrdinalIgnoreCase));
+
+        if (!wantsOffset)
+            return moment.Kind == DateTimeKind.Utc ? DateTime.SpecifyKind(moment, DateTimeKind.Unspecified) : moment;
+
+        return moment.Kind switch
+        {
+            DateTimeKind.Utc => new DateTimeOffset(moment.Ticks, TimeSpan.Zero),
+            DateTimeKind.Local => new DateTimeOffset(moment.Ticks, TimeZoneInfo.Local.GetUtcOffset(moment)),
+            _ => new DateTimeOffset(DateTime.SpecifyKind(moment, DateTimeKind.Utc).Ticks, TimeSpan.Zero),
+        };
+    }
 
     /// <summary>枚举的底层类型由声明决定，所以按它取对应宽度：<c>byte</c> 底不许被 widen 成 <c>int</c>，
     /// 否则 <c>DbType.Byte</c> 与实参类型对不上，报错的是驱动而不是这里。</summary>

@@ -144,4 +144,37 @@ public sealed class SqlServerPagingTests
         Checks.Has("FROM [QuickSqlOrder] AS [o]", sql);
         Checks.Has("OFFSET 0 ROWS FETCH NEXT @p0", sql);
     }
+
+    // ── int 上限那一档：偏移与"多取一行"都不许溢成负数 ─────────────
+    //
+    // 证人是一颗真库的红：消费侧那一族仓储的"取全部"缺省就是 pageSize = int.MaxValue，
+    // 而旧那一版把 <c>(page - 1) * size</c> 与 <c>size + 1</c> 都按 int 算 ——
+    // 于是发出去的句子是 <c>LIMIT -2147483648</c>，库以 <c>2201W: LIMIT must not be negative</c> 收尾，
+    // 症状是"一次可授权角色列表 500"。放行那一半（页 1 不再多取一行）只能在活库上读，
+    // 归 <c>PagingOverflowPathTests</c>；这里钉的是"溢之前先响"那一半。
+
+    [Fact]
+    public async Task An_offset_past_the_int_ceiling_refuses_instead_of_sending_a_negative_offset()
+    {
+        // 页 3、每页 int.MaxValue 行：偏移是 4294967294，落在 int 之外。
+        // 旧那一版算成 -2（乘出去的负数），库会给一句"OFFSET must not be negative"。
+        var error = await Assert.ThrowsAsync<QuickSql.QuickSqlException>(() =>
+            orm().Select<Order>().ToPagedAsync(3, int.MaxValue, null, TestContext.Current.CancellationToken));
+
+        Checks.Has("超出 int 上限", error.Message);
+        Checks.Has("4294967294", error.Message);
+    }
+
+    [Fact]
+    public async Task The_last_representable_offset_still_passes_the_guard()
+    {
+        // 反向那一半：判据是"&gt; int.MaxValue"而不是"&gt;= 某个好看的数"。页 2、每页
+        // int.MaxValue/2+1 的偏移正好落在 int 上限内 ⇒ 不许在闸口被拦。
+        // 这一台是 NoDriverFactory，往下走必然红在驱动上 —— 所以要判的是"红在哪一颗"：
+        // 拦在闸口才是 QuickSqlException，红在别处才算放行。
+        var error = await Assert.ThrowsAnyAsync<Exception>(() =>
+            orm().Select<Order>().ToPagedAsync(2, int.MaxValue / 2 + 1, null, TestContext.Current.CancellationToken));
+
+        Assert.IsNotType<QuickSql.QuickSqlException>(error);
+    }
 }

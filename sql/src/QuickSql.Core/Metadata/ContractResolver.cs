@@ -13,13 +13,18 @@ namespace QuickSql.Metadata;
 /// <summary>§10.2 的解析链实现：Fluent &gt; 自研属性 &gt; DataAnnotations &gt; 约定 &gt; provider 兜底。
 /// 这是 G2 兜底路径（启动期反射一次、结果冻结）；G1 源生成器产出同样的 <see cref="EntityContract"/>，
 /// 两条路径由 §13.11 的用例断言逐字段相等。</summary>
-public sealed class ContractResolver(IDbProvider provider, ModelConfiguration? configuration = null)
+public sealed class ContractResolver(IDbProvider provider, ModelConfiguration? configuration = null,
+    bool integralPrimaryKeyAutoIncrement = true)
 {
     readonly ConditionalWeakTable<Type, EntityContract> _cache = new();
 
     public IDbProvider Provider { get; } = provider;
 
     public ModelConfiguration Configuration { get; } = configuration ?? new ModelConfiguration();
+
+    /// <summary>约定那一档给不给"整型主键 ⇒ 自增"（<see cref="QuickSqlOrmOptions.IntegralPrimaryKeyAutoIncrement"/>）。
+    /// 它只挪约定：注解与 Fluent 表过态的列照旧赢过它。</summary>
+    public bool IntegralPrimaryKeyAutoIncrement { get; } = integralPrimaryKeyAutoIncrement;
 
     [RequiresUnreferencedCode("G2 兜底路径按 Type 扫描属性与注解；AOT 场景要用 G1 生成的契约（§12.7）。")]
     [RequiresDynamicCode("G2 兜底路径为集合导航编译读口委托；AOT 场景要用 G1 生成的契约（§12.7）。")]
@@ -92,7 +97,7 @@ public sealed class ContractResolver(IDbProvider provider, ModelConfiguration? c
         // 收尾（provider 的 storage defaults、自增约定、索引与外键的列名换算）在 EntityContractFactory 里，
         // 与 G1 生成的事实共用同一段代码：这条链的正确性由 §13.11 的两侧逐字段相等断言兜住。
         return EntityContractFactory.Build(clrType, table, [.. columns], ResolveIndexFacts(clrType, fluent),
-            ResolveRelationships(members, columns), Provider.Types);
+            ResolveRelationships(members, columns), Provider.Types, IntegralPrimaryKeyAutoIncrement);
     }
 
     TableInfo ResolveTable(Type clrType, FluentEntity? fluent)
@@ -153,8 +158,16 @@ public sealed class ContractResolver(IDbProvider provider, ModelConfiguration? c
                 facts.Ignored = "[Column(IsIgnore=true)]";
             else if (property.GetCustomAttribute<DaSchema.NotMappedAttribute>() is not null)
                 facts.Ignored = "[NotMapped]";
+            else if (!property.CanWrite)
+                // 没有写口的成员既落不回值（读取器给它赋值会在编译当场 ArgumentException:
+                // Expression must be writeable），也不是数据：ABP 那一族实体上的
+                // <c>public bool RequiresManualGrading =&gt; Type == …</c> 就是这一形 —— 它是算法。
+                // 按非公开写口问一次（<c>CanWrite</c>）而不是按公共写口：{ get; protected set; }
+                // 与 { get; init; } 都是能落的形状（编译后的表达式树不受可访问性限制），
+                // 把它们一起摘掉会让整族 ABP 实体的键与明细列凭空消失。
+                facts.Ignored = "没有写口（计算属性，不是列）";
             else if (property.PropertyType == typeof(byte[]) || IsMappable(property.PropertyType))
-                facts.IsNullable = nullability.Create(property).WriteState == NullabilityState.Nullable;
+                facts.Nullability = nullability.Create(property).WriteState;
             else if (IsReferenceNavigation(property.PropertyType))
             {
                 // 引用导航不是列，但它是关系：外键列在依赖侧这一张表上，早先那一版把它连同别的
@@ -395,6 +408,8 @@ public sealed class ContractResolver(IDbProvider provider, ModelConfiguration? c
             LengthNote = length.Note,
             IsNullable = nullable.Value,
             NullableNote = nullable.Note,
+            // 只有"约定"这一档且读回来是没表过态（Unknown）时，这句话不算声明 —— 见 ColumnFacts 那一格。
+            NullabilityDeclared = nullable.Declared,
             IsPrimary = isKey,
             DeclaredIdentity = identity,
             Precision = precision,
@@ -408,14 +423,14 @@ public sealed class ContractResolver(IDbProvider provider, ModelConfiguration? c
         };
     }
 
-    static (bool Value, MetadataLayer Layer, string Note) ResolveNullable(
+    static (bool Value, MetadataLayer Layer, string Note, bool Declared) ResolveNullable(
         MemberFacts member, Da.RequiredAttribute? required, ColumnAttribute? quicksql, FluentMember? fluentMember)
     {
         if (fluentMember?.Required is { } fr)
-            return (!fr, MetadataLayer.Fluent, $"Fluent IsRequired({fr})");
+            return (!fr, MetadataLayer.Fluent, $"Fluent IsRequired({fr})", true);
 
         if (quicksql?.IsPrimary == TriState.Yes)
-            return (false, MetadataLayer.QuickSqlAttribute, "[Column(IsPrimary=Yes)] ⇒ 非空");
+            return (false, MetadataLayer.QuickSqlAttribute, "[Column(IsPrimary=Yes)] ⇒ 非空", true);
 
         if (quicksql?.IsNullable is TriState.Yes or TriState.No)
         {
@@ -425,18 +440,26 @@ public sealed class ContractResolver(IDbProvider provider, ModelConfiguration? c
                 ? required is not null
                     ? "WARN: [Required] 与 [Column(IsNullable=Yes)] 矛盾，按优先级取自研属性"
                     : "[Column(IsNullable=Yes)]"
-                : "[Column(IsNullable=No)]");
+                : "[Column(IsNullable=No)]", true);
         }
 
         if (required is not null)
-            return (false, MetadataLayer.DataAccessAnnotation, "[Required]");
+            return (false, MetadataLayer.DataAccessAnnotation, "[Required]", true);
 
         var type = member.Property.PropertyType;
 
         if (type.IsValueType && Nullable.GetUnderlyingType(type) is null)
-            return (false, MetadataLayer.Convention, "值类型非 Nullable ⇒ 非空列");
+            return (false, MetadataLayer.Convention, "值类型非 Nullable ⇒ 非空列", true);
 
-        return (member.IsNullable, MetadataLayer.Convention, member.IsNullable ? "C# 可空 ⇒ 可空列" : "C# 非空 ⇒ 非空列");
+        // Unknown = 这段代码根本不在可空上下文里（`#nullable disable`、没带可空元数据的引用程序集 ——
+        // 整份 ABP/DDD 框架代码天天在这一格）。它说的是"我没表过态"，不是"我说了非空"，所以列的形状
+        // 照旧按非空建（改那一格等于替现库批量 DROP NOT NULL），而 §10.6 的必填尺子不量它。
+        // 编译期那侧的同一格是 NullableAnnotation.None，两侧同形由 §13.11 的对拍钉住。
+        if (member.Nullability == NullabilityState.Unknown)
+            return (false, MetadataLayer.Convention, "C# 没表过态（可空上下文之外）⇒ 建表按非空列，不落必填尺子", false);
+
+        return (member.Nullability == NullabilityState.Nullable, MetadataLayer.Convention,
+            member.Nullability == NullabilityState.Nullable ? "C# 可空 ⇒ 可空列" : "C# 非空 ⇒ 非空列", true);
     }
 
     /// <summary>只把声明抄成 <see cref="IndexFacts"/>：名字/量纲的换算、同名冲突判定都在
@@ -466,7 +489,10 @@ public sealed class ContractResolver(IDbProvider provider, ModelConfiguration? c
 
         public string? Ignored { get; set; }
 
-        public bool IsNullable { get; set; }
+        /// <summary>反射侧读的是 <see cref="NullabilityInfoContext"/> 的 WriteState，三态原样留着：
+        /// <c>Unknown</c>（可空上下文之外，没表过态）与 <c>NotNull</c>（表过态说非空）在必填尺子上是两个答案。
+        /// 缺省取 <see cref="NullabilityState.NotNull"/> —— 走不到这一格的成员本来就不是列。</summary>
+        public NullabilityState Nullability { get; set; } = NullabilityState.NotNull;
 
         /// <summary>非 null = 这一格是引用导航，值为主端实体的 CLR 类型。它与 <see cref="Ignored"/> 同时存在
         /// 是故意的：「不是列」与「是一条关系」是两个问题，各自有各自的答案。</summary>

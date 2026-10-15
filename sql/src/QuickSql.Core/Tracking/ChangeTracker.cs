@@ -572,8 +572,42 @@ sealed class ChangeTracker(QuickSqlOrm orm) : DbChangeTracker
         var operations = new List<SaveChangesOp>();
 
         // 快照一份档列表：写的时候要是最开始那几档，中途不接纳新登记的类型。
-        // 排序只动档内的类型先后，三档的先后（§8.2 那句"先插再改最后删"）不动。
+        // 排序只动档内的类型先后，三档的先后（§8.2 那句"先插再改最后删"）只在下面那一格提前。
         var trackers = OrderedByDependency(_order.ToArray());
+
+        // 「同一张表这一轮既插又删」把那一段删除提前（触发条件见 <see cref="ITypeTracker.HasInsertsAndDeletes"/>）。
+        //
+        // <b>为什么三档的先后在这里要让一步</b>：删掉的那一行腾开的是一个<em>业务</em>唯一键
+        // （明细的行号、顺序位、单内的编码 —— 库里那条唯一索引管的就是它），而插进来的那一行要占的正是同一个位置。
+        // 先插就撞在还赖在表里的那一行上：<c>23505 duplicate key</c>，撞它的还是<em>本轮自己就要删掉</em>的那一行 ——
+        // 会话按三档排出来的一串语句，库里逐条看都对，串起来是错的。
+        //
+        // <b>提前的是整档删除，不是某一张表的删除</b>，这一格的区别就是外键约束报不报错：
+        // 只把甲表的删除摘出来提前，就会把「被依赖的那一行最后删」那条不变量拆散（甲是乙的主端时，
+        // 乙的删除还留在原来那一趟里，甲先没了 → 一句删不掉的甲）。所以这里把删除那一整趟原样搬到触发点，
+        // 逆序枚举、同一个 WritePhaseAsync、同一批节点，一条语句的形状与先后都没改，
+        // 改的只有它落在插入档的哪一侧。插入档内部（被依赖的在前）照旧，所以主端已经回填的键不会被这趟删除拿走。
+        //
+        // 没被触发的那一轮（这张表只插不删、或只删不插）走的还是 §8.2 那一串，一字未动。</summary>
+        var deletesFlushed = false;
+
+        async Task FlushDeletesAsync()
+        {
+            if (deletesFlushed)
+                return;
+
+            deletesFlushed = true;
+
+            for (var i = trackers.Length - 1; i >= 0; i--)
+            {
+                var tracker = trackers[i];
+
+                if (!tracker.MayHaveWrites)
+                    continue;
+
+                operations.AddRange(await tracker.WritePhaseAsync(WriteOperation.Delete, traces, ct).ConfigureAwait(false));
+            }
+        }
 
         foreach (var phase in Phases)
             for (var i = 0; i < trackers.Length; i++)
@@ -585,10 +619,20 @@ sealed class ChangeTracker(QuickSqlOrm orm) : DbChangeTracker
                 if (!tracker.MayHaveWrites)
                     continue;
 
+                if (phase == WriteOperation.Delete)
+                {
+                    await FlushDeletesAsync();
+
+                    continue;
+                }
+
                 // 级联欠的键要在这一档建语句之前落进子实体：WriteInsertsAsync 读的是实体现值，
                 // 而拓扑序已经把父那一档排在前面 await 完，此刻父的键要么已经有值、要么本轮没写（那一格拒）。
                 if (phase == WriteOperation.Insert)
                     ApplyCascadeLinks(tracker);
+
+                if (phase == WriteOperation.Insert && !deletesFlushed && tracker.HasInsertsAndDeletes)
+                    await FlushDeletesAsync();
 
                 operations.AddRange(await tracker.WritePhaseAsync(phase, traces, ct).ConfigureAwait(false));
             }

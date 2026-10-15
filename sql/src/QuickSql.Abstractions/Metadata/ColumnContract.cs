@@ -21,6 +21,12 @@ public sealed record ColumnContract
 
     public required bool IsNullable { get; init; }
 
+    /// <summary>这一列的"非空"是不是<b>有人说过</b>的一句话。<c>false</c> 只有一种来源：可空上下文之外
+    /// （<c>#nullable disable</c>、没带可空元数据的引用程序集）读回来的"没表过态"。
+    /// 它只摘掉 §10.6 的必填尺子（<see cref="ContractRules"/>），<b>不改列的形状</b>：
+    /// <see cref="IsNullable"/> 与 DDL 那一侧照旧，因为改那一格要的是现库的列，而不是一句推断。</summary>
+    public bool NullabilityDeclared { get; init; } = true;
+
     public required bool IsPrimary { get; init; }
 
     public required bool IsIdentity { get; init; }

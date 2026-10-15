@@ -218,6 +218,58 @@ DataAnnotations 同样认（`[Key]`、`[Required]`、`[StringLength]`、`Schema.
 
 约定的那一层：整型主键 `Id` ⇒ 主键 + 自增；C# 可空 ⇒ 可空列；无长度字符串 ⇒ provider 默认（SQL Server 落 `NVARCHAR(MAX)`）。导航属性不成列。
 
+- **没有写口的成员既不是列也不是关系**：`public bool NeedsGrading => Type == …` 这一形有公共 getter、类型又可映射，
+  旧那一版因此把它收进契约当一列；而<em>读取器</em>建到它就 `Expression.Assign` 不起
+  （<c>ArgumentException: Expression must be writeable</c>），症状不是"这一列读不出来"而是整个列表接口 500，
+  堆栈里连成员名都没有。判据按"有没有写口"（<c>PropertyInfo.CanWrite</c> ∶ Roslyn 的 <c>SetMethod is null</c>），
+  <b>不按"写口公不公开"</b> —— `{ get; protected set; }`、`{ get; private set; }`、`{ get; init; }` 都落得回值
+  （编译后的表达式树不受可访问性限制），按后者判会把整族 ABP 实体的主键与明细列一起摘掉。
+  两侧同一次序（反射侧 <c>ReadMembers</c> 在显式排除之后、类型判定之前；生成器同位置）。
+  钉在 <c>ComputedMemberTests</c>（离线五臂：列清单、三种非公开写口仍在场、读取器建得起来、建表文本没有那一列、
+  集合边没被顺手摘）+ <c>MetadataEquivalenceTests</c> 的 G1∶G2 对拍。
+- **分页与预容量都不许照抄调用方给的数**：<c>ToPagedAsync(page, size)</c> 的偏移与"探下一页要多取一行"
+  都按 <c>long</c> 算再收回 <c>int</c> —— <c>size + 1</c> 与 <c>(page - 1) * size</c> 在
+  <c>int.MaxValue</c> 那一档翻成 <c>int.MinValue</c>，发出去的句子是 <c>LIMIT -2147483648</c>，
+  库以 <c>2201W: LIMIT must not be negative</c> 收尾（现场：一颗"取全部"的缺省 <c>pageSize = int.MaxValue</c>
+  的下拉列表 500）。偏移真超出 <c>int</c> 时是<b>当场抛并点名那一页</b>，不是发一条负 OFFSET。
+  <c>size == int.MaxValue</c> 那一档不再多取一行，于是 <c>HasNext</c> 恒 <c>false</c>（2^31-1 行下面放不下第二整页）。
+  读取器的预容量另有天花板（8192 行）：<c>Take(n)</c> 说的是"最多读 n 行"，不是"给我准备 n 行的数组"——
+  照抄那一颗会在读第一行之前就 <c>OutOfMemoryException</c>。
+  钉在 <c>SqlServerPagingTests</c>（闸口两臂：溢出那一臂响、正好落在上限那一臂放行）
+  \+ <c>PagingOverflowPathTests</c>（活库两臂：<c>LIMIT</c> 是正的最大值而行数与全量链对得上、
+  普通那一页仍按 <c>size + 1</c> 探）。
+
+- **时刻交出去之前要对上列的形状（PG 系）**：Npgsql 6 起按 `DateTime.Kind` 分型，`Kind=Utc` 只肯进
+  `timestamp with time zone`，写进裸 `timestamp` 在绑定当场抛 `ArgumentException`。本家给 `DateTime`
+  选的存储型是裸 `TIMESTAMP(3)`，所以 `PostgreSqlValues` 在绑定前按<em>列声明的那个型</em>折一次：
+  裸列把 `Utc` 的说法摘成 `Unspecified`（Ticks 逐字节不动，换 `Local` 才是数据改写）；
+  列显式声明成 `timestamptz`/`with time zone` 时换成 `DateTimeOffset`（驱动按 `DbType` 认型，
+  `DbType.DateTime2` 说不了带时区那一型），偏移按 `Kind` 说：`Utc` 与没表过态的记零偏移、`Local` 留本机偏移。
+  `DbType` 只在那一形真的换了的时候跟着换，其余仍按原值取（null 那一格不许被折成 `DBNull` 的型）。
+  SQL 文本一个字不动（列清单、占位符编号、参数颗数逐字节同形）。读侧对应的两臂在 `ValueConverter`
+  （库里交回的裸时刻不猜成 UTC）。钉在 `PostgreSqlTimestampBindingTests`（离线五臂）
+  \+ `PostgreSqlTimestampPathTests`（真 PG：一行进去、库里读回同一串钟面；带时区那一列过一个瞬时来回）。
+- **整型主键归谁给号可以装配**：上面那条"整型主键 ⇒ 自增"是**约定**，而有一族库的主键由客户端生成
+  （雪花编号那一类），库里那一列只是 `bigint` 加一个默认值，库既不给号也不许写号。装配口是
+  `ContractResolver(provider, model, integralPrimaryKeyAutoIncrement: false)`，走 `QuickSqlOrm` 那颗
+  "注册表由外部提供"的干净口交进去（`QuickSqlOrmOptions` 里没有这一格）。
+  它只挪**约定**那一档：`[Column(IsIdentity = TriState.Yes)]` 与 Fluent `IsIdentity(true)` 照旧赢过它，
+  真自增表不需要为这颗开关改回来。开着默认值时两侧形状与这一格落地之前逐字同文，
+  关掉之后 `ExplainKeys()` 那一档**当场抛并点名"没有自增列"**（不是静默回空包）。
+  钉在 `ApplicationKeyConventionTests`（离线五臂）+ `ApplicationKeyPathTests`（活库：两行各带自己那个号进库，
+  第二行不撞键 —— 单行插入在两种契约下都能绿，所以这一案必须两行）。
+- **"非空"是谁说的，必填尺子只量说过话的那一格**：`NullabilityInfoContext` 对可空上下文之外的成员
+  （`#nullable disable`、没带可空元数据的引用程序集 —— 整份 ABP/DDD 框架代码天天在这一格）交回
+  `Unknown`，而 `Unknown` 说的是"我没表过态"，不是"我说了非空"。旧那一版把它一并折成非空，
+  于是每一次合法写入（租户号、备注、客户端令牌那几列本来就是 null）都被一把没人宣布过的尺子整批拒掉。
+  今天 `ColumnContract.NullabilityDeclared` 记下这一格：`false` 时 §10.6 的必填尺子不落，
+  **而列的形状一字不动**（DDL 照旧 `NOT NULL` —— 翻那一格等于替现库批量 `DROP NOT NULL`）。
+  说过话的三形照旧挡：可空上下文里的 `string`、`[Required]`、`[Column(IsNullable = TriState.No)]`；
+  `string?` 与 Fluent `IsRequired(false)` 照旧放行。两侧同一把尺子由 §13.11 的对拍钉住
+  （G1 问 Roslyn 的 `NullableAnnotation.None`，G2 问 `NullabilityState.Unknown`，两个名字不同的东西要落成同一个值）。
+  钉在 `NullabilityDeclarationTests`（离线四臂，含"发出去的是 `DBNull` 不是空串"与建表文本未变）
+  \+ `NullabilityDeclarationPathTests`（活库：那行 null 真进了库、真读回是 null，而被拒的批次一行都没写进去）。
+
 **路 B：Fluent。** `src/QuickSql.Abstractions/Metadata/Fluent/ModelConfiguration.cs`，今天真实存在的成员只有这些：
 
 ```csharp
@@ -680,6 +732,7 @@ var report = await db.SaveChangesAsync();
 - `orm.CreateSharedContext<TContext>()`（v0.37 第八笔，`QuickSqlOrm.cs:256`）：**同一条 async 执行流上取到的一直是同一只会话**，用于不做 DI 注册也要跨方法传的场景（控制台、后台服务）。三条边界要用之前先知道：① 共享范围是**一条流**，不是进程也不是线程，槽位挂在 orm 实例上，所以两只 `QuickSqlOrm` 在同一条流里各拿各的会话；`await` 之后的子任务里建的那只**不会回到父帧**（父帧之后自己取，取到的是另一只）；② 反过来，父帧先建、之后扇出的并发分支拿到的是**同一只**，而 `ChangeTracker` 不是线程安全的（今天没有闸门，要并发就各自开流或各自 `CreateDbContext`）；③ 会话没有 `Dispose`，"结束"就是让那条流出作用域，或者按 `ChangeTracker.Clear()` 清账。八条判据见 `tests/QuickSql.Tests.Dialects/SharedContextTests.cs`，口径见设计文档 §7 末
 - `DbSet<T>` 直接继承查询链（`QuickSql.Core/Orchestration/DbSet.cs`）并实现 `ITrackedSet<T>`：`Local`（`LocalView<T> : IReadOnlyList<T>`，有 `Entries` 与 `Find(params object?[])`）、`Load<TProp>(navigation)` —— **后者今天抛 `QuickSqlException`**（导航补载没接线）
 - `ChangeTracker`：`Count`、`HasChanges`、`Entries()`、`Entries<T>()`、`DetectChanges()`、`Clear()`；状态是 `EntityState { Detached, Added, Unmodified, Modified, Deleted }`；点名某列用 `Entry(entity).Property(nameof(X)).IsModified = true`，`AutoDetectChangesEnabled` 可关
+- **三档先后有一格会让步：同一张表这一轮既插又删时，删除整档提前**（规格 §8.2 那句"先插、再改、最后删"的<em>唯一</em>例外，`src/QuickSql.Core/Tracking/ChangeTracker.cs` 的 `FlushDueAsync`）。要腾开的是<em>业务</em>唯一键 —— 明细的行号、顺序位、单内编码那一类，库里那条 `UNIQUE (父键, 位置)` 管的就是它，而"摘掉第 3 行、再插一行号仍然是 3 的新行"（换物资、换供应商、换槽位）是编辑界面的常规动作。按原先后发句子，那句 `INSERT` 撞的是<em>本轮自己就要删掉</em>的那一行：`23505 duplicate key`，逐条看每句都对、串起来是错的。提前的是**整档删除**而不是那一张表的删除，所以"被依赖的那一行最后删"那条不变量一字未动（只搬某一张表就会把父与子的删除拆开，换来一句删不掉的父）；触发条件只看状态（这一档同时有 `Added` 与 `Deleted`），不去问库里有没有那条索引 —— 没有时换一下先后也是中性的。只插不删、只删不插的表照旧走三档，一个字节没改。见证：`tests/QuickSql.Tests.Integration/RowSwapOrderingPathTests.cs` 两颗（一删一插同键、一删两插同键），唯一索引由结构同步从 `[Index(Unique = true)]` 现场建出并<em>当场撞一次</em>证明它活着；把触发条件按死重跑，两颗都红在库的那句唯一约束上
 - 只写脏列：UPDATE 的 SET 里只有 `ModifiedMembers`；没有主键的实体**拒绝跟踪并指路**（`Attach(new AuditRow{...})` 会抛）
 - `SaveChanges()` 是同步壳（sync-over-async）；干净无事时**不发语句、不开事务**（`tests/QuickSql.Tests.Dialects/TrackingTests.cs:527` 那格用探针工厂证的就是这条）；发语句前先过 `EnsureWriteOrderResolvable()`（外键依赖成环就在这里红）
 - 分表实体**可以读进会话、不可以由会话写出去**：`SaveChanges` 在开事务之前逐行问一遍跟踪器，碰到挂在分表模板上的待写实体就整批拒绝并指路（`src/QuickSql.Core/Tracking/ChangeTracker.cs:231`，被 `Orchestration/DbContext.cs:183` 调用），所以拒绝发生在"发语句之前"而不是"发到一半"；链式侧不受影响，`InsertRange`/`Update.SplitTable` 照写。为什么是拒绝而不是定位到片：见 §3.6 与 §4.3 第 10 条末项（"跨座/跨片的一行由什么指认"那一格规格留白）
