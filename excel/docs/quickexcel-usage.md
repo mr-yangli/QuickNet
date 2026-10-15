@@ -24,7 +24,7 @@
 | 语言版本 | `preview`；`Nullable enable`、`ImplicitUsings enable` | `excel/Directory.Build.props` |
 | unsafe | `AllowUnsafeBlocks`（仅本体需要） | `QuickExcel.csproj` |
 | XML 文档 | `GenerateDocumentationFile true`，`NoWarn` 抑制 `CS1591` | `QuickExcel.csproj` |
-| NuGet 包 | 有：`QuickExcel` —— **安装主路径就靠它**（见 §1.2）。源上（nuget.org）截至 2026-10-14 最新是 `0.1.0-beta.1`；本仓库 props 已声明 `0.1.0-beta.3`、重打重发在即（版本串在此，作者/许可在仓库根 `Directory.Build.props`；运行期零依赖，csproj 只留 `PackageId`） | `excel/Directory.Build.props` + 根 `Directory.Build.props` |
+| NuGet 包 | 有：`QuickExcel` —— **安装主路径就靠它**（见 §1.2）。源上（nuget.org）截至 2026-10-15 最新是 `0.1.0-beta.4`，与本仓库 props 声明的那颗逐字相同（版本串在此，作者/许可在仓库根 `Directory.Build.props`；运行期零依赖，csproj 只留 `PackageId`） | `excel/Directory.Build.props` + 根 `Directory.Build.props` |
 
 子树根有独立的 `Directory.Build.props`（上面四颗公共设置上提于此；它再 `<Import>` 仓库根那一棵，那里放着四家共用的作者/许可/仓库地址）与 `Directory.Packages.props`（CPM：测试四件套与基准的 MiniExcel 版本钉在那里；src 零依赖不入账）。与 `sql/` 子树的差异是刻意的：这里**不开** `TreatWarningsAsErrors` 与 trim/AOT 分析器 —— QuickExcel 大量用反射与表达式树，过了那道闸门会当场红；两本账的边界见各自 props 头注。
 
@@ -34,7 +34,7 @@
 
 ```xml
 <ItemGroup>
-  <PackageReference Include="QuickExcel" Version="0.1.0-beta.1" />
+  <PackageReference Include="QuickExcel" Version="0.1.0-beta.4" />
 </ItemGroup>
 ```
 
@@ -44,7 +44,7 @@
 dotnet add package QuickExcel --prerelease
 ```
 
-版本口径以源上实读为准：截至 2026-10-14，nuget.org 上最新是 `0.1.0-beta.1`，本仓库 props 已声明 `0.1.0-beta.3`（重打重发在即）——**装包请填源上已有的那颗**，写一颗还没发布的版本还原会失败。另有一条打包纪律：每重打一次包升一颗 beta，同版本号不同内容的两颗包，消费方全局缓存里那颗会压住新打的。
+版本口径以源上实读为准：截至 2026-10-15，nuget.org 上最新是 `0.1.0-beta.4`，本仓库 props 声明的就是这一颗——**装包请填源上已有的那颗**，写一颗还没发布的版本还原会失败。另有一条打包纪律：每重打一次包升一颗 beta，同版本号不同内容的两颗包，消费方全局缓存里那颗会压住新打的。
 
 > **辅助路径（只有仓库内开发、贡献者、`tests`∶`samples` 才走）：源码 `ProjectReference`。** `<ProjectReference Include="..\..\excel\src\QuickExcel\QuickExcel.csproj" />`。`QuickExcel.csproj` 的 `InternalsVisibleTo` 只开一颗 `QuickExcel.Tests`；姊妹库 QuickWord / QuickPdf 各内置同构的 `TypeShape`/`SheetBuilder`/`DisplayFormatter` 副本，三库零互相引用——普通应用方请走上面的 NuGet 主路径，看到的都是全 `public` 门面，不必碰这些内部层。
 

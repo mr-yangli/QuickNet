@@ -22,14 +22,14 @@
 | --- | --- | --- |
 | TFM | `net10.0`；`LangVersion preview`、`Nullable enable`、`ImplicitUsings enable` | `word/Directory.Build.props` |
 | XML 文档 | `GenerateDocumentationFile` | `QuickWord.csproj` |
-| NuGet 包 | 有：`QuickWord` —— **安装主路径就靠它**（见下方 §1 安装段）。源上（nuget.org）截至 2026-10-14 最新是 `0.1.0-beta.1`；本仓库 props 已声明 `0.1.0-beta.3`、重打重发在即（版本串在此，作者/许可在仓库根 props；CPM 那份仍只钉测试四件套） | `word/Directory.Build.props` + 根 `Directory.Build.props` |
+| NuGet 包 | 有：`QuickWord` —— **安装主路径就靠它**（见下方 §1 安装段）。源上（nuget.org）截至 2026-10-15 最新是 `0.1.0-beta.4`，与本仓库 props 声明的那颗逐字相同（版本串在此，作者/许可在仓库根 props；CPM 那份仍只钉测试四件套） | `word/Directory.Build.props` + 根 `Directory.Build.props` |
 | 引用 | 无：`ProjectReference` / `PackageReference` 均无（纯 BCL） | `QuickWord.csproj` |
 
 **装 QuickWord 只有一条主路径：NuGet。** 包 ID 与工程名逐字相同，运行期零依赖（只用 BCL，不牵入 QuickExcel——它自带全套列特性 `[WordColumn]` 一族）。csproj 落一行：
 
 ```xml
 <ItemGroup>
-  <PackageReference Include="QuickWord" Version="0.1.0-beta.1" />
+  <PackageReference Include="QuickWord" Version="0.1.0-beta.4" />
 </ItemGroup>
 ```
 
@@ -39,7 +39,7 @@
 dotnet add package QuickWord --prerelease
 ```
 
-版本口径以源上实读为准：截至 2026-10-14，nuget.org 上最新是 `0.1.0-beta.1`，本仓库 props 已声明 `0.1.0-beta.3`（重打重发在即）——**装包请填源上已有的那颗**，写一颗还没发布的版本还原会失败。
+版本口径以源上实读为准：截至 2026-10-15，nuget.org 上最新是 `0.1.0-beta.4`，本仓库 props 声明的就是这一颗——**装包请填源上已有的那颗**，写一颗还没发布的版本还原会失败。
 
 > **辅助路径（只有仓库内开发、贡献者、`tests`∶`samples` 才走）：源码 `ProjectReference`。** `<ProjectReference Include="..\..\word\src\QuickWord\QuickWord.csproj" />`。普通消费者请用上面的 NuGet 主路径。
 

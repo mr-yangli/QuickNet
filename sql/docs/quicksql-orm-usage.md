@@ -44,18 +44,18 @@
 先立两条与版本口径有关的纪律，它们决定了装包命令怎么写：
 
 - **预发布档不进默认解析**：全家都是 `-beta.N` 系列，`dotnet add package` 必须带 `--prerelease`，或者在 `PackageReference` 里写死版本号——二选一，否则会报"找不到稳定版本"。
-- **每重打一次包升一颗 beta**（`sql/Directory.Build.props` 注释里那条纪律）：同版本号不同内容的两颗包，消费方全局缓存里那颗会压住新打的——还原照样绿，拿到的却是旧二进制。对版本以源上实读为准：截至 2026-10-14，nuget.org 上最新是 `0.39.0-beta.1`，本仓库 props 已声明 `0.39.0-beta.2`（未重打重发）。
+- **每重打一次包升一颗 beta**（`sql/Directory.Build.props` 注释里那条纪律）：同版本号不同内容的两颗包，消费方全局缓存里那颗会压住新打的——还原照样绿，拿到的却是旧二进制。对版本以源上实读为准：截至 2026-10-15，nuget.org 上最新是 `0.39.0-beta.15`，与本仓库 props 声明的那颗逐字相同。
 
 主路径的最小 csproj（SQL Server 为例，换库只把 provider 那颗换成目的库、驱动包跟着换）：
 
 ```xml
 <ItemGroup>
   <!-- ① 内核：QuickSqlOrm / DbContext / 查询与写链都在这颗里 -->
-  <PackageReference Include="QuickSql.Core" Version="0.39.0-beta.1" />
+  <PackageReference Include="QuickSql.Core" Version="0.39.0-beta.15" />
   <!-- ② provider：只装你真要连的那家（nuspec 把同版本的 Core 与血统基类包一起带进来） -->
-  <PackageReference Include="QuickSql.Providers.SqlServer" Version="0.39.0-beta.1" />
+  <PackageReference Include="QuickSql.Providers.SqlServer" Version="0.39.0-beta.15" />
   <!-- ③ 源生成器：普通包安装即挂进编译（包内走 analyzers/dotnet/cs，不用再手写 OutputItemType） -->
-  <PackageReference Include="QuickSql.Generators" Version="0.39.0-beta.1" />
+  <PackageReference Include="QuickSql.Generators" Version="0.39.0-beta.15" />
   <!-- ④ 驱动：provider 不带你自己的 ADO.NET 驱动，应用侧显式装（§1.4） -->
   <PackageReference Include="Microsoft.Data.SqlClient" Version="7.1.1" />
 </ItemGroup>
