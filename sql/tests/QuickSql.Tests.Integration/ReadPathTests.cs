@@ -1,4 +1,5 @@
 using QuickSql.Aop;
+using QuickSql.Metadata;
 using QuickSql.Query;
 using QuickSql.TestInfra;
 using Xunit;
@@ -885,5 +886,85 @@ public class ReadPathTests
         Assert.Equal(list.Count, summaries.Length);
         Assert.Equal(list.Select(o => o.Id), summaries.Select(s => s.Id));
         Assert.Equal(list.Select(o => o.Amount), summaries.Select(s => s.Amount));
+    }
+
+    /// <summary><c>Equals</c> 那一族在真库上的读数。离线那四条（<c>EqualsCallTests</c>）钉的是
+    /// "产出与同一个比较写成 <c>==</c> 时逐字节相同、参数值也逐颗相同"；<b>这一条补的是只有真驱动能证的
+    /// 那半截</b> —— 参数绑上去、库认这段文本、行真回来。重点是 <c>long</c> 与 <c>Guid</c> 两族的
+    /// <em>装箱形</em>：量是可空时 C# 绑到 <c>Object.Equals(object)</c>，树上多一层 <c>Convert(…, Object)</c>，
+    /// 而那一形正是消费侧 ABP 仓储里 <c>x.Id.Equals(id)</c> 报"为 <c>Object.Equals</c> 注册映射"的真红形状。
+    ///
+    /// <para><b>靶表是本用例自己建、自己删的</b>：一颗 <c>long</c> 自增键 + 一颗客户端给号的 <c>Guid</c> 列，
+    /// 两族各占一格。不借 <c>QuickSqlOrder</c> 那批种子行是够不着 —— 它的键是 <c>int</c>，
+    /// 而 <c>int</c> 列上写 <c>Equals(某个 long)</c> 恰好是<em>该拒</em>的那一格（本条末尾就判它）。</para></summary>
+    [Fact]
+    public async Task The_Equals_call_reads_back_the_same_rows_as_the_operator_on_the_real_driver()
+    {
+        Database.Ready();
+        Database.EnsureTable(typeof(EqualsProbeRow));
+
+        var ct = TestContext.Current.CancellationToken;
+
+        // 标签带一段本跑独有的后缀：这一格判的是 Single，上一跑崩在半路上留下的行会把它读成两行。
+        var tag = Database.Tag + "/eq-" + Guid.NewGuid().ToString("N")[..6];
+        var firstKey = Guid.NewGuid();
+        var secondKey = Guid.NewGuid();
+
+        var firstId = await Orm.Insert(new EqualsProbeRow { Key = firstKey, Tag = tag }).ExecuteIdentityAsync(ct);
+        var secondId = await Orm.Insert(new EqualsProbeRow { Key = secondKey, Tag = tag }).ExecuteIdentityAsync(ct);
+
+        Assert.NotEqual(firstId, secondId);
+
+        // long 那一族三形：本家的 long 量、可空装箱形、静态那颗 object.Equals(a, b)。
+        // 每形都与 == 那一形读到同一行 —— "同形"在真库上的意思就是这一句。
+        long? boxedId = firstId;
+
+        Assert.Equal(firstId, Assert.Single(await Probe(tag).Where(r => r.Id == firstId).ToListAsync(ct)).Id);
+        Assert.Equal(firstId, Assert.Single(await Probe(tag).Where(r => r.Id.Equals(firstId)).ToListAsync(ct)).Id);
+        Assert.Equal(firstId, Assert.Single(await Probe(tag).Where(r => r.Id.Equals(boxedId)).ToListAsync(ct)).Id);
+        Assert.Equal(firstId, Assert.Single(await Probe(tag).Where(r => object.Equals(r.Id, firstId)).ToListAsync(ct)).Id);
+
+        // Guid 那一族同两形（可空那一形 C# 绑的也是 Object.Equals）。
+        Guid? boxedKey = secondKey;
+
+        Assert.Equal(secondKey, Assert.Single(await Probe(tag).Where(r => r.Key == secondKey).ToListAsync(ct)).Key);
+        Assert.Equal(secondKey, Assert.Single(await Probe(tag).Where(r => r.Key.Equals(secondKey)).ToListAsync(ct)).Key);
+        Assert.Equal(secondKey, Assert.Single(await Probe(tag).Where(r => r.Key.Equals(boxedKey)).ToListAsync(ct)).Key);
+
+        // 它真的在过滤，不是"恒真所以碰巧读回一行"：另一颗键读回的是<em>那一行</em>，
+        // 而两颗键之和（比这张表上两行都大）读回 0 行，表外那颗 Guid 也读回 0 行。
+        // 那颗 Guid 必须先落到局部再进 lambda：<c>Guid.NewGuid()</c> 写在谓词里会被当成"要翻成库函数"
+        // 的那一类方法调用（翻译器不替调用方求值），与本条要判的事无关。
+        var outside = Guid.NewGuid();
+
+        Assert.Equal(secondId, Assert.Single(await Probe(tag).Where(r => r.Id.Equals(secondId)).ToListAsync(ct)).Id);
+        Assert.Empty(await Probe(tag).Where(r => r.Id.Equals(firstId + secondId)).ToListAsync(ct));
+        Assert.Empty(await Probe(tag).Where(r => r.Key.Equals(outside)).ToListAsync(ct));
+
+        // 型不配那一格在真库这一侧同样拒（翻译发生在客户端，与哪一家无关）：CLR 上装进 object 的 int
+        // 与 Guid 列永不相等，照 = 发射就是把"一行都不该中"翻成"值相同就中"。
+        // <b>这一形只能是两型之间没有隐式转换的那一种</b>（Guid ∶ int、string ∶ long）：把 int 量写在
+        // long 列的 Equals 上时 C# 自己就提升到 Int64.Equals(long) 了，树上根本没有装箱那一层，也就到不了这一格。
+        var narrow = (int) firstId;
+
+        Assert.Contains("Guid ∶ Int32", Assert.Throws<UntranslatableExpressionException>(
+            () => Probe(tag).Where(r => r.Key.Equals(narrow)).ToSql()).Message, StringComparison.Ordinal);
+
+        Assert.Equal(2, await Orm.Delete<EqualsProbeRow>().Where(r => r.Tag == tag).ExecuteAffrowsAsync(ct));
+    }
+
+    static IQuery<EqualsProbeRow> Probe(string tag) => Orm.Select<EqualsProbeRow>().Where(r => r.Tag == tag);
+
+    /// <summary>靶实体：一颗 <c>long</c> 自增键 + 一颗客户端给号的 <c>Guid</c> 列。两族挤在同一张表上，
+    /// 为的是"在真库上建一张表"这笔成本只付一次，而这两格恰好是消费侧点名要的那两族。</summary>
+    [Table("QuickSqlEqualsProbeRow")]
+    public sealed class EqualsProbeRow
+    {
+        public long Id { get; set; }
+
+        public Guid Key { get; set; }
+
+        [Column(Length = 32)]
+        public string? Tag { get; set; }
     }
 }

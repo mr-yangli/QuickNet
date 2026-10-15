@@ -531,7 +531,7 @@ var q = orm.Select<Order>()
     .Select(o => new OrderSummary(o.Id, o.CustomerName, o.Amount));
 ```
 
-- 谓词/投影/排序：`Where`（可多条，左到右折成一个 AND 链）、`OrderBy`/`OrderByDescending`/`ThenBy`/`ThenByDescending`、`Select<TResult>`（实体、匿名、构造器 DTO 三种）
+- 谓词/投影/排序：`Where`（可多条，左到右折成一个 AND 链）、`OrderBy`/`OrderByDescending`/`ThenBy`/`ThenByDescending`、`Select<TResult>`（实体、匿名、构造器 DTO 三种）；谓词里 `x.Id.Equals(id)` 与 `object.Equals(x, y)` 与 `==` 同形落 `=`（ABP 那一类仓储的常态写法：`Id` 是 `long`/`Guid` 时 C# 绑的是 `Int64.Equals` 或 `Object.Equals`，v0.39 起每一族都认，产出与参数值都和写成 `==` 时逐字相同）。**但只认两侧同型的那一种**：`int` 列 `.Equals(某个 long)` 在 CLR 上恒为 false，库照 `=` 发射就是把「一行都不该中」翻成「值相同就中」，所以它拒并说明该改哪；要按值比就写 `==` 让编译器做提升。带 `StringComparison` 或自定义比较器的那一颗同样拒（大小写口径各家不同，不替你换规则）
 - 分页：`Skip`/`Take`，或一次到位 `ToPagedAsync(int page, int size, PagedOptions? = null, CancellationToken)` → `PagedResult<T> { Items, Page, Size, Total, HasNext, TotalPages }`；计数控件是 `PagedOptions(CountMethod CountMethod = Auto, bool StripOrderingForCount = true, string? CacheKey = null)`，`CountMethod` 五值 `Auto`/`CountStar`/`CountOverWindow`/`SkipTotal`/`SeparateTransaction` —— 后两档里 `CountOverWindow` 与 `SeparateTransaction` 今天**直接抛**（§4.3 第 4 条那格），可点的只有前三颗
 - 联表：arity 递增的 `LeftJoin<T2>(on)` / `InnerJoin<T2>(on)`，形参按 FROM 位置解析，产出 `IQuery<T1, T2>`（再到 `IQuery<T1, T2, T3>`），其后 `Select((a, b) => ...)`
 - 导航：`Include<TProp>` 与它那一条链上的 `ThenInclude<TProp>`（每层一张 `LEFT JOIN`）、`IncludeMany<TDetail>`（v0.39 第三笔起可以再往<em>下一层</em>挂：`ThenIncludeMany<TProp>`；第四笔起同一层<em>旁边</em>还能挂一根引用：`ThenInclude<TProp>` —— 两颗都见下面"集合导航可以一层一层挂上去"那一格）、`AsSplitQuery(int navigateBatchSize = 20)`；**另加 v0.39 起"不点名也带"的那一档** —— 在谓词 / 投影 / 排序键里读到一条**引用**导航的**成员**，库按契约自动补 `LEFT JOIN`，不用 `Include`、也不用自己写 `LeftJoin`（下面那一格）

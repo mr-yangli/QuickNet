@@ -516,8 +516,21 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
             case "op_Equality" when node.Arguments.Count == 2:
                 return Binary(Expression.MakeBinary(ExpressionType.Equal, node.Arguments[0], node.Arguments[1]), scope, hint);
 
-            case "Equals" when node.Arguments.Count == 1 && declaring == typeof(string):
-                return new SqlBinaryExpression(BinaryOperator.Equal, Visit(node.Object!, scope, hint), Visit(node.Arguments[0], scope, hint));
+            // 带"相等规则"的那一颗（StringComparison / 某个比较器）先拒掉，理由与上面 Contains 那条同一条口径：
+            // 规则下推不到库里，而照默认语义发射等于把调用方显式指定的相等规则偷偷换掉（§5.8）。
+            case "Equals" when HasEqualityRuleArgument(node):
+                throw new UntranslatableExpressionException(node.ToString(),
+                    "带 StringComparison / IEqualityComparer 的相等规则下推不到库里：各家 COLLATE 与大小写口径不同，" +
+                    "照默认语义发射就是把调用方指定的规则偷偷换掉。要比大小写不敏感就两侧都写 ToLower()/ToUpper()，" +
+                    "或先 ToList()/ToListAsync() 落到内存再比。");
+
+            // 值相等那一族：`x.Equals(y)`（实例）与 `object.Equals(x, y)` / `string.Equals(x, y)`（静态）。
+            // 原先这一支只认 declaring == typeof(string)，于是 ABP 那类仓储里的常态写法 `x.Id.Equals(id)`
+            // 整族落到"为 Object.Equals 注册映射"那句上（Id 是 long/Guid 时 C# 绑到 Int64.Equals(long) 或
+            // Object.Equals(object)，量那一侧还多一层装箱 Convert）—— 那句话还指错了地方：缺的不是方言模板，
+            // `=` 就是它的落点（实测十八格形状见 ValueEquality 那条注释）。
+            case "Equals" when TryValueEquality(node, out var equalsLeft, out var equalsRight):
+                return ValueEquality(node, equalsLeft, equalsRight, scope, hint);
 
             case "IsNullOrEmpty" when declaring == typeof(string) && node.Arguments.Count == 1:
             {
@@ -560,6 +573,80 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
         throw new UntranslatableExpressionException(node.ToString(),
             $"为 {declaring?.Name}.{node.Method.Name} 注册映射：provider.Expressions.Register(\"{MethodKey(node.Method)}\", new FunctionMapping(\"模板\"))；不想注册就先 ToList()/ToListAsync() 落到内存再调这个方法");
     }
+
+    /// <summary>这一颗 <c>Equals</c> 的实参里带不带"相等规则"（<see cref="StringComparison"/> 或某个比较器）。
+    /// 按实参的型判而不是按 <c>GetParameters()</c>：省一次反射分配，而这两个型只可能从规则实参上冒出来。</summary>
+    static bool HasEqualityRuleArgument(MethodCallExpression node)
+    {
+        foreach (var argument in node.Arguments)
+            if (argument.Type == typeof(StringComparison) || typeof(IEqualityComparer).IsAssignableFrom(argument.Type))
+                return true;
+
+        return false;
+    }
+
+    /// <summary>把 <c>Equals</c> 认成"两侧各一个值"的形状：实例一元（<c>x.Equals(y)</c>），
+    /// 或 <c>object</c>/<c>string</c> 上那颗静态二元（<c>object.Equals(x, y)</c>）。
+    /// 认不出就回 <see langword="false"/>，让 <see cref="Call"/> 末尾那句"为 … 注册映射"照旧开口 ——
+    /// 例如 <c>EqualityComparer&lt;T&gt;.Default.Equals(a, b)</c>（实例二元）就落在那一头。</summary>
+    static bool TryValueEquality(MethodCallExpression node, out Expression left, out Expression right)
+    {
+        if (node.Object is { } receiver && node.Arguments.Count == 1)
+        {
+            left = receiver;
+            right = node.Arguments[0];
+            return true;
+        }
+
+        if (node.Object is null && node.Arguments.Count == 2
+            && node.Method.DeclaringType is { } declaring
+            && (declaring == typeof(object) || declaring == typeof(string)))
+        {
+            left = node.Arguments[0];
+            right = node.Arguments[1];
+            return true;
+        }
+
+        left = right = null!;
+        return false;
+    }
+
+    /// <summary>值相等落 <c>=</c>。<b>两侧同型这一问在这里比 <c>==</c> 那条路严一档，而这一严是有账的</b>：
+    /// <c>==</c> 上有编译器替调用方做好的提升（<c>int</c> 列 == <c>long</c> 量在树上已经是一层 <c>Convert</c>），
+    /// <c>Equals</c> 上没有 —— 装进 <c>object</c> 的两个值<em>只有同型才相等</em>，所以
+    /// <c>intCol.Equals(someLong)</c> 在 CLR 上恒为 false（实测 <c>Int32.Equals(Convert(lid, Object))</c> 那一格），
+    /// 照 <c>=</c> 发射就把它翻成"值相同就中"。整型加宽与 <c>enum</c>↔底层型这两条在 <c>==</c> 那一格是豁免
+    /// （<see cref="RepresentationOnly"/>），在这一格必须拒。
+    ///
+    /// <para><b>它故意不走 <see cref="Binary"/> 那条路</b>：那一条会把 <c>== null</c> 折成 <c>IS NULL</c>，
+    /// 而 CLR 上 <c>x.Equals(null)</c> 恒为 false（<c>Nullable&lt;T&gt;.Equals(null)</c> 也是 false），
+    /// <c>col = @p</c>（<c>@p</c> 为 NULL）在库里是未知、行被滤掉，与 false 同值 —— 折成 <c>IS NULL</c> 反而是错的。
+    /// 顺带记一格反向的差异：<c>x.Equals(y)</c> 在 <c>x</c> 为 null 时 CLR 抛 <c>NullReferenceException</c>，
+    /// 而库里那一行只是不中；这一格上库比 CLR 宽，与今天 <c>string.Equals</c> 那一支的行为逐字相同。</para></summary>
+    SqlExpression ValueEquality(MethodCallExpression node, Expression left, Expression right, Scope scope, ColumnContract? hint)
+    {
+        var leftType = ComparedType(left);
+        var rightType = ComparedType(right);
+
+        if (leftType is not null && rightType is not null
+            && (Nullable.GetUnderlyingType(leftType) ?? leftType) != (Nullable.GetUnderlyingType(rightType) ?? rightType))
+            throw new UntranslatableExpressionException(node.ToString(),
+                $"Equals 的两侧不同型（{leftType.Name} ∶ {rightType.Name}），而 CLR 上这一句恒为 false —— " +
+                "装进 object 的两个值只有同型才相等，照 = 发射会把一行都不该中翻成值相同就中。" +
+                "要按值比就写 ==（让编译器去做提升），或把量转成列的那一型。");
+
+        return new SqlBinaryExpression(BinaryOperator.Equal, Visit(left, scope, hint), Visit(right, scope, hint));
+    }
+
+    /// <summary>参与"同型"那一问的型：剥掉装箱（<c>Convert(x, object)</c>，C# 在 <c>Equals(object)</c> 上总会补一层）；
+    /// 空常量回 <see langword="null"/>，表示它不参与这一问（<see cref="ValueEquality"/> 里那句账）。</summary>
+    static Type? ComparedType(Expression node) => node switch
+    {
+        ConstantExpression { Value: null } => null,
+        UnaryExpression { NodeType: ExpressionType.Convert or ExpressionType.ConvertChecked } box when box.Type == typeof(object)
+            => ComparedType(box.Operand),
+        _ => node.Type,
+    };
 
     static IEnumerable AsEnumerable(object? value, Expression node)
         => value as IEnumerable ?? throw new UntranslatableExpressionException(node.ToString(), "IN 的集合必须是可求值的集合常量");
