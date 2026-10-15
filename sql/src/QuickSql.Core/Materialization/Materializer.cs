@@ -463,10 +463,13 @@ public static class Materializer
         }
         else
         {
-            var defaultCtor = projection.ResultType.GetConstructor(Type.EmptyTypes);
+            // 无参那一颗不问可见性（同一颗判据，见 MemberAccessors.ParameterlessConstructor）；
+            // 上面 ViaConstructor 那一臂照旧只认公共构造器 —— 参数表是协议，那一族不改
+            var defaultCtor = MemberAccessors.ParameterlessConstructor(projection.ResultType);
 
             if (defaultCtor is null && !projection.ResultType.IsValueType)
-                throw new QuickSqlException($"类型 {projection.ResultType.Name} 需要无参构造器才能用成员初始化投影");
+                throw new QuickSqlException(
+                    $"类型 {projection.ResultType.Name} 没有无参构造器，不能用成员初始化投影（公共与非公共都查过）");
 
             // struct 那一侧反射通常拿不到"无参构造器"这颗（record struct 与不写构造器的 struct 都没有可查的
             // 那一个），而 C# 的 `new S { X = … }` 合法 —— 表达式树用无 ctor 的 New 就是 initobj，

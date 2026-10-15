@@ -157,11 +157,30 @@ public sealed class SessionTransactionPathTests
 
         Assert.Single(seen);
 
-        // 第二条连接问同一个问题：还没提交就一行都不许有。这一问要 MVCC，本家没有
+        transaction.Commit();
+
+        // 收口之后，第二条连接读到的就是那一行（这一问各家都给，不需要快照读法）
+        Assert.Equal(1, StoredRows(board));
+    }
+
+    /// <summary>「第二条连接在事务进行中都读不到」这一问法要的是快照读法：SQLite 没有 MVCC
+    /// （写事务占住整库），SQL Server 默认 READ COMMITTED 不开 RCSI —— 两家的读数都是<em>锁等待</em>
+    /// 而不是"看不见"，把等超时当成判据就是本层拒绝的那一种红（§13.4：连不上与量不到要能被看出来）。
+    /// 所以这一颗钉在两家能答的上面，另两家带着理由跳。</summary>
+    [Fact]
+    public async Task A_second_connection_cannot_read_the_uncommitted_write_of_the_pinned_transaction()
+    {
         Assert.SkipWhen(
-            Database.Family == Database.Target.Sqlite,
-            "写事务占住整库，旁路连接不是读不到未提交的那一份而是等到 busy timeout——"
-                + "「第二条连接看不见」这一问法在 SQLite 上不可用");
+            Database.Family is not (Database.Target.PostgreSql or Database.Target.MySql),
+            "这一问要快照读法：SQLite 无 MVCC、SQL Server 默认 READ COMMITTED 不开 RCSI，两家的读数都是锁等待");
+
+        var orm = await NewStoreAsync();
+        var board = NewBoard();
+
+        using var transaction = await PinFromChildFrameAsync(orm);
+
+        await orm.Insert(new SessionRow { Id = Guid.NewGuid(), Board = board, Label = "壬" })
+            .ExecuteAffrowsAsync(ct);
 
         Assert.Equal(0, StoredRows(board));
 
@@ -214,11 +233,10 @@ public sealed class SessionTransactionPathTests
             await orm.Insert(new SessionRow { Id = Guid.NewGuid(), Board = pinnedBoard, Label = "丁" })
                 .ExecuteAffrowsAsync(ct);
 
-            // 另一只实例（另一套会话）说的不是同一场事务
+            // 另一只实例（另一套会话）说的不是同一场事务：这句写在 orm1 那场事务还开着的时候
+            // 就已经自己落库了（下面"回滚之后它的行还在"就是这一格的读数）
             await other.Insert(new SessionRow { Id = Guid.NewGuid(), Board = board, Label = "戊" })
                 .ExecuteAffrowsAsync(ct);
-
-            Assert.Equal(1, StoredRows(board));
 
             transaction.Rollback();
         }

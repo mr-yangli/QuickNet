@@ -75,8 +75,11 @@ static class EntityFactsBuilder
         if (entity.BaseType is { SpecialType: not SpecialType.System_Object })
             return Blocked(outcome, at, "有基类：继承来的属性列序与反射侧的 MetadataToken 序对不齐");
 
+        // G1 的门槛留在公共这一格：生成的那一行是字面的 `new T()`，非公共的无参构造在生成侧编不出来
+        // （而 G2 反射侧认非公共，见 MemberAccessors.ParameterlessConstructor）——
+        // 所以这条挡住的是"少一份编译期事实册"，不是"这颗实体不能物化"，措辞按这个分寸写
         if (!entity.InstanceConstructors.Any(static c => c.Parameters.IsEmpty && c.DeclaredAccessibility == Accessibility.Public))
-            return Blocked(outcome, at, "没有公共无参构造器，无法物化");
+            return Blocked(outcome, at, "无参构造器不是公共的，`new T()` 在生成侧编不出来");
 
         var table = Find(attributes, QuickSqlTable);
         var dataTable = Find(attributes, DataSchemaTable);

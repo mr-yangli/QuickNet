@@ -24,7 +24,9 @@ namespace QuickSql.Materialization;
 /// 而<b>一颗属性都没对上时抛</b> —— 整行全默认值的对象是一句"看起来完全合理"的空壳，
 /// 与 §5.8 禁静默退化同一条判据。</para>
 ///
-/// <para>形状要求是「公共无参构造 + 公共可写属性」。<b>构造器 DTO 与 record 不支持</b>：
+/// <para>形状要求是「无参构造 + 公共可写属性」——无参那一颗<b>不问可见性</b>
+/// （判据与两条实测边界见 <see cref="MemberAccessors.ParameterlessConstructor"/>），
+/// 属性那一颗仍然要公共可写，因为这一口的落点就是往里填。<b>构造器 DTO 与 record 不支持</b>：
 /// 它们的参数顺序在这一口里没有对应物（列序由 SQL 决定），低层口
 /// <c>AdoExecutor.QueryAsync&lt;T&gt;(DialectSql, Func&lt;DbDataReader, T&gt;, …)</c> 才是那种形状的落点 ——
 /// 自己给委托，那里什么形状都装得下。</para></summary>
@@ -73,15 +75,15 @@ public static class RawRowReader
         readonly Action<object, object?>[] setters;
         readonly Func<T> factory;
 
-        [RequiresUnreferencedCode("按运行期类型找公共无参构造与公共可写属性。")]
+        [RequiresUnreferencedCode("按运行期类型找无参构造与公共可写属性。")]
         [RequiresDynamicCode("把构造与属性读写编译成委托。")]
         public Plan()
         {
             var type = typeof(T);
 
-            var constructor = type.GetConstructor(Type.EmptyTypes)
+            var constructor = MemberAccessors.ParameterlessConstructor(type)
                 ?? throw new QuickSqlException(
-                    $"{type.Name} 没有公共无参构造：原生 SQL 的行出口只能装配「无参构造 + 可写属性」的形状。" +
+                    $"{type.Name} 没有无参构造（公共与内部、受保护、私有都查过）：原生 SQL 的行出口只能装配「无参构造 + 可写属性」的形状。" +
                     "构造器 DTO 与 record 请走低层口自己给 Func<DbDataReader, T>（列序由 SQL 决定，参数顺序在这里没有对应物）。");
 
             var properties = type.GetProperties(BindingFlags.Public | BindingFlags.Instance)
@@ -169,7 +171,7 @@ public static class RawRowReader
     /// 多加一颗 <c>byte[]</c>（原生 SQL 常直接选 <c>VARBINARY</c>/<c>BLOB</c> 列，而实体侧不认它是因为
     /// 实体属性到列名的映射另有渠道，不是这里也要跟着挡）。
     /// 落在这族之外的一律走对象装配那一条，于是 <c>struct</c> 里那种"三个字段"的形状会撞在
-    /// 「没有公共无参构造/没有可写属性」那句可读的报错上，而不是被当成标量去 <c>Convert.ChangeType</c>。</summary>
+    /// 「没有无参构造/没有可写属性」那句可读的报错上，而不是被当成标量去 <c>Convert.ChangeType</c>。</summary>
     static bool IsColumnShape(Type type)
         => type.IsPrimitive
            || type.IsEnum

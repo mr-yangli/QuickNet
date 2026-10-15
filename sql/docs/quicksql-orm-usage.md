@@ -218,6 +218,15 @@ DataAnnotations 同样认（`[Key]`、`[Required]`、`[StringLength]`、`Schema.
 
 约定的那一层：整型主键 `Id` ⇒ 主键 + 自增；C# 可空 ⇒ 可空列；无长度字符串 ⇒ provider 默认（SQL Server 落 `NVARCHAR(MAX)`）。导航属性不成列。
 
+- **无参构造器不问可见性**：物化装配用的那一颗，公共查不到就退到内部/受保护/私有
+  （`MemberAccessors.ParameterlessConstructor`，四处消费点共用：G2 的实例工厂、G2 的行读取器、原生 SQL 的行出口、
+  成员初始化投影）。这一族的来头是 ABP/DDD 的 `protected X()` + 有参创建构造器——把可见性当门槛得到的不是"更安全"，
+  是整颗实体读写两侧一起拒（实测：`Insert` 与 `Select` 响同一句话）。**带参的那一颗不在这一格**：
+  构造器 DTO 与 record 走 `ViaConstructor` 那一臂，仍只认公共构造器，因为参数表是给人对位的协议。
+  两条实测边界：`Activator.CreateInstance<T>()` 对非公共无参构造抛 `MissingMethodException`（它要 `new()` 那一档），
+  `RuntimeHelpers.GetUninitializedObject` 出得来实例但**不跑构造器也不跑字段初始化器**（`= []` 那一格会留 null），
+  所以走 `Expression.New(非公共 ctor).Compile()`。G1 生成侧的门槛留在公共（生成的是字面 `new T()`，非公共编不出来），
+  被挡下时那条 QuickSql003 说的是"少一份编译期事实册"，不是"不能物化"。
 - **没有写口的成员既不是列也不是关系**：`public bool NeedsGrading => Type == …` 这一形有公共 getter、类型又可映射，
   旧那一版因此把它收进契约当一列；而<em>读取器</em>建到它就 `Expression.Assign` 不起
   （<c>ArgumentException: Expression must be writeable</c>），症状不是"这一列读不出来"而是整个列表接口 500，

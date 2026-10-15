@@ -22,8 +22,10 @@ public sealed class ReflectionEntitySchema<T> : IEntityTypeSchema<T> where T : c
     {
         Contract = contract;
 
-        var ctor = typeof(T).GetConstructor(Type.EmptyTypes)
-                   ?? throw new QuickSqlException($"实体 {typeof(T).Name} 需要无参构造器才能被物化");
+        // 无参构造不问可见性（ABP/DDD 的 protected X() 那一族），判据与出处见 MemberAccessors
+        var ctor = MemberAccessors.ParameterlessConstructor(typeof(T))
+                   ?? throw new QuickSqlException(
+                       $"实体 {typeof(T).Name} 没有无参构造器，无法物化（公共与内部、受保护、私有都查过）");
 
         _factory = Expression.Lambda<Func<T>>(Expression.New(ctor)).Compile();
         _setters = new Action<T, object?>[contract.Columns.Length];
@@ -75,7 +77,13 @@ public sealed class ReflectionEntitySchema<T> : IEntityTypeSchema<T> where T : c
         var read = typeof(ValueConverter).GetMethod(nameof(ValueConverter.Read),
             BindingFlags.Public | BindingFlags.Static, null, [typeof(DbDataReader), typeof(int)], null)!;
         var entity = Expression.Variable(typeof(T), "e");
-        var body = new List<Expression> { Expression.Assign(entity, Expression.New(typeof(T).GetConstructor(Type.EmptyTypes)!)) };
+        // 无参构造与上面那颗工厂同源（可见性不问），这里以前是 `!` 硬截——真没有就 NRE，
+        // 而同一个缺口的两半不该一半抛得准、一半抛得莫名其妙
+        var entityCtor = MemberAccessors.ParameterlessConstructor(typeof(T))
+            ?? throw new QuickSqlException(
+                $"实体 {typeof(T).Name} 没有无参构造器，无法物化（公共与内部、受保护、私有都查过）");
+
+        var body = new List<Expression> { Expression.Assign(entity, Expression.New(entityCtor)) };
 
         for (var i = 0; i < contract.Columns.Length; i++)
         {

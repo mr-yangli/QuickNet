@@ -1,5 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Linq.Expressions;
+using System.Reflection;
 using QuickSql.Tracking;
 
 namespace QuickSql.Materialization;
@@ -198,10 +199,36 @@ public static class MemberAccessors
     /// <summary>按类型建一只实例（用它的无参构造器），编译期就把 <c>Activator</c> 那次查找换成一次 new。</summary>
     static Func<object> New(Type type)
     {
-        var body = Expression.Convert(Expression.New(type), typeof(object));
+        var ctor = ParameterlessConstructor(type)
+                   ?? throw new QuickSqlException(
+                       $"{type.Name} 没有无参构造器，装配不出实例（公共与内部、受保护、私有都查过）。");
+
+        var body = Expression.Convert(Expression.New(ctor), typeof(object));
 
         return Expression.Lambda<Func<object>>(body).Compile();
     }
+
+    /// <summary>无参构造器：<b>装配用的那一颗，不问可见性</b>——公共查不到就退到内部/受保护/私有。
+    /// <para>为什么这一格可以不问：物化要的形状是「造得出一个空壳、字段初始化器已就位」，
+    /// 而 ABP/DDD 的实体恰恰是 <c>protected X()</c> + 有参创建构造器那一族——把可见性当门槛，
+    /// 得到的不是"更安全"，是整颗实体读写两侧一起拒（实测：INSERT 与 SELECT 响同一句话）。</para>
+    /// <para><b>带参的那一颗不在这一格</b>：构造器 DTO 与 record 走的是 <c>Materializer</c> 里
+    /// <c>ViaConstructor</c> 那一臂，仍只认公共构造器——参数表是给人对位的协议，
+    /// 把私有构造器当协议会在别人改内部实现时悄悄换掉装配形状，而那一族本来就该有公共构造器。</para>
+    /// <para>两条实测边界记在这里，免得有人拿错工具：<c>Activator.CreateInstance&lt;T&gt;()</c> 对非公共无参构造
+    /// <b>抛</b> <c>MissingMethodException</c>（它要的是 <c>new()</c> 那一档）；
+    /// <c>RuntimeHelpers.GetUninitializedObject</c> 能出实例但<b>不跑构造器也不跑字段初始化器</b>，
+    /// 于是 <c>Xxx { get; set; } = [];</c> 那一格留 null——正是集合导航最怕的形状。
+    /// <c>Expression.New(非公共 ctor).Compile()</c> 两样都对，所以走这一条。</para></summary>
+    // TEMP 反探针：把可见性门槛装回去，看新用例是否真的守着这一格
+    public static ConstructorInfo? ParameterlessConstructor(Type type)
+        => type.GetConstructor(Type.EmptyTypes)
+           ?? type.GetConstructor(
+               BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+               binder: null,
+               types: Type.EmptyTypes,
+               modifiers: null
+           );
 
     /// <summary>集合导航的四把委托，挂在节点计划上：每行只调用、不反射。</summary>
     [RequiresUnreferencedCode("按运行期类型与成员名定位集合属性。")]

@@ -102,14 +102,32 @@ public sealed class DtoShapeTests
         Assert.Equal(0.25m, value.Amount);
     }
 
-    /// <summary>反向的那一半：class 仍然**必须**有可查到的无参构造器。放宽到值类型时如果把这条一起放宽，
-    /// "成员初始化投影"就会在 <c>Expression.New</c> 里抛一句说不清的 ArgumentException。</summary>
+    /// <summary>反向的那一半：class 仍然**必须**有无参构造器 —— 今天放宽的是它的<em>可见性</em>，
+    /// 不是"要不要存在"。放宽到值类型时如果把这条一起放宽，"成员初始化投影"就会在
+    /// <c>Expression.New</c> 里抛一句说不清的 ArgumentException。</summary>
     [Fact]
     public void A_class_without_a_parameterless_constructor_still_rejects_member_init_projection()
     {
         var exception = Assert.Throws<QuickSqlException>(() => First<CtorOnlyClass>(viaConstructor: false));
 
-        Assert.Contains("需要无参构造器", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("没有无参构造器", exception.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>无参构造器不必是公共的：ABP/DDD 的 <c>private X()</c> ∶ <c>protected X()</c> 那一族
+    /// 也要能装配。<b>而字段初始化器必须跟着跑</b> —— 换成
+    /// <c>RuntimeHelpers.GetUninitializedObject</c> 这一样能出实例、却把 <c>= ["…"]</c> 那一格留成 null，
+    /// 症状是"集合导航一条都不缝"而不是报错，所以这一枚把两条一起钉住。</summary>
+    [Fact]
+    public void A_class_with_a_non_public_parameterless_constructor_assembles_by_member_init()
+    {
+        var value = First<PrivateSeedClass>(viaConstructor: false);
+
+        Assert.Equal(1, value.Id);
+        Assert.Equal("city-a", value.City);
+        Assert.Equal(0.25m, value.Amount);
+
+        // 构造器跑过的证据：初始化器给的种子值在场，且集合可追加
+        Assert.Equal(["初始化器跑过"], value.Tags);
     }
 
     // ---------- 物化层：struct 到底省不省 ----------
@@ -278,6 +296,24 @@ public sealed class CtorOnlyClass(int id, string? city, decimal amount)
     public int Id { get; } = id;
     public string? City { get; } = city;
     public decimal Amount { get; } = amount;
+}
+
+/// <summary>ABP/DDD 那一族：创建走工厂，无参构造只有自己能看见。</summary>
+public sealed class PrivateSeedClass
+{
+    public int Id { get; set; }
+
+    public string? City { get; set; }
+
+    public decimal Amount { get; set; }
+
+    public List<string> Tags { get; set; } = ["初始化器跑过"];
+
+    private PrivateSeedClass()
+    {
+    }
+
+    public static PrivateSeedClass Create() => new();
 }
 
 public record struct RecStructPos(int Id, string? City, decimal Amount);
