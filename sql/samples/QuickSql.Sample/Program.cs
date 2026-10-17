@@ -1357,6 +1357,41 @@ Console.WriteLine("═══ 示例完成 ═══");
 // 上面 §13 用的是直给形状（new QuickSqlOrm(new QuickSqlOrmOptions { Replicas = …, Clusters = … })），
 // 与 DI 那两格是同一份输入：AddQuickSqlOrm 的 builder 上就是这两颗公开属性。
 
+// ── 18. 排序键是前端那一整串：OrderBy("CustomerId desc, Id") ──────────────
+//
+// 链上那颗按名字的口收的是运行期才知道的一段文本：逗号分颗，每一颗可以自带方向词 asc / desc。
+// 句子对不对归方言册钉，这里只演示三件在示例里读得出来的事：同一串与逐颗接链交回同一串行、
+// 那颗 bool 只是"串里没点方向的那些颗"的方向、以及认不出的一颗照样响而不是退成"少一颗 ORDER BY"。
+// 行序的比较一律落在 Id / CustomerId 这两颗数值列上（本家的定点列落 TEXT 载体，金额按字典序排）。
+Console.WriteLine();
+Console.WriteLine("── 18. 按名字排序：一颗口吃下前端那一整串 ──");
+
+const string sorting = "CustomerId desc, Id";   // HTTP 查询串上原样过来的那一形
+
+var byName = await orm.Select<Order>().OrderBy(sorting).ToListAsync();
+var byCall = await orm.Select<Order>().OrderByDescending(o => o.CustomerId).ThenBy(o => o.Id).ToListAsync();
+
+Console.WriteLine($"  发出的句子：{Head(orm.Select<Order>().OrderBy(sorting).ToSql(), 130)}");
+Console.WriteLine($"  同一串与逐颗接链行序一致：{byName.Select(o => o.Id).SequenceEqual(byCall.Select(o => o.Id))}（应=True）");
+
+// 形参当缺省方向：串里写了 DESC 的那一颗以串为准，没写的那一颗吃形参。
+Console.WriteLine($"  Amount 写了 asc 而形参给 true：{Head(orm.Select<Order>().OrderBy("Amount asc", true).ToSql(), 130)}");
+
+// 半串认得出、半串认不出也照样响：排序键错了在页面上只读得出"顺序不对"，所以它必须在这里响。
+string refusal;
+
+try
+{
+    _ = orm.Select<Order>().OrderBy("Id, 不存在的列 desc").ToSql();
+    refusal = "（没响——不该出现）";
+}
+catch (QuickSqlException failure)
+{
+    refusal = failure.Message;
+}
+
+Console.WriteLine($"  认不出那一颗：{Head(refusal, 120)}");
+
 static bool HasTable(string file, string table)
 {
     // 问库而不是问被测的那条路由：这一格的裁判要是"路由说它落在 report"，那它说什么都是绿。

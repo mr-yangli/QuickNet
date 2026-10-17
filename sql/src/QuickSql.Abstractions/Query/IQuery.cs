@@ -81,18 +81,21 @@ public interface IQuery<T> : IAsyncEnumerable<T>
 
     IOrderedQuery<T> OrderByDescending<TKey>(Expression<Func<T, TKey>> key);
 
-    /// <summary>按<b>成员名</b>排序 —— 给"排序键是运行期才知道的一个字符串"的调用方（页面表头点了哪一列、
-    /// 导出任务挑的排序字段）。<b>它不是 <c>ORDER BY</c> 片段的入口</b>：那颗字符串只拿去<em>认列</em>
-    /// （先属性名、再列名、最后大小写不敏感的唯一命中），认出来发的是契约里那一颗列加方言引号，
-    /// 认不出当场抛。<b>没有"原样拼进去"的退路，所以这一格不需要黑名单</b>：黑名单会漏，而这一条路上
-    /// "用户文本进 SQL"这件事没有对应的代码路径 —— 从外部来的排序键写错时症状是<em>页面顺序不对</em>，
-    /// 没人会为此报修，所以它只能响，不能猜。
-    /// 方向由 <paramref name="descending"/> 给，不写在字符串里：把 <c>"Name desc"</c> 拆成"名字 + 方向"
-    /// 是调用方的口径，库不猜哪种方言的写法。多列排序在 <see cref="IOrderedQuery{T}"/> 上接
-    /// <see cref="IOrderedQuery{T}.ThenBy(string, bool)"/>。<b>只落在 arity 1 这一档</b>，
-    /// 与 <see cref="IgnoreQueryFilters"/>/<see cref="WithSql"/> 同一处已记名的缺口：联表链上
-    /// "一个名字属于哪张表"要先有别名规则，那是另一格。</summary>
-    IOrderedQuery<T> OrderBy(string memberName, bool descending = false);
+    /// <summary>按<b>名字</b>排序 —— 给"排序键是运行期才知道的一段文本"的调用方（页面表头点了哪一列、
+    /// 导出任务挑的排序字段、HTTP 查询串上整串过来的 <c>"Id,Name desc"</c>）。<b>它不是 <c>ORDER BY</c>
+    /// 片段的入口</b>：那颗串只拿去<em>认列</em>（先属性名、再列名、最后大小写不敏感的唯一命中），
+    /// 认出来发的是契约里那一颗列加方言引号，认不出当场抛。<b>没有"原样拼进去"的退路，所以这一格不需要
+    /// 黑名单</b>：黑名单会漏，而这一条路上"用户文本进 SQL"这件事没有对应的代码路径 —— 从外部来的排序键
+    /// 写错时症状是<em>页面顺序不对</em>，没人会为此报修，所以它只能响，不能猜。
+    /// <para>形状：逗号分颗，每一颗是 <c>名字</c> 或 <c>名字 asc</c> / <c>名字 desc</c>
+    /// （<c>ascending</c> / <c>descending</c> 同义，大小写不敏感），空颗跳过。<paramref name="descending"/>
+    /// 给的是<em>串里没点方向的那些颗</em>，写了方向的以串为准 —— 单颗的老写法 <c>OrderBy("Id", true)</c>
+    /// 逐字不变。认不出方向词的那一段整颗按列名去认，所以 <c>"desc"</c> 单独一颗指的是名叫 desc 的那一列。</para>
+    /// 一条链上排多颗可以一次给一串，也可以在 <see cref="IOrderedQuery{T}"/> 上接
+    /// <see cref="IOrderedQuery{T}.ThenBy(string, bool)"/> 逐颗追加，两种写法发的列序都是书写序。
+    /// <b>只落在 arity 1 这一档</b>，与 <see cref="IgnoreQueryFilters"/>/<see cref="WithSql"/> 同一处已记名的缺口：
+    /// 联表链上"一个名字属于哪张表"要先有别名规则，那是另一格。</summary>
+    IOrderedQuery<T> OrderBy(string sortSpec, bool descending = false);
 
     IQuery<T> Where(Expression<Func<T, bool>> predicate);
 
@@ -316,10 +319,10 @@ public interface IOrderedQuery<T> : IQuery<T>
 
     IOrderedQuery<T> ThenByDescending<TKey>(Expression<Func<T, TKey>> key);
 
-    /// <summary>字符串形态的第二颗，与 <see cref="IQuery{T}.OrderBy(string, bool)"/> 共用同一处认列
-    /// （同一份三档、同一处抛），差别只在它是<em>追加</em>到已有的序后面。列序 = 调用序，
+    /// <summary>字符串形态的第二颗，与 <see cref="IQuery{T}.OrderBy(string, bool)"/> 共用同一处拆分与同一处认列
+    /// （同一份三档、同一处抛），差别只在它是把串里那些颗<em>追加</em>到已有的序后面。列序 = 调用序，
     /// 这一点与 lambda 那一条同一个口径。</summary>
-    IOrderedQuery<T> ThenBy(string memberName, bool descending = false);
+    IOrderedQuery<T> ThenBy(string sortSpec, bool descending = false);
 }
 
 /// <summary>分组链（§5.3 的 <c>ISelectGrouping&lt;TKey,TValue&gt;</c>，草案名在此落地）。

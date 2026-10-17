@@ -67,10 +67,10 @@ public class QuickSqlQuery<T> : IQuery<T>, IEngineCarrier
     public IOrderedQuery<T> OrderByDescending<TKey>(Expression<Func<T, TKey>> key)
         => new QuickSqlOrderedQuery<T>(Engine.Order(key, descending: true, append: false));
 
-    /// <summary>成员名那一颗同样是<em>只转发</em>：认列、抛与叠加都在 <see cref="QueryEngine"/> 里，
+    /// <summary>按名字那一颗同样是<em>只转发</em>：拆分、认列、抛与叠加都在 <see cref="QueryEngine"/> 里，
     /// 这一层不养第二份口径（§5.5）。</summary>
-    public IOrderedQuery<T> OrderBy(string memberName, bool descending = false)
-        => new QuickSqlOrderedQuery<T>(Engine.Order(memberName, descending, append: false));
+    public IOrderedQuery<T> OrderBy(string sortSpec, bool descending = false)
+        => new QuickSqlOrderedQuery<T>(Engine.Order(sortSpec, descending, append: false));
 
     public IQuery<T> Skip(int count) => new QuickSqlQuery<T>(Engine.Skip(count));
 
@@ -215,8 +215,8 @@ sealed class QuickSqlOrderedQuery<T>(QueryEngine engine) : QuickSqlQuery<T>(engi
     public IOrderedQuery<T> ThenByDescending<TKey>(Expression<Func<T, TKey>> key)
         => new QuickSqlOrderedQuery<T>(Engine.Order(key, descending: true, append: true));
 
-    public IOrderedQuery<T> ThenBy(string memberName, bool descending = false)
-        => new QuickSqlOrderedQuery<T>(Engine.Order(memberName, descending, append: true));
+    public IOrderedQuery<T> ThenBy(string sortSpec, bool descending = false)
+        => new QuickSqlOrderedQuery<T>(Engine.Order(sortSpec, descending, append: true));
 }
 
 /// <summary>分组链（§5.3）。<b>这一层没有任何物化出口</b>，这是刻意的：分组而未选的形状（整行列 +

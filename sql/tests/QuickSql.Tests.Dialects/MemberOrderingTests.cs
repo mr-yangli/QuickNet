@@ -14,7 +14,11 @@ namespace QuickSql.Tests.Dialects;
 /// 代码路径的一形 —— 这一点离线就判得动（判的正是文本），不必等活库。</para>
 ///
 /// <para>判不到的那一半归集成层（<c>OrderingPathTests</c>）：那一头量的是<em>行真的按这一列排了序</em>，
-/// 而文本相等不等于排序正确 —— 这里断言的是"发出去的是哪一颗列"，序对不对只有库能答。</para></summary>
+/// 而文本相等不等于排序正确 —— 这里断言的是"发出去的是哪一颗列"，序对不对只有库能答。</para>
+///
+/// <para><b>v0.39 起这一颗口吃的是<em>一整串</em></b>（<c>"Id,Name desc"</c>，前端查询串上那一种形状），
+/// 于是下面几颗各钉一个新面：一次给一串与逐颗接链逐字节同形、那颗 bool 退成"没点方向的颗的方向"、
+/// 脏分隔与空颗、认不出方向词的整段留作名字、以及 <c>desc</c> 打头的那一形注入仍然响在同一处。</para></summary>
 public sealed class MemberOrderingTests
 {
     static readonly IDbProvider Provider = SqlServer.Provider(SqlServer.NoDriverFactory.Instance);
@@ -133,5 +137,102 @@ public sealed class MemberOrderingTests
         var failure = Checks.Raised<QuickSqlException>(() => projected.OrderBy("Id").ToSql());
 
         Checks.Has("投影之后不能再排序", failure.Message);
+    }
+
+    // ── 整串（v0.39∶ 一颗口吃下前端那一串写法） ──────────────────────
+
+    /// <summary>本笔的主判据：<b>一次给一串，与逐颗接链逐字节同形</b>。这一句钉的还是上一笔那句
+    /// "两条口共用同一份发射"，只是这一回进去的是一颗串而不是一个名字。
+    /// 判据里 <c>"Id,Id desc"</c> 是需求方原样给的形状 —— 同一颗列排两次在库里合法而冗余，
+    /// 本家不替调用方去重，也不按名字猜他要哪一颗。</summary>
+    [Fact]
+    public void A_spec_string_lands_exactly_the_chain_of_calls_it_spells()
+    {
+        Checks.Has("ORDER BY [t0].[CreatedAt] ASC, [t0].[Amount] DESC",
+            orm().Select<Order>().OrderBy("CreatedAt,Amount desc").ToSql());
+
+        var bySpec = orm().Select<Order>().OrderBy("Id,Id desc");
+        var byCall = orm().Select<Order>().OrderBy(o => o.Id).ThenByDescending(o => o.Id);
+
+        Assert.Equal(byCall.ToSql(), bySpec.ToSql());
+    }
+
+    /// <summary>那颗形参从"这一颗的方向"变成"串里没点方向的那些颗的方向"，三格各钉一次：
+    /// 单颗的老写法逐字不变（第一格是本笔的<em>不回归</em>判据）、后缀盖过形参（形参不许把调用方
+    /// 显式写的方向偷偷翻回来）、没点名的颗吃形参。</summary>
+    [Fact]
+    public void The_flag_is_only_the_default_for_the_keys_that_name_no_direction()
+    {
+        Checks.Has("ORDER BY [t0].[Amount] DESC", orm().Select<Order>().OrderBy("Amount", true).ToSql());
+        Checks.Has("ORDER BY [t0].[Amount] DESC", orm().Select<Order>().OrderBy("Amount desc").ToSql());
+        Checks.Has("ORDER BY [t0].[Amount] ASC", orm().Select<Order>().OrderBy("Amount asc", true).ToSql());
+
+        Checks.Has("ORDER BY [t0].[CreatedAt] DESC, [t0].[Amount] DESC",
+            orm().Select<Order>().OrderBy("createdAt DESC, Amount", true).ToSql());
+    }
+
+    /// <summary>脏写法只当分隔不当名字：空颗（前端 <c>join(',')</c> 的尾巴）、连排空格、换行。
+    /// 而 <c>",,,"</c> 与 <c>"   "</c> 归到同一句空名的读数上 —— 拆完是空清单与根本没给，
+    /// 对调用方是同一件事，消息不许有两份。</summary>
+    [Fact]
+    public void Blanks_and_separators_are_not_order_keys()
+    {
+        Checks.Has("ORDER BY [t0].[Id] ASC, [t0].[Amount] DESC",
+            orm().Select<Order>().OrderBy(" Id ,  Amount  desc , ").ToSql());
+
+        Checks.Has("ORDER BY [t0].[Id] ASC, [t0].[PaidAt] ASC",
+            orm().Select<Order>().OrderBy("Id,\nPaidAt").ToSql());
+
+        Checks.Has("排序成员名是空的",
+            Checks.Raised<QuickSqlException>(() => orm().Select<Order>().OrderBy(",,")).Message);
+    }
+
+    /// <summary>认不出方向词的<em>整段</em>按列名去认，两处读数各钉一次。① 单独一颗 <c>"desc"</c> 指的
+    /// 就是那一颗名叫 desc 的列（夹具用 Fluent 改列名造出来），本笔不把它读成方向 —— 否则"哪颗列叫
+    /// desc"这种实体一出现，按名字排就少认一颗列。② <c>"Id down"</c> 里 <c>down</c> 不是方向词，
+    /// 于是整段当名字、认不出、响，而消息教一句只认哪两颗词。
+    /// 这一颗钉的是"串里没有猜"：把 <c>down</c> 读成降序就是替调用方改了他的键。</summary>
+    [Fact]
+    public void A_word_that_is_not_a_direction_stays_part_of_the_name()
+    {
+        var model = new ModelConfiguration();
+
+        model.Entity<Order>().Property(o => o.Amount).HasColumnName("desc");
+
+        Checks.Has("ORDER BY [t0].[desc] ASC", ormWith(model).Select<Order>().OrderBy("desc").ToSql());
+
+        var failure = Checks.Raised<QuickSqlException>(() => orm().Select<Order>().OrderBy("Id down").ToSql());
+
+        Checks.Has("没有名为 Id down 的列", failure.Message);
+        Checks.Has("只认挂在名字后面的 asc / desc", failure.Message);
+    }
+
+    /// <summary><c>ThenBy</c> 那一颗同样吃整串，而且一颗都不许顶掉前面已经排好的（列序 = 调用序）。
+    /// 末尾那一句钉的是新面上的注入形：<c>desc</c> 打头的那一颗串今天有了一半"看起来像方向"的外壳，
+    /// 读数照旧是<em>它根本没进句子</em>。</summary>
+    [Fact]
+    public void ThenBy_appends_every_key_the_string_carries_and_the_injection_shape_still_refuses()
+    {
+        var bySpec = orm().Select<Order>().OrderBy("Id").ThenBy("Amount desc, PaidAt");
+        var byLambda = orm().Select<Order>().OrderBy(o => o.Id).ThenByDescending(o => o.Amount).ThenBy(o => o.PaidAt);
+
+        Assert.Equal(byLambda.ToSql(), bySpec.ToSql());
+
+        var injected = Checks.Raised<QuickSqlException>(
+            () => orm().Select<Order>().OrderBy("Amount desc; DROP TABLE QuickSqlOrder--").ToSql());
+
+        Checks.Has("DROP TABLE QuickSqlOrder", injected.Message);
+    }
+
+    /// <summary>那颗串可以是 <c>null</c>：HTTP 查询参数没给的就是这一形（门面把 <c>PagedRequestInput.Order</c>
+    /// 原样递过来时，"没排序"与"排错了"是两种读数，而它们都不该是 <c>NullReferenceException</c>）。
+    /// 契约上写的是非空 <c>string</c>，所以这一颗是给<em>外部来的串</em>留的最后一档：响在认列那一句上，
+    /// 与空串同一句话。<c>null!</c> 是这里故意的抑制 —— 让编译器那一头仍按 nullable 警告，库这一头不许崩。</summary>
+    [Fact]
+    public void A_null_sort_string_answers_the_same_sentence_an_empty_one_does()
+    {
+        var failure = Checks.Raised<QuickSqlException>(() => orm().Select<Order>().OrderBy(null!).ToSql());
+
+        Checks.Has("排序成员名是空的", failure.Message);
     }
 }

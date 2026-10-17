@@ -334,6 +334,53 @@ public class ReadPathTests
         Assert.Contains("QuickSqlOrder 没有名为 CreatedA 的列", failure.Message, StringComparison.Ordinal);
     }
 
+    /// <summary>整串那颗口（v0.39：一颗 <c>OrderBy(string)</c> 吃下前端那一串 <c>"Id,Name desc"</c>）在真库上的读数。
+    ///
+    /// <para>分工仍按 §13.1 那条界线：离线册 <c>MemberOrderingTests</c> 钉的是"拆出来的发出去的是哪几颗列、
+    /// 顺序 = 书写序、认不出的一律响"，这一头钉的只有库能答的那件 —— <b>串里两颗键真的按两颗排了，
+    /// 而且与逐颗接链交回同一串行</b>。单调性一律落在 <c>Id</c> 那一族数值列上（上一族那条 sqlite 载体的
+    /// 教训照抄：<c>Amount</c> 在本家落 <c>TEXT</c>，<c>ORDER BY</c> 读出来是字典序）。</para></summary>
+    [Fact]
+    public async Task A_sort_string_from_the_front_end_orders_rows_like_the_chain_it_spells()
+    {
+        Database.Ready();
+
+        var ct = TestContext.Current.CancellationToken;
+
+        // ① 一次给一串 == 逐颗接链。两颗键都要非唯一列打头才读得出"第二颗排在第一颗之后"，
+        //    而末位收在唯一的 Id 上，行序因此是确定的（平局不交给库）。
+        var bySpec = await Tagged().OrderBy("CustomerId desc, Id").ToListAsync(ct);
+        var byCall = await Tagged().OrderByDescending(o => o.CustomerId).ThenBy(o => o.Id).ToListAsync(ct);
+
+        Assert.Equal(byCall.Select(o => o.Id), bySpec.Select(o => o.Id));
+
+        // 单调性单独判一次（只比"两种写法一致"的话，一处共用的错发射会一起错）。
+        for (var i = 1; i < bySpec.Count; i++)
+            Assert.True(bySpec[i].CustomerId <= bySpec[i - 1].CustomerId,
+                $"第 {i} 行比上一行的客户号大：{bySpec[i].CustomerId} > {bySpec[i - 1].CustomerId}");
+
+        // ② 大小写、脏分隔与那颗形参当"没点方向的那些颗的方向"三件同场：串里写了 DESC 的以串为准，
+        //    没写的吃形参给的真 —— 这一句同时否掉了"形参把调用方显式写的方向翻回来"那一形。
+        var mixed = await Tagged().OrderBy(" customerid DESC , id ", descending: true).ToListAsync(ct);
+        var mixedByCall = await Tagged().OrderByDescending(o => o.CustomerId).ThenByDescending(o => o.Id).ToListAsync(ct);
+
+        Assert.Equal(mixedByCall.Select(o => o.Id), mixed.Select(o => o.Id));
+
+        // ③ 串写进的那一串序落进分页那一句里库认（T-SQL 与 PG 血统都要 ORDER BY 才认 OFFSET..FETCH）。
+        var page = await Tagged().OrderBy("Id desc, CreatedAt").ToPagedAsync(1, 2, null, ct);
+
+        Assert.Equal(2, page.Items.Count);
+        Assert.True(page.Items[0].Id > page.Items[1].Id,
+            $"这一页没按 Id 降序：{page.Items[0].Id} 在 {page.Items[1].Id} 之前");
+
+        // ④ 串里混进认不出的一颗：响在同一句上，而且响在接链的那一刻而不是发出去之后 —— 半串能认、
+        //    半串认不出时不许退成"只按认得的那颗排"，那正是页面顺序不对而没人报修的那一格。
+        var failure = await Assert.ThrowsAsync<QuickSqlException>(
+            async () => await Tagged().OrderBy("Id, CreatedA desc").ToListAsync(ct));
+
+        Assert.Contains("QuickSqlOrder 没有名为 CreatedA 的列", failure.Message, StringComparison.Ordinal);
+    }
+
     /// <summary>第八笔那一档的语义面在真库上的见证：<b>空集上的聚合交回的是 NULL 行，而不是"没有行"</b>，
     /// 而 NULL 在这一档是合法答案 ⇒ 交回请求型的 <c>default</c>，不是抛。
     ///

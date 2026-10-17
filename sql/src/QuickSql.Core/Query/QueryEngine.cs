@@ -256,11 +256,12 @@ sealed class QueryEngine
         return Append(scout, Model, order, append);
     }
 
-    /// <summary>按成员名排序（v0.38 第二十笔）。<b>这一条不经过表达式翻译</b>：字符串只用来在契约上认列，
-    /// 认出来的是 <see cref="ColumnContract"/>，发出去的是那一颗列加方言引号 —— 所以"传进来的文本进了 SQL"
-    /// 这一形在这里没有对应的代码路径，不是一个要靠过滤堵住的风险面。闸门与 lambda 那一条共用
-    /// <see cref="Append"/>，两条口对同一个投影形状给同一句话。</summary>
-    public QueryEngine Order(string memberName, bool descending, bool append)
+    /// <summary>按名字排序（v0.38 第二十笔，v0.39 起这一颗吃<em>一整串</em>前端写法）。
+    /// <b>这一条不经过表达式翻译</b>：串只拿去契约上认列，认出来的是 <see cref="ColumnContract"/>，
+    /// 发出去的是那一颗列加方言引号 —— 所以"传进来的文本进了 SQL"这一形在这里没有对应的代码路径，
+    /// 不是一个要靠过滤堵住的风险面。拆分只拆名字与方向（<see cref="SortSpec"/>），一颗都不认列。
+    /// 闸门与叠加与 lambda 那一条共用 <see cref="Append"/>，两条口对同一个投影形状给同一句话。</summary>
+    public QueryEngine Order(string sortSpec, bool descending, bool append)
     {
         if (Model.Plan is not EntityProjection)
             throw new QuickSqlException("投影之后不能再排序：投影列没有列契约，补出来的序会指向错列。把 OrderBy 挪到 Select 之前，或在源查询上排好序再投影。");
@@ -268,26 +269,42 @@ sealed class QueryEngine
         var contract = Model.Root.Contract
             ?? throw new QuickSqlException($"根表位 {Model.Root.Table.Name} 没有实体契约，按成员名排不出序：认列靠的就是那份契约。用 lambda 形态，或把这条链的表源换成一张实体表。");
 
-        return Append(null, Model, new OrderExpression(new ColumnExpression(Model.Root, Column(contract, memberName)), descending), append);
+        var keys = SortSpec.Parse(sortSpec, descending);
+
+        if (keys.Count == 0)
+            throw NoSortMember(contract);
+
+        var orders = new OrderExpression[keys.Count];
+
+        for (var i = 0; i < keys.Count; i++)
+        {
+            orders[i] = new OrderExpression(new ColumnExpression(Model.Root, Column(contract, keys[i].Name)), keys[i].Descending);
+        }
+
+        return Append(null, Model, orders, append);
     }
 
     /// <summary>把一颗序落到模型上。<b>追加还是替换由这一处决定</b>：契约上 <c>OrderBy</c> 之后再
     /// <c>OrderBy</c> 是替换前一串（那是 LINQ 的口径），而链式对象上那两颗口各自把 <paramref name="append"/>
-    /// 写死，所以两种形态（lambda 与成员名）不会各写一套叠加规则。
+    /// 写死，所以两种形态（lambda 与名字串）不会各写一套叠加规则。
     /// <paramref name="scout"/> 与 <paramref name="model"/> 成对进来：前者是 lambda 那一形欠下的自动联表
-    /// （§5.2），成员名那一形不经过表达式翻译，没有欠账可落，所以那一口递 null 进来 —— 于是两条口在
+    /// （§5.2），名字串那一形不经过表达式翻译，没有欠账可落，所以那一口递 null 进来 —— 于是两条口在
     /// <see cref="Advanced"/> 那里合流，叠加规则仍然只有一份。</summary>
     QueryEngine Append(NavigationJoinScout? scout, QueryModel model, OrderExpression order, bool append)
-        => Advanced(scout, append ? model.AddOrdering(order) : model with { Ordering = [order] });
+        => Append(scout, model, [order], append);
+
+    QueryEngine Append(NavigationJoinScout? scout, QueryModel model, IReadOnlyList<OrderExpression> orders, bool append)
+        => Advanced(scout, append ? model.AddOrderings(orders) : model with { Ordering = [.. orders] });
 
     /// <summary>成员名 → 列。<b>三档，逐字节优先</b>：先属性名、再列名、最后大小写不敏感的<em>唯一</em>命中
     /// （HTTP 查询串上过来的是 <c>createTime</c> 那一形，实体上写的是 <c>Create_time</c> 或 <c>CreateTime</c>，
     /// 大小写这一档是给它的，不是给通配的）。认不出与认得多颗都当场抛，<b>没有"原样发出去"的退路</b>：
-    /// 那一路的产物是一条看起来合理的错句，而排序键错了在页面上读得出来的只有顺序，没人会为此报修。</summary>
+    /// 那一路的产物是一条看起来合理的错句，而排序键错了在页面上读得出来的只有顺序，没人会为此报修。
+    /// 一颗名字与一整串走的是同一句：<see cref="SortSpec"/> 拆完之后每一颗都从这道咽喉过。</summary>
     static ColumnContract Column(EntityContract contract, string memberName)
     {
         if (string.IsNullOrWhiteSpace(memberName))
-            throw new QuickSqlException($"{contract.Table.Name} 的排序成员名是空的：按名字排只认这一张表上的列，请把要排的那一列的属性名或列名给出来。");
+            throw NoSortMember(contract);
 
         if (contract.ByMember.TryGetValue(memberName, out var byMember)) return byMember;
         if (contract.ByColumn.TryGetValue(memberName, out var byColumn)) return byColumn;
@@ -299,7 +316,8 @@ sealed class QueryEngine
 
         if (matches.Length == 0)
             throw new QuickSqlException($"{contract.Table.Name} 没有名为 {memberName} 的列：按名字排只认这张表上映射过的列（属性名或列名），" +
-                "导航属性、投影列与 SQL 片段都不认。要排别的表那一侧的列请改用 lambda 形态（读引用导航会自动联表，§5.2）。");
+                "导航属性、投影列与 SQL 片段都不认。要排别的表那一侧的列请改用 lambda 形态（读引用导航会自动联表，§5.2）。" +
+                "串里带方向只认挂在名字后面的 asc / desc（ascending / descending 同义），其余的每一段都按列名去认。");
 
         if (matches.Length > 1)
             throw new QuickSqlException($"{contract.Table.Name} 上能对上 {memberName} 的列不止一颗（{string.Join(" / ", matches.Select(m => m.MemberName))}）：" +
@@ -307,6 +325,11 @@ sealed class QueryEngine
 
         return matches[0];
     }
+
+    /// <summary>整串里一颗名字都没有（空串、全逗号、null）时的那一句。写在一处是因为<b>认不出空名的两处</b>
+    /// —— 单颗那一形与拆完的空清单 —— 要给同一个读数，消息是本格的交付物而不是细节。</summary>
+    static QuickSqlException NoSortMember(EntityContract contract)
+        => new($"{contract.Table.Name} 的排序成员名是空的：按名字排只认这一张表上的列，请把要排的那一列的属性名或列名给出来。");
 
     /// <summary><c>Skip</c> 只落偏移位、<c>Take</c> 只落行数位，都不在这一步检查序（§9.4）：
     /// <c>Skip().Take().OrderBy()</c> 与 <c>OrderBy().Skip().Take()</c> 必须产出同一个模型，

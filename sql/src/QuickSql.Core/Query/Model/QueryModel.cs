@@ -87,8 +87,8 @@ public sealed record QueryModel
     public QueryModel AddPredicate(SqlExpression predicate)
         => this with { Predicates = [.. Predicates, predicate] };
 
-    public QueryModel AddOrdering(OrderExpression order)
-        => this with { Ordering = [.. Ordering, order] };
+    public QueryModel AddOrderings(IReadOnlyList<OrderExpression> orders)
+        => this with { Ordering = [.. Ordering, .. orders] };
 
     public QueryModel AddJoin(JoinClause join, TableRef table)
         => this with { Joins = [.. Joins, join], Tables = [.. Tables, table] };

@@ -45,5 +45,5 @@ public sealed class IncludeManyNode
 /// 其二，执行层那条子 SELECT 每次执行都要现造 AST，让它拿着现成的 <see cref="ColumnContract"/> 直发，
 /// 不必每跑一次就重认一遍名字。</summary>
 /// <param name="Column">子实体契约上的那一颗列。</param>
-/// <param name="Descending">降序位，口径与 <c>OrderBy(string, bool)</c> 一致：方向由形参给，不藏在串里。</param>
+/// <param name="Descending">降序位。<c>OrderByMany</c> 收的是表达式，方向没有第二种来源，只能由这一颗形参给。</param>
 public sealed record IncludeManyOrdering(ColumnContract Column, bool Descending);

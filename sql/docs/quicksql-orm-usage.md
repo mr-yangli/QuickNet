@@ -44,7 +44,7 @@
 先立两条与版本口径有关的纪律，它们决定了装包命令怎么写：
 
 - **预发布档不进默认解析**：全家都是 `-beta.N` 系列，`dotnet add package` 必须带 `--prerelease`，或者在 `PackageReference` 里写死版本号——二选一，否则会报"找不到稳定版本"。
-- **每重打一次包升一颗 beta**（`sql/Directory.Build.props` 注释里那条纪律）：同版本号不同内容的两颗包，消费方全局缓存里那颗会压住新打的——还原照样绿，拿到的却是旧二进制。对版本以源上实读为准：截至 2026-10-16，nuget.org 上最新是 `0.39.0-beta.15`，而本仓库 props 已声明 `0.39.0-beta.16`——这一笔只升了声明，22 颗包的重打与推送都还没做，所以**装包按源上那颗写**，下面 csproj 示例里的三行版本号就是这个口径（等 beta.16 真的上了源，这一句与那三行要一起翻）。
+- **每重打一次包升一颗 beta**（`sql/Directory.Build.props` 注释里那条纪律）：同版本号不同内容的两颗包，消费方全局缓存里那颗会压住新打的——还原照样绿，拿到的却是旧二进制。对版本以源上实读为准：截至 2026-10-17，nuget.org 上最新是 `0.39.0-beta.15`，而本仓库 props 已声明 `0.39.0-beta.17`——beta.16 那一批只打到本机喂源（`sql/obj/nupkg-local`）就被消费方接走、没上 nuget.org，本笔的重打与推送同样没做，所以**装包按源上那颗写**，下面 csproj 示例里的三行版本号就是这个口径（等 props 那一颗真的上了源，这一句与那三行要一起翻）。
 
 主路径的最小 csproj（SQL Server 为例，换库只把 provider 那颗换成目的库、驱动包跟着换）：
 
@@ -531,12 +531,27 @@ var q = orm.Select<Order>()
     .Select(o => new OrderSummary(o.Id, o.CustomerName, o.Amount));
 ```
 
-- 谓词/投影/排序：`Where`（可多条，左到右折成一个 AND 链）、`OrderBy`/`OrderByDescending`/`ThenBy`/`ThenByDescending`、`Select<TResult>`（实体、匿名、构造器 DTO 三种）；谓词里 `x.Id.Equals(id)` 与 `object.Equals(x, y)` 与 `==` 同形落 `=`（ABP 那一类仓储的常态写法：`Id` 是 `long`/`Guid` 时 C# 绑的是 `Int64.Equals` 或 `Object.Equals`，v0.39 起每一族都认，产出与参数值都和写成 `==` 时逐字相同）。**但只认两侧同型的那一种**：`int` 列 `.Equals(某个 long)` 在 CLR 上恒为 false，库照 `=` 发射就是把「一行都不该中」翻成「值相同就中」，所以它拒并说明该改哪；要按值比就写 `==` 让编译器做提升。带 `StringComparison` 或自定义比较器的那一颗同样拒（大小写口径各家不同，不替你换规则）
+- 谓词/投影/排序：`Where`（可多条，左到右折成一个 AND 链）、`OrderBy`/`OrderByDescending`/`ThenBy`/`ThenByDescending`（排序另有<em>按名字</em>那一形：`OrderBy(string, bool)` 与 `ThenBy(string, bool)`，吃前端那一整串，见下面那一格）、`Select<TResult>`（实体、匿名、构造器 DTO 三种）；谓词里 `x.Id.Equals(id)` 与 `object.Equals(x, y)` 与 `==` 同形落 `=`（ABP 那一类仓储的常态写法：`Id` 是 `long`/`Guid` 时 C# 绑的是 `Int64.Equals` 或 `Object.Equals`，v0.39 起每一族都认，产出与参数值都和写成 `==` 时逐字相同）。**但只认两侧同型的那一种**：`int` 列 `.Equals(某个 long)` 在 CLR 上恒为 false，库照 `=` 发射就是把「一行都不该中」翻成「值相同就中」，所以它拒并说明该改哪；要按值比就写 `==` 让编译器做提升。带 `StringComparison` 或自定义比较器的那一颗同样拒（大小写口径各家不同，不替你换规则）
 - 分页：`Skip`/`Take`，或一次到位 `ToPagedAsync(int page, int size, PagedOptions? = null, CancellationToken)` → `PagedResult<T> { Items, Page, Size, Total, HasNext, TotalPages }`；计数控件是 `PagedOptions(CountMethod CountMethod = Auto, bool StripOrderingForCount = true, string? CacheKey = null)`，`CountMethod` 五值 `Auto`/`CountStar`/`CountOverWindow`/`SkipTotal`/`SeparateTransaction` —— 后两档里 `CountOverWindow` 与 `SeparateTransaction` 今天**直接抛**（§4.3 第 4 条那格），可点的只有前三颗
 - 联表：arity 递增的 `LeftJoin<T2>(on)` / `InnerJoin<T2>(on)`，形参按 FROM 位置解析，产出 `IQuery<T1, T2>`（再到 `IQuery<T1, T2, T3>`），其后 `Select((a, b) => ...)`
 - 导航：`Include<TProp>` 与它那一条链上的 `ThenInclude<TProp>`（每层一张 `LEFT JOIN`）、`IncludeMany<TDetail>`（v0.39 第三笔起可以再往<em>下一层</em>挂：`ThenIncludeMany<TProp>`；第四笔起同一层<em>旁边</em>还能挂一根引用：`ThenInclude<TProp>` —— 两颗都见下面"集合导航可以一层一层挂上去"那一格）、`AsSplitQuery(int navigateBatchSize = 20)`；**另加 v0.39 起"不点名也带"的那一档** —— 在谓词 / 投影 / 排序键里读到一条**引用**导航的**成员**，库按契约自动补 `LEFT JOIN`，不用 `Include`、也不用自己写 `LeftJoin`（下面那一格）
 - 其它：`As(string alias)`、`Distinct()`、`AsNoTracking()`、`IgnoreQueryFilters()`、`IgnoreQueryFilter<TFilter>()`（按注册键点名，可叠；见上面「全局过滤器」那一格）、`WithCache(string, TimeSpan)`、`WithSql(string sql, object? args = null)`（把 FROM 那一段换成你自己写的 SELECT，外面一层仍归库；见下面"表源那一格"）
 - 出口：`ToListAsync`/`ToArrayAsync`/`FirstOrDefaultAsync`/`CountAsync`/`ToAsyncEnumerable(int batchSize)`，以及同步的 `ToList`/`ToArray`/`FirstOrDefault`/`Count`；类型本身还是 `IAsyncEnumerable<T>`。**数组那一颗与列表那一颗是同一颗咽喉**（同一条模型、同一句 SQL、同样只发一条语句、同一处跟踪与缓存落点），换的只是交回来的 CLR 形状，所以它**不省一趟、反而多一次整段拷贝**——物化那一路落的本来就是 `List<T>`，缓存里存的也是那一只；要"少一次拷贝"用 `ToListAsync`，要"交出去之后改不动"（长度定死、而且拿到的不是缓存里那一只，调用方 `Add`/`Clear` 改不到下一次命中）用 `ToArrayAsync`。同步那一颗 `ToArray()` 与 `ToList()` 同一档 `sync-over-async`，**多的那趟拷贝与异步那颗逐字相同**（它不是"少付一次拷贝"的路）。联表 arity 上没有带投影的对应物，要数组就 `Select(projector)` 回到单表链再调。计数一族（`Count`/`LongCount`/`Any` 与它们的异步对照）遇到分组、`Distinct` 或带 `Skip/Take` 的链时，会把整句包成派生表内层再数（上面那一段与下面"表源那一格"），不会照着原模型换一个 `COUNT(*)`。这一族的后四颗（`AnyAsync`/`LongCountAsync`/`Any`/`LongCount`）到 v0.38 第十九笔才真的长在 `IQuery<T>` 上，`Any` 发的仍是同一条 `COUNT(*)`，`COUNT(*) > 0` 在 CLR 侧判，`WHERE EXISTS(…)` 反形还没有入口
+
+**按名字的排序：一颗口吃下前端那一整串（v0.39，规格 §5.7 那条落地记录）。**
+
+```csharp
+// request.Sorting 是 HTTP 查询串上原样过来的一颗，例如 "Id,Amount desc"
+var page = await orm.Select<Order>()
+    .Where(o => o.State == OrderState.Paid)
+    .OrderBy(request.Sorting)
+    .ToPagedAsync(1, 20);
+```
+
+- 形状：逗号分颗，每一颗是 `名字` 或 `名字 asc` / `名字 desc`（`ascending` / `descending` 同义，大小写不敏感）；空颗跳过（`"Id,,Name,"` 那种 `join(',')` 的尾巴），多余的空格、制表与换行只当分隔。同一条链上 `OrderBy` 之后再 `OrderBy` 是整串替换（LINQ 的口径），`ThenBy(string, bool)` 同样吃整串、只追加，而列序 = 书写序
+- 那颗 `descending` 形参给的是<em>串里没点方向的那些颗</em>：`OrderBy("Id", true)` 与 `OrderBy("Id desc")` 同一句 SQL，而 `OrderBy("Id asc", true)` 发的是升序 —— 串里显式写的方向不会被形参翻回来。认不出方向词的整段按列名去认，所以 `OrderBy("desc")` 认的可以是那颗名叫 `desc` 的列
+- 它**不是 `ORDER BY` 片段的入口**：每一颗名字拿去契约上认列（先属性名、再列名、最后大小写不敏感的唯一命中），发出去的是那一颗列加方言引号；认不出当场抛，<b>没有"原样拼进去"的退路</b>，所以这一格不需要黑名单。半串认得出、半串认不出也照样响，不会退成"只按认得的那颗排"
+- 射程与 lambda 那一族的差别：只落在 **arity 1** 的链上（联表链上"一个名字属于哪张表"要先有别名规则），`Select` 投影之后照旧拒。要排另一张表那一侧的列改用 lambda 形态（读引用导航会自动联表，下面那一格）；`IncludeMany` 那一族的子行序用的是 `OrderByMany(表达式, bool)`，它没有串可拆
 
 **引用导航在谓词 / 投影 / 排序键里自动补 `LEFT JOIN`（v0.39，规格 §5.2 那条落地记录）。**
 
