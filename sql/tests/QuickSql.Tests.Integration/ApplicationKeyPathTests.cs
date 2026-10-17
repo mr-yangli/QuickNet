@@ -135,6 +135,27 @@ public sealed class ApplicationKeyPathTests
                 ("@table", TableName), ("@column", nameof(AppKeyRow.Id)))
                 .Single()["is_identity"] == "1",
 
+            // MySQL 走的是 information_schema 那颗 EXTRA 位：库发号那一列写的是 auto_increment，
+            // 人发号那一列是空串（DEFAULT 0 的 bigint）—— 空串与 NULL 两种"没有"照样都读成"不发号"。
+            // 取值那颗带 UPPER 并钉了别名：回包列名在这家按查询原样还，而本层 Rows 的键字典在这一家
+            // 是 Ordinal（不折大小写），与其赌目录里那颗名字的拼法，不如让别名自己保证。
+            Database.Target.MySql => Database.Rows(
+                "SELECT UPPER(extra) AS ExtraFlag FROM information_schema.columns " +
+                "WHERE table_schema = DATABASE() AND table_name = @table AND column_name = @column",
+                ("@table", TableName), ("@column", nameof(AppKeyRow.Id)))
+                .Single()["ExtraFlag"] is { } flag && flag.Contains("AUTO_INCREMENT", StringComparison.Ordinal),
+
+            // 虚谷的目录里"库发号"就是 ALL_COLUMNS.IS_SERIAL 那颗布尔位（[实测·M2-03]，布尔取值形）。
+            // join 形状与 XuguSchemaReader.ProbeSql 同源——三 张 表按 TABLE_ID/SCHEMA_ID 挂接，不 join 连表名都问不到；
+            // 目录里存的是折叠后的大写（与 Fold 同一条纪律），所以表名、列名都要自己折成大写给进参数。
+            // 模式绑 NULL 走 NVL 的右支 = 当前会话用户（[实测·M2-04]），与建侧"模式为空就不限定"同一颗默认。
+            Database.Target.Xugu => Database.Rows(
+                "SELECT c.is_serial FROM all_columns c, all_tables t, all_schemas s " +
+                "WHERE t.table_name = :tbl AND c.table_id = t.table_id AND c.col_name = :col " +
+                "AND s.schema_id = t.schema_id AND s.schema_name = NVL(:sch, UPPER(USER))",
+                ("@tbl", TableName.ToUpperInvariant()), ("@col", nameof(AppKeyRow.Id).ToUpperInvariant()), ("@sch", null))
+                .Single()["is_serial"] is "True" or "1",
+
             _ => throw new InvalidOperationException($"目录问句还没有 {Database.Family} 这一家：宁可红，不要把\"没问\"读成\"没有\"。"),
         };
 }

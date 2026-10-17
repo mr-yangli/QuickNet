@@ -126,7 +126,10 @@ public sealed class SoftDeletePathTests
 
         // 行还在 = 这张表当时的总数没有少。放在这里是因为"那一格是 1"与"行没被删"是两件事，
         // 前者绿而后者红的那一种实现（UPDATE 之后又发一句 DELETE）只在这一句上才露出来。
-        Assert.Equal(2, Count("[Title] LIKE @like", ("@like", Batch + "/%")));
+        // 参数名不叫 @like：虚谷的占位符是 ：形，而 ：后撞上保留字（like）整句就 E19260
+        // 「unexpected LIKE」—— 冒号形式下那个名字会被它的词法器当关键字收【实测·2026-10-17 探针，
+        // 同句换 ：lk 交回同一读数】。判据一字不变，只避开这一场撞名。
+        Assert.Equal(2, Count("[Title] LIKE @lk", ("@lk", Batch + "/%")));
     }
 
     [Fact]
