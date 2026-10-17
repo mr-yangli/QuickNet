@@ -102,7 +102,9 @@ public sealed class ExcelImage : IEquatable<ExcelImage>
             return ExcelImageFormat.Bmp;
         if (s.Length >= 4 && BinaryPrimitives.ReadUInt32LittleEndian(s) == 0x00000001)
             return ExcelImageFormat.Emf;
-        if (s.Length >= 4 && BinaryPrimitives.ReadUInt32LittleEndian(s.Slice(4)) == 0x9AC6CDD7)
+        // WMF: a DWORD placeable header magic at offset 4 — needs 8 bytes, not 4; a 4-7 byte buffer
+        // used to throw ArgumentOutOfRangeException out of the constructor (Slice(4) beyond the end).
+        if (s.Length >= 8 && BinaryPrimitives.ReadUInt32LittleEndian(s.Slice(4)) == 0x9AC6CDD7)
             return ExcelImageFormat.Wmf;
         if (s.Length >= 4 && ((s[0] == 'I' && s[1] == 'I' && s[2] == 42) || (s[0] == 'M' && s[1] == 'M' && s[3] == 42)))
             return ExcelImageFormat.Tiff;

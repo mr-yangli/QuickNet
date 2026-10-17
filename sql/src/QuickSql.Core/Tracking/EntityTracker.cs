@@ -1265,6 +1265,9 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
         // 下面的发射与这一格落地之前逐字同形（物理删除那条路径不为此多付一次查表）。
         var soft = _orm.Behaviors.HasAny ? _orm.Behaviors.RuleFor(typeof(T)) : null;
         var stamp = soft?.Stamp();
+        // 与上面 update 阶段（那次提升写法）同手：tag 只依赖表名与本会话，提到循环外，
+        // 不在每条 DELETE 上新建一颗 ExecutionTag 外加一只一元数组。
+        var deleteTag = new ExecutionTag("delete", [_contract.Table.Name], _cluster);
 
         foreach (var node in _order)
         {
@@ -1282,7 +1285,7 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
             var ast = new DeleteStatement { Table = _table, Where = where };
             var sql = Emit(ast, soft?.Rewrite(_contract, _table, where, stamp), key.Length + _tokens.Length, traces, ref step);
 
-            var affected = await _orm.Ado.NonQueryAsync(sql, new ExecutionTag("delete", [_contract.Table.Name], _cluster), ct).ConfigureAwait(false);
+            var affected = await _orm.Ado.NonQueryAsync(sql, deleteTag, ct).ConfigureAwait(false);
 
             // 删除的并发谓词同样取快照：意图是「删掉我读到的那一版」，那一版被人改过就不是这一行了。
             // 这一档不回填任何东西 —— 语句成功就意味着行不在了，<c>deleted</c> 侧没有要留下的值。
@@ -1556,15 +1559,19 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
         _ => false,
     };
 
-    /// <summary>CLR 型是不是有符号/无符号整型之一（含 nullable 包装）。应用自维护的并发列只认这几型，
-    /// 因为只有它们支持 <c>+1</c> 语义。<c>datetime2</c>、<c>byte[]</c>（rowversion）等并发列不属于这一档。</summary>
+    /// <summary>CLR 型是不是有符号整型之一（含 nullable 包装）。应用自维护的并发列只认这四型，
+    /// 因为只有它们在回填那一步有 <c>+1</c> 语义。<c>uint</c>/<c>ulong</c> 特意不算：旧判据把它俩也算进
+    /// "应用自维护"，与 <c>IncrementTokenValue</c> 的支持面（注释明写 <c>int/long/short/byte</c>）对不上，
+    /// 于是那类实体会安静通过启动期、到第一次 <c>SaveChanges</c> 的回填步才炸。收窄之后它们落
+    /// <c>storeFilled</c> 那一侧、走 OUTPUT/RETURNING 回读 —— 值库不改，回读交回的本来就是原值，
+    /// "只比较不书写"的并发语义原样成立，分类判据与支持面在启动期就对齐。
+    /// <c>datetime2</c>、<c>byte[]</c>（rowversion）等并发列不属于这一档。</summary>
     static bool IsIntegerClrType(Type type)
     {
         var underlying = Nullable.GetUnderlyingType(type) ?? type;
 
         return underlying == typeof(int) || underlying == typeof(long)
-            || underlying == typeof(short) || underlying == typeof(byte)
-            || underlying == typeof(uint) || underlying == typeof(ulong);
+            || underlying == typeof(short) || underlying == typeof(byte);
     }
 
     string Collision(Node clash, object?[] values)

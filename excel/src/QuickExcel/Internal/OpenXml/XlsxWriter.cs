@@ -278,7 +278,7 @@ internal sealed class XlsxWriter
         wb.Append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>")
           .Append("<workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"><sheets>");
         for (int i = 0; i < sheets.Count; i++)
-            wb.Append("<sheet name=\"").Append(XmlUtility.Escape(UniqueSheetName(sheets[i].Name, i))).Append("\" sheetId=\"")
+            wb.Append("<sheet name=\"").Append(XmlUtility.EscapeAttribute(UniqueSheetName(sheets[i].Name, i))).Append("\" sheetId=\"")
               .Append(i + 1).Append("\" r:id=\"rId").Append(i + 1).Append("\"/>");
         wb.Append("</sheets></workbook>");
         await WriteStringEntryAsync(zip, "xl/workbook.xml", wb.ToString(), ct).ConfigureAwait(false);

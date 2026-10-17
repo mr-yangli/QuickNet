@@ -92,7 +92,7 @@ internal static class ValueConverter
             if (underlying == typeof(ushort)) { value = ushort.Parse(text, CultureInfo.InvariantCulture); return true; }
             if (underlying == typeof(float)) { value = Convert.ToSingle(ParseDoubleOrThrow(text), CultureInfo.InvariantCulture); return true; }
             if (underlying == typeof(double)) { value = ParseDoubleOrThrow(text); return true; }
-            if (underlying == typeof(decimal)) { value = decimal.Parse(text, NumberStyles.Any, CultureInfo.CurrentCulture); return true; }
+            if (underlying == typeof(decimal)) { value = decimal.Parse(text, NumberStyles.Any, CultureInfo.InvariantCulture); return true; }
             if (underlying == typeof(bool)) { value = ParseBool(text); return true; }
             if (underlying == typeof(Guid)) { value = Guid.Parse(text); return true; }
             if (underlying.IsEnum) { value = Enum.Parse(underlying, text, ignoreCase: true); return true; }
