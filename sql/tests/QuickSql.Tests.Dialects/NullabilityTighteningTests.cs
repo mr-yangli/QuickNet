@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations.Schema;
 using System.Data;
 using System.Data.Common;
 using System.Diagnostics.CodeAnalysis;
@@ -34,10 +35,10 @@ public sealed class NullabilityTighteningTests
     {
         public int Id { get; set; }
 
-        [Column(Length = 32)]
+        [QuickColumn(Length = 32)]
         public string Title { get; set; } = null!;
 
-        [Column(Length = 32)]
+        [QuickColumn(Length = 32)]
         public string? Note { get; set; }
     }
 

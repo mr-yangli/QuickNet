@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations.Schema;
 using QuickSql.Metadata;
 using DaSchema = System.ComponentModel.DataAnnotations.Schema;
 
@@ -22,7 +23,7 @@ public class OpenShop
 {
     public int Id { get; set; }
 
-    [Column(Length = 32)]
+    [QuickColumn(Length = 32)]
     public string? Name { get; set; }
 
     /// <summary>公共写口那一臂的孪生：与 <see cref="GuardedShop.Certs"/> 只差 set 的可见性。</summary>
@@ -37,7 +38,7 @@ public class GuardedShop
 {
     public int Id { get; set; }
 
-    [Column(Length = 32)]
+    [QuickColumn(Length = 32)]
     public string? Name { get; set; }
 
     [DaSchema.ForeignKey("ShopId")]
@@ -51,7 +52,7 @@ public class SeededShop
 {
     public int Id { get; set; }
 
-    [Column(Length = 32)]
+    [QuickColumn(Length = 32)]
     public string? Name { get; set; }
 
     /// <summary>预置那一颗的 <c>No</c> 由用例自己写进期望值；<c>Id = -1</c> 是一个<em>库里不会有</em>
@@ -69,6 +70,6 @@ public class ShopCert
 
     public int ShopId { get; set; }
 
-    [Column(Length = 32)]
+    [QuickColumn(Length = 32)]
     public string? No { get; set; }
 }

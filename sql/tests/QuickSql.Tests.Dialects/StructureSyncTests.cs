@@ -1,3 +1,5 @@
+using System.ComponentModel;
+using System.ComponentModel.DataAnnotations.Schema;
 using QuickSql.Core.Schema;
 using QuickSql.Metadata;
 using QuickSql.Providers;
@@ -19,18 +21,20 @@ namespace QuickSql.Tests.Dialects;
 /// 它断言的是归一，而"第二趟零动作"在库上只是这条归一的一个读数。</summary>
 public sealed class StructureSyncTests
 {
-    [Table("QUICKSQL_SHAPE", Comment = "形状表")]
-    [Index("IX_QUICKSQL_SHAPE_Title", "Title")]
+    [Table("QUICKSQL_SHAPE")]
+    [Description("形状表")]
+    [Index("Title")]
     sealed class Shape
     {
         public int Id { get; set; }
 
-        [Column(Length = 32, Comment = "标题")]
+        [QuickColumn(Length = 32)]
+        [Description("标题")]
         public string? Title { get; set; }
 
         public decimal Amount { get; set; }
 
-        [Column(Precision = 10, Scale = 2)]
+        [QuickColumn(Precision = 10, Scale = 2)]
         public decimal Price { get; set; }
 
         public DateTime CreatedAt { get; set; }

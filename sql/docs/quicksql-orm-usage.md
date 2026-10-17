@@ -178,7 +178,7 @@ var orm = QuickSqlOrm.Create(DbKind.PostgreSql, "Host=...;Database=app;");
 
 实体类 ∶ lambda ∶ `Select/Insert/Update/Delete` 链 ∶ `DbContext` ∶ 分表与读写分离的声明**一字不动**——引号 ∶ 分页 ∶ 参数前缀 ∶ `IDENTITY` 措辞这些方言差由 provider 吃掉。已知代价全部在两张现成的表里：§4.4 跨库迁移最容易踩的五格（折大写 ∶ 别名 ∶ 占位符 ∶ `OFFSET` 哨兵 ∶ `IDENTITY` 措辞），与 §3.2 的键回填能力表（**Oracle 血统要键即抛**，是换库时最硬的一格）。换库前还要读一遍 §2.4 的能力位口径：十六家里只有 SQL Server ∶ 虚谷 ∶ SQLite 有活库见证，其余十三家的方言文本层"该长这样"是本仓库自己认为的，不是厂商确认的。
 
-**不改代码的前提，是代码里没写库私有的东西。** 三类东西换库时不会被改写、也不会被报警：`WithSql` 的文本 ∶ `orm.Ado` 的文本（§3.1 逃生舱，"文本一颗不动"是它自己的纪律）、`[Column(DbTypes = "jsonb")]` 这种原生类型名直通（§2.2）。逃生舱每开一处，换库时就多一处要人工核对——这不是库的欠账，是舱的定价。
+**不改代码的前提，是代码里没写库私有的东西。** 三类东西换库时不会被改写、也不会被报警：`WithSql` 的文本 ∶ `orm.Ado` 的文本（§3.1 逃生舱，"文本一颗不动"是它自己的纪律）、`[Column(TypeName = "jsonb")]` 这种原生类型名直通（§2.2）。逃生舱每开一处，换库时就多一处要人工核对——这不是库的欠账，是舱的定价。
 
 **可重跑读数（2026-10-14，消费侧冒烟，包全部来自 nuget.org 的 `0.39.0-beta.1`）**：空 `dotnet new console` 工程，装 `QuickSql.Providers.SqlServer` ∶ `QuickSql.Generators` ∶ `Microsoft.Data.SqlClient` 三包，一只 `[Table]` 实体加一条 lambda 链（`Where`＋`OrderBy`＋`Skip/Take`），`QuickSqlOrm.Create(DbKind.SqlServer, 占位串)` 离线发出 `SELECT [t0].[Id], … OFFSET @p1 ROWS FETCH NEXT @p2 ROWS ONLY`——生成器普通包安装即挂进编译、驱动走内建表解析、零配置文件在场。再补装 `QuickSql.Providers.Kingbase`＋`Kdbndp` 与 `QuickSql.Providers.Oracle`＋`Oracle.ManagedDataAccess.Core`，**实体与 lambda 一字不改**、只换 `DbKind` 和连接串：金仓发 `LIMIT @p1 OFFSET @p2`（双引号、混合大小写原样），Oracle 发三层 `ROWNUM` 分页（标识符折大写 ∶ `:p0` 前缀 ∶ 别名不带 `AS`）——§4.4 那张五格表里的三格当场可见。反面也量到一颗：没装 provider 包的 `DbKind` 在 `Create` 当场抛，消息列已登记清单（"已登记：SqlServer, Dameng"），这就是 §1.8"只登记你真引用的那几家"那条设计。全程是 `ToSql()` 文本层读数，没有一条语句发进真库；达梦在 NuGet 驱动档上是死路（§1.4 那颗反例）。
 
@@ -205,16 +205,15 @@ var orm = QuickSqlOrm.Create(DbKind.PostgreSql, "Host=...;Database=app;");
 
 ### 2.2 实体映射：两条路
 
-**路 A：标注。** 三种类 + 一个枚举，都在 `src/QuickSql.Abstractions/Metadata/QuickSqlAttributes.cs`，命名空间是 **`QuickSql.Metadata`**（Fluent 那一路在 `QuickSql.Metadata.Fluent`）——只 `using QuickSql;` 拿不到 `[Table]`，NuGet 冒烟里这一格实测绊过一次（§1.9）：
+**路 A：标注。** 自研注解 + 一颗枚举，都在 `src/QuickSql.Abstractions/Metadata/QuickSqlAttributes.cs`，命名空间是 **`QuickSql.Metadata`**（Fluent 那一路在 `QuickSql.Metadata.Fluent`）——只 `using QuickSql;` 拿不到 `[QuickColumn]`，NuGet 冒烟里这一格实测绊过一次（§1.9）。**名字、类型名、排除、主键、必填、长度、备注这些系统注解接得住的语义一律不重复造注解**：表名与模式用 `System.ComponentModel.DataAnnotations.Schema` 的 `[Table]`，列名与 provider 原生类型名用同一命名空间的 `[Column]`，排除用 `[NotMapped]`，主键用 `[Key]`，必填用 `[Required]`，长度用 `[StringLength]/[MaxLength]`，备注（表与列同一格）用 **`System.ComponentModel`** 的 `[Description]`——它就是从前的自研 `[Table(Comment=…)]/[Column(Comment=…)]` 退场后的接棒者，座次照旧排在 Fluent 之后。自研层只剩系统注解表达不了的语义：
 
-- `[Table(string name)]`，属性 `Name`、`Schema?`、`Comment?`
-- `[Column(string? name = null)]`，属性 `Name`、`DbTypes`、`Length`、`Precision`、`Scale`、`IsNullable`/`IsPrimary`/`IsIdentity`（`TriState`：`Unset`/`Yes`/`No`）、`IsIgnore`、`Comment`
-- `[Index(string name, params string[] memberNames)]`，属性 `Unique`、`Clustered`、`Descending`
+- `[QuickColumn]`（只能挂属性/字段）：`Length`、`Precision`、`Scale`，以及三态 `IsNullable`/`IsPrimary`/`IsIdentity`（`TriState`：`Unset`/`Yes`/`No`）——尺寸与三态是 DataAnnotations 表达不了的（`[Required]` 只有"非空"一个方向，`[Key]` 只管"谁是键"管不到"值谁给"）
+- `[Index(params string[] memberNames)]`，属性 `IsUnique`、`Clustered`、`Descending`——形状与 EF Core 的 `[Index]` 同一版：**不给索引名**，名字由约定生成（无模板的表按 `IX_{表}_{列}`，分表的表名是 `{year}` 样模板，按类名算，见 §10.3）
 - `[SplitTable(SplitKind kind, string field)]`，可选属性 `Buckets`（只有 `Hash` 档读它）；它要求同一颗 `[Table]` 的名字是一张带占位符的模板（用法与判据见 §3.6）
 - `[DataSource(string cluster)]`（`QuickSqlAttributes.cs:94`，只能挂类）：这一张实体住哪一座集群。**注解里只有集群名、没有连接串**，连接串全在 §2.1 那三颗上（用法与判据见 §3.7）。不写即 `main`，而 `main` 就是那条 `ConnectionString` —— 今天全部调用方行为一字不变
 - `[ConcurrencyToken]`（只能挂属性上；语义是"只比较不书写"）
 
-DataAnnotations 同样认（`[Key]`、`[Required]`、`[StringLength]`、`Schema.Table`、`Schema.Column(name/TypeName)`、`NotMapped`），现场见 `tests/QuickSql.Tests.Common/Model.cs` 里的 `LegacyShipment`。
+DataAnnotations 照常认（`[Key]`、`[Required]`、`[StringLength]`、`Schema.Table`、`Schema.Column(name/TypeName)`、`NotMapped`），现场见 `tests/QuickSql.Tests.Common/Model.cs` 里的 `LegacyShipment`。**自研的 `[Table]/[Column]` 已整个删除**（没有 Obsolete 过渡期）：还在写 `[QuickSql.Metadata.Table("…")]` 的代码，把 using 换成 `System.ComponentModel.DataAnnotations.Schema` 即 `[Table]` 同形；`[Column(DbTypes=…)]` 换 `[Column(TypeName=…)]`（同一格、同一优先级档）；`[Column(IsIgnore=true)]` 换 `[NotMapped]`；`[Column(IsPrimary=TriState.Yes)]` 首选 `[Key]`（QuickColumn 里那格三态保留，是为了"写了 No"与"点名非空"这两件 `[Key]` 表达不了的事）。
 
 约定的那一层：整型主键 `Id` ⇒ 主键 + 自增；C# 可空 ⇒ 可空列；无长度字符串 ⇒ provider 默认（SQL Server 落 `NVARCHAR(MAX)`）。导航属性不成列。
 
@@ -262,7 +261,7 @@ DataAnnotations 同样认（`[Key]`、`[Required]`、`[StringLength]`、`Schema.
   （雪花编号那一类），库里那一列只是 `bigint` 加一个默认值，库既不给号也不许写号。装配口是
   `ContractResolver(provider, model, integralPrimaryKeyAutoIncrement: false)`，走 `QuickSqlOrm` 那颗
   "注册表由外部提供"的干净口交进去（`QuickSqlOrmOptions` 里没有这一格）。
-  它只挪**约定**那一档：`[Column(IsIdentity = TriState.Yes)]` 与 Fluent `IsIdentity(true)` 照旧赢过它，
+  它只挪**约定**那一档：`[QuickColumn(IsIdentity = TriState.Yes)]` 与 Fluent `IsIdentity(true)` 照旧赢过它，
   真自增表不需要为这颗开关改回来。开着默认值时两侧形状与这一格落地之前逐字同文，
   关掉之后 `ExplainKeys()` 那一档**当场抛并点名"没有自增列"**（不是静默回空包）。
   钉在 `ApplicationKeyConventionTests`（离线五臂）+ `ApplicationKeyPathTests`（活库：两行各带自己那个号进库，
@@ -273,7 +272,7 @@ DataAnnotations 同样认（`[Key]`、`[Required]`、`[StringLength]`、`Schema.
   于是每一次合法写入（租户号、备注、客户端令牌那几列本来就是 null）都被一把没人宣布过的尺子整批拒掉。
   今天 `ColumnContract.NullabilityDeclared` 记下这一格：`false` 时 §10.6 的必填尺子不落，
   **而列的形状一字不动**（DDL 照旧 `NOT NULL` —— 翻那一格等于替现库批量 `DROP NOT NULL`）。
-  说过话的三形照旧挡：可空上下文里的 `string`、`[Required]`、`[Column(IsNullable = TriState.No)]`；
+  说过话的三形照旧挡：可空上下文里的 `string`、`[Required]`、`[QuickColumn(IsNullable = TriState.No)]`；
   `string?` 与 Fluent `IsRequired(false)` 照旧放行。两侧同一把尺子由 §13.11 的对拍钉住
   （G1 问 Roslyn 的 `NullableAnnotation.None`，G2 问 `NullabilityState.Unknown`，两个名字不同的东西要落成同一个值）。
   钉在 `NullabilityDeclarationTests`（离线四臂，含"发出去的是 `DBNull` 不是空串"与建表文本未变）
@@ -770,7 +769,7 @@ var report = await db.SaveChangesAsync();
 - `orm.CreateSharedContext<TContext>()`（v0.37 第八笔，`QuickSqlOrm.cs:256`）：**同一条 async 执行流上取到的一直是同一只会话**，用于不做 DI 注册也要跨方法传的场景（控制台、后台服务）。三条边界要用之前先知道：① 共享范围是**一条流**，不是进程也不是线程，槽位挂在 orm 实例上，所以两只 `QuickSqlOrm` 在同一条流里各拿各的会话；`await` 之后的子任务里建的那只**不会回到父帧**（父帧之后自己取，取到的是另一只）；② 反过来，父帧先建、之后扇出的并发分支拿到的是**同一只**，而 `ChangeTracker` 不是线程安全的（今天没有闸门，要并发就各自开流或各自 `CreateDbContext`）；③ 会话没有 `Dispose`，"结束"就是让那条流出作用域，或者按 `ChangeTracker.Clear()` 清账。八条判据见 `tests/QuickSql.Tests.Dialects/SharedContextTests.cs`，口径见设计文档 §7 末
 - `DbSet<T>` 直接继承查询链（`QuickSql.Core/Orchestration/DbSet.cs`）并实现 `ITrackedSet<T>`：`Local`（`LocalView<T> : IReadOnlyList<T>`，有 `Entries` 与 `Find(params object?[])`）、`Load<TProp>(navigation)` —— **后者今天抛 `QuickSqlException`**（导航补载没接线）
 - `ChangeTracker`：`Count`、`HasChanges`、`Entries()`、`Entries<T>()`、`DetectChanges()`、`Clear()`；状态是 `EntityState { Detached, Added, Unmodified, Modified, Deleted }`；点名某列用 `Entry(entity).Property(nameof(X)).IsModified = true`，`AutoDetectChangesEnabled` 可关
-- **三档先后有一格会让步：同一张表这一轮既插又删时，删除整档提前**（规格 §8.2 那句"先插、再改、最后删"的<em>唯一</em>例外，`src/QuickSql.Core/Tracking/ChangeTracker.cs` 的 `FlushDueAsync`）。要腾开的是<em>业务</em>唯一键 —— 明细的行号、顺序位、单内编码那一类，库里那条 `UNIQUE (父键, 位置)` 管的就是它，而"摘掉第 3 行、再插一行号仍然是 3 的新行"（换物资、换供应商、换槽位）是编辑界面的常规动作。按原先后发句子，那句 `INSERT` 撞的是<em>本轮自己就要删掉</em>的那一行：`23505 duplicate key`，逐条看每句都对、串起来是错的。提前的是**整档删除**而不是那一张表的删除，所以"被依赖的那一行最后删"那条不变量一字未动（只搬某一张表就会把父与子的删除拆开，换来一句删不掉的父）；触发条件只看状态（这一档同时有 `Added` 与 `Deleted`），不去问库里有没有那条索引 —— 没有时换一下先后也是中性的。只插不删、只删不插的表照旧走三档，一个字节没改。见证：`tests/QuickSql.Tests.Integration/RowSwapOrderingPathTests.cs` 两颗（一删一插同键、一删两插同键），唯一索引由结构同步从 `[Index(Unique = true)]` 现场建出并<em>当场撞一次</em>证明它活着；把触发条件按死重跑，两颗都红在库的那句唯一约束上
+- **三档先后有一格会让步：同一张表这一轮既插又删时，删除整档提前**（规格 §8.2 那句"先插、再改、最后删"的<em>唯一</em>例外，`src/QuickSql.Core/Tracking/ChangeTracker.cs` 的 `FlushDueAsync`）。要腾开的是<em>业务</em>唯一键 —— 明细的行号、顺序位、单内编码那一类，库里那条 `UNIQUE (父键, 位置)` 管的就是它，而"摘掉第 3 行、再插一行号仍然是 3 的新行"（换物资、换供应商、换槽位）是编辑界面的常规动作。按原先后发句子，那句 `INSERT` 撞的是<em>本轮自己就要删掉</em>的那一行：`23505 duplicate key`，逐条看每句都对、串起来是错的。提前的是**整档删除**而不是那一张表的删除，所以"被依赖的那一行最后删"那条不变量一字未动（只搬某一张表就会把父与子的删除拆开，换来一句删不掉的父）；触发条件只看状态（这一档同时有 `Added` 与 `Deleted`），不去问库里有没有那条索引 —— 没有时换一下先后也是中性的。只插不删、只删不插的表照旧走三档，一个字节没改。见证：`tests/QuickSql.Tests.Integration/RowSwapOrderingPathTests.cs` 两颗（一删一插同键、一删两插同键），唯一索引由结构同步从 `[Index(IsUnique = true)]` 现场建出并<em>当场撞一次</em>证明它活着；把触发条件按死重跑，两颗都红在库的那句唯一约束上
 - 只写脏列：UPDATE 的 SET 里只有 `ModifiedMembers`；没有主键的实体**拒绝跟踪并指路**（`Attach(new AuditRow{...})` 会抛）
 - `SaveChanges()` 是同步壳（sync-over-async）；干净无事时**不发语句、不开事务**（`tests/QuickSql.Tests.Dialects/TrackingTests.cs:527` 那格用探针工厂证的就是这条）；发语句前先过 `EnsureWriteOrderResolvable()`（外键依赖成环就在这里红）
 - 分表实体**可以读进会话、不可以由会话写出去**：`SaveChanges` 在开事务之前逐行问一遍跟踪器，碰到挂在分表模板上的待写实体就整批拒绝并指路（`src/QuickSql.Core/Tracking/ChangeTracker.cs:231`，被 `Orchestration/DbContext.cs:183` 调用），所以拒绝发生在"发语句之前"而不是"发到一半"；链式侧不受影响，`InsertRange`/`Update.SplitTable` 照写。为什么是拒绝而不是定位到片：见 §3.6 与 §4.3 第 10 条末项（"跨座/跨片的一行由什么指认"那一格规格留白）
@@ -832,7 +831,7 @@ public class TicketRow { … }
 ```
 
 - 占位符只认四颗：`{year}` `{month}` `{day}` `{shard}`。每颗至多一次，本档要的必须在、本档不要的不许有（月档写 `{day}` 当场抛），认不出的花括号（`{hour}`）也当场抛 —— 症状本来是"部署之后库里多一张名字叫 `…_{hour}` 的表"，所以这一格走启动期抛而不是发 SQL 时才发现。六档：`Day`／`Week`／`Month`／`Season`／`Year`／`Hash`。
-- **启动期四条判据**：分片键必须是一列（`IsIgnore` 排除掉的属性不行）；模板得配得上那一档；哈希档少于 2 个桶等于没分；**主键不许自增**（跨片唯一库给不了，两张片各自能发出同一个号，要嘛客户端生成 `Guid`，要嘛这一张不分）。
+- **启动期四条判据**：分片键必须是一列（被 `[NotMapped]` 排除掉的属性不行）；模板得配得上那一档；哈希档少于 2 个桶等于没分；**主键不许自增**（跨片唯一库给不了，两张片各自能发出同一个号，要嘛客户端生成 `Guid`，要嘛这一张不分——声明写在 `[QuickColumn(IsIdentity = TriState.No)]`）。
 - 片名只有一份换算实现（`SplitRouting`），写侧按行的分片键值算、读侧按范围算、DDL 按范围建，三处同一颗 —— 所以不存在"同一个月在两处算出两个表名"。哈希档不用 `GetHashCode()`（它随进程随机化，同一行两次运行会进两张表）：整数折成无符号取模、字符串走 FNV-1a。时间档先下整到周期起点再填模板：`Week` 档的片名记的是那周的周一，行可以落在那周任何一天。
 - 模板**不许原样发出去**：`SplitTables` 没给范围就读、或 UPDATE/DELETE 没钉片就写，发射口当场抛（消息给两条出路，不是一句"不支持"）。整库同步遇到模板是"跳过并记名"（`SyncStructureAsync` 的 `SkippedSplitTemplates`），不是建一张带花括号的表。
 

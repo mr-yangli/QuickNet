@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations.Schema;
 using QuickSql.Metadata;
 using QuickSql.Providers;
 using QuickSql.Schema;
@@ -174,6 +175,6 @@ public class LongKey
 {
     public long Id { get; set; }
 
-    [Column(Length = 64)]
+    [QuickColumn(Length = 64)]
     public string? Name { get; set; }
 }

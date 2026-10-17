@@ -85,7 +85,7 @@ namespace QuickSql.Providers.Sqlite;
 /// 更要紧的是它显式写了也只到 ASCII：同一格上 <c>'ä' = 'Ä' COLLATE NOCASE</c> 仍是 <c>0</c>
 /// 【实测·2239 三列：1 ∶ 0 ∶ 0】。所以 T-SQL 与 MySQL 血统那两家"把真变化判成没变"的那一颗，
 /// 在本家要么不存在、要么得有人自己把 <c>NOCASE</c> 写进列声明里 —— 而那一格是手写的
-/// <c>[Column(DbTypes = …)]</c> 路径，provider 不翻译也不校验（<c>XuguCodeFirst</c> 类注释里
+/// <c>[Column(TypeName = …)]</c> 路径，provider 不翻译也不校验（<c>XuguCodeFirst</c> 类注释里
 /// rowversion 那一条立的正是同一句通例），记 §14。
 /// <b>同一批读数里还有一颗方向相反的</b>：<c>LIKE</c> 在本家默认<em>不</em>分大小写
 /// （<c>'A' LIKE 'a'</c> 为 <c>1</c> 而 <c>'A' GLOB 'a'</c> 为 <c>0</c>【实测·96】），

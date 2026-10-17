@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations.Schema;
 using System.Data;
 using Da = System.ComponentModel.DataAnnotations;
 using DaSchema = System.ComponentModel.DataAnnotations.Schema;
@@ -385,7 +386,7 @@ public sealed class MetadataEquivalenceTests
         Assert.Equal(MetadataLayer.Fluent, city.Layer);
         Assert.Contains("Fluent HasColumnName", city.Note);
         Assert.Contains("Fluent HasMaxLength(32)", city.Note);
-        Assert.Contains("[Column(Length=32)]", viaAnnotation.Columns.Single(c => c.MemberName == "City").Origin.Note);
+        Assert.Contains("[QuickColumn(Length=32)]", viaAnnotation.Columns.Single(c => c.MemberName == "City").Origin.Note);
 
         // 只覆写长度的那一列不该顺手把「列名来自哪一层」也改成 Fluent——层的粒度是按字段而不是按实体。
         Assert.Equal(MetadataLayer.Convention, viaFluent.Columns.Single(c => c.MemberName == "Name").Origin.Layer);
@@ -404,14 +405,6 @@ public sealed class MetadataEquivalenceTests
         Assert.Equal(nameof(ConflictingLengths.Code), raised.MemberName);
         Assert.Equal(new[] { "[StringLength(10)]", "[MaxLength(20)]" }, raised.Sources);
         Assert.Contains("不自动取更严的那条", raised.Message);
-    }
-
-    [Fact]
-    public void Two_table_attributes_naming_different_tables_are_a_conflict_not_a_precedence()
-    {
-        var raised = Checks.Raised<MetadataConflictException>(() => Reflected().Contract<ConflictingTable>());
-
-        Assert.Equal(new[] { "[Table(\"ConflictingNames\")]", "[Table(\"ConflictingNamesToo\")]" }, raised.Sources);
     }
 
     [Fact]
@@ -443,16 +436,13 @@ public sealed class MetadataEquivalenceTests
     }
 }
 
-/// <summary>同层冲突的两个负样本。<b>它们必须待在本项目而不是 QuickSql.Tests.Common</b>：那边挂着源生成器，
-/// 同样的形状在那边会让编译直接失败（QuickSql001），而「编译期负样本没有断言口」是 §14 未完项里另一格。
-/// 换到这里，G2 的启动期抛点才有可跑的用例（§13.11）。</summary>
-[Table("ConflictingNames")]
-[DaSchema.Table("ConflictingNamesToo")]
-public class ConflictingTable
-{
-    public int Id { get; set; }
-}
-
+/// <summary>同层冲突的负样本（StringLength 与 MaxLength 这一对）。<b>它必须待在本项目而不是
+/// QuickSql.Tests.Common</b>：那边挂着源生成器，同样的形状在那边会让编译直接失败（QuickSql001），
+/// 而「编译期负样本没有断言口」是 §14 未完项里另一格。换到这里，G2 的启动期抛点才有可跑的用例
+///（§13.11）。
+/// <para>双 [Table] 那一档的旧负样本不在这里了：两颗注解合成系统的一颗后，「两个 [Table] 抢名」的
+/// 形状不再存在于声明层（同名双注解是编译器眼里的 CS0579），冲突护栏只剩口径真正互斥
+/// 的同层两格 [StringLength]/[MaxLength]。</para></summary>
 [Table("ConflictingLengths")]
 public class ConflictingLengths
 {

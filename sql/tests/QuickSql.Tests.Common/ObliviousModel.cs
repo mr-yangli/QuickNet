@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations.Schema;
 #nullable disable
 using QuickSql.Metadata;
 

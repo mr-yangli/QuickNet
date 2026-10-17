@@ -95,7 +95,7 @@ public sealed class Gbase8sChangeGuard : IChangeGuard
         // 走 GetStoreType 而不是只读 StoreTypeName：后者只有 ApplyStorageDefaults 跑过才有值，
         // 而守卫在发射路径上调用，那一趟不保证已经走完（与另五家同一条理由）。
         // 切在第一个 '(' 或空格之前：本家有带空格的型名（DATETIME YEAR TO FRACTION(3)），三颗大对象
-        // 既不带括号也不带空格，而 [Column(DbType = "CLOB …")] 那种手写的带法也要落得下来 ——
+        // 既不带括号也不带空格，而 [Column(TypeName = "CLOB …")] 那种手写的带法也要落得下来 ——
         // 与虚谷那一格同形而更刚需：那一家是"同一档既有带括号也有不带括号"，这一家多一种"带空格"。
         var name = Gbase8sTypes.Instance.GetStoreType(column);
         var cut = name.IndexOfAny(['(', ' ']);

@@ -177,7 +177,11 @@ public static class EntityContractFactory
 
         var (edges, collections) = MapRelationships(relationships, resolved);
 
-        return new EntityContract(clrType, table, resolved, MapIndexes(indexes, resolved, clrType.Name),
+        return new EntityContract(clrType, table, resolved, MapIndexes(indexes, resolved,
+            // 约定索引名的底子：名字没有模板的表用表名（与 [Index] 显式点名时代的习惯同源 ——
+            // 仓内实体钉着的 IX_{表}_{列} 就是这一形）；分表的表名是 {year} 样模板，按它算名
+            // 物理表还没成形，那一样式取类名（镜像 ShardLog 的名字）。
+            table.Split is null ? table.Name : clrType.Name),
             edges, collections);
     }
 
@@ -188,7 +192,7 @@ public static class EntityContractFactory
     static SplitFacts CompleteSplit(SplitFacts split, ColumnContract[] columns, TableInfo table, string entityName)
     {
         var column = Array.Find(columns, c => string.Equals(c.MemberName, split.MemberName, StringComparison.Ordinal))
-            ?? throw new QuickSqlException($"分表声明的分片键 {split.MemberName} 不是实体 {entityName} 的一列（可能被 [Column(IsIgnore)] 或 [NotMapped] 排除）");
+            ?? throw new QuickSqlException($"分表声明的分片键 {split.MemberName} 不是实体 {entityName} 的一列（可能被 [NotMapped] 排除）");
 
         SplitRouting.ValidateTemplate(split.Kind, table.Name);
 
@@ -196,7 +200,7 @@ public static class EntityContractFactory
             throw new QuickSqlException($"分表声明了 {SplitKind.Hash} 档却只给 {split.Buckets} 个桶（实体 {entityName}），少于 2 个桶等于没分");
 
         if (Array.Find(columns, c => c.IsPrimary && c.IsIdentity) is { } identity)
-            throw new QuickSqlException($"分表实体 {entityName} 的主键 {identity.MemberName} 是自增列：跨片唯一性库给不了。要么由客户端生成主键（[Column(IsIdentity=TriState.No)]），要么这一张表不分表");
+            throw new QuickSqlException($"分表实体 {entityName} 的主键 {identity.MemberName} 是自增列：跨片唯一性库给不了。要么由客户端生成主键（[QuickColumn(IsIdentity=TriState.No)]），要么这一张表不分表");
 
         return split with { ColumnName = column.ColumnName };
     }
@@ -337,7 +341,7 @@ public static class EntityContractFactory
         {
             result[i] = Array.Find(columns, c => string.Equals(c.MemberName, memberNames[i], StringComparison.Ordinal))
                         ?.ColumnName
-                        ?? throw new QuickSqlException($"{declaration} 引用了未映射的属性 {memberNames[i]}（可能被 [NotMapped] 或 [Column(IsIgnore)] 排除）");
+                        ?? throw new QuickSqlException($"{declaration} 引用了未映射的属性 {memberNames[i]}（可能被 [NotMapped] 排除）");
         }
 
         return result;

@@ -82,7 +82,7 @@ public sealed class SqlServerDdlTests
 
         Golden.Verify("ddl-customer", customer);
 
-        // [Column(Length = 64)] 与不写长度的两套兜底必须在同一份文本里对得上（§10.4 的三档长度）。
+        // [QuickColumn(Length = 64)] 与不写长度的两套兜底必须在同一份文本里对得上（§10.4 的三档长度）。
         Checks.Has("[Name] NVARCHAR(64) NULL", customer);
         Checks.Has("[Remark] NVARCHAR(32) NULL", customer);
         Checks.Has("[Note] NVARCHAR(MAX) NULL", order);

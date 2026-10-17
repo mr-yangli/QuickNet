@@ -1,3 +1,5 @@
+using System.ComponentModel;
+using System.ComponentModel.DataAnnotations.Schema;
 using QuickSql.Metadata;
 using QuickSql.Schema;
 using QuickSql.TestInfra;
@@ -38,21 +40,24 @@ public sealed class StructureSyncPathTests
 {
     /// <summary>靶实体：五列里每一列各承担一格差。列序即 <see cref="SchemaSyncResult.AlteredColumns"/>
     /// 的顺序，所以下面那几句逐格的断言能写成清单全文而不是 <c>Contains</c>。</summary>
-    [Table("QuickSqlShapeProbe", Comment = "形状探针表")]
-    [Index("IX_QuickSqlShapeProbe_Title", "Title")]
+    [Table("QuickSqlShapeProbe")]
+    [Description("形状探针表")]
+    [Index("Title")]
     public sealed class ShapeProbe
     {
         public int Id { get; set; }
 
         /// <summary>库里那一份是 <c>nvarchar(64)</c> 而备注写着旧话 → 长度差 + 备注差。</summary>
-        [Column(Length = 32, Comment = "标题")]
+        [QuickColumn(Length = 32)]
+        [Description("标题")]
         public string? Title { get; set; }
 
         /// <summary>库里是 <c>decimal(18,2)</c> → 标度差，也就是用户点名的那一颗"小数长度"。</summary>
         public decimal Amount { get; set; }
 
         /// <summary>库里没有这一列，而它可空 → 补列，顺带补备注。</summary>
-        [Column(Length = 40, Comment = "备注")]
+        [QuickColumn(Length = 40)]
+        [Description("备注")]
         public string? Note { get; set; }
 
         /// <summary>形状（<c>datetime2(3)</c>）与库里一致，只差可空性 → 单独钉住"整列定义重写"那一句。</summary>

@@ -1,3 +1,5 @@
+using System.ComponentModel;
+using System.ComponentModel.DataAnnotations.Schema;
 using QuickSql;
 using QuickSql.Generated;
 using QuickSql.Metadata;
@@ -75,7 +77,7 @@ public sealed class XmlDocCommentTests
     {
         var facts = CompileTimeProbe.Probe(DisplaySource, "true").Text("QuickSqlGeneratedDocDisplay.g.cs");
 
-        // [Display] 那一层在反射侧就是备注的来源之一（<c>display?.Description ?? display?.Name</c>），
+        // 备注链在反射侧是 [Description]（System.ComponentModel）→ [Display(Description/Name)]，注释接在链尾：
         // 注释接在它后面：换档序会让同一份源码在两侧给出两个备注，而那是 §13.11 抓得住的最轻的一种。
         Assert.Contains("Comment = \"显示用的备注\",", facts);
         Assert.DoesNotContain("摘要让位", facts, StringComparison.Ordinal);
@@ -209,11 +211,12 @@ public sealed class XmlDocCommentTests
 
     const string AnnotatedSource = CompileTimeProbe.Header + """
         /// <summary>类摘要不该盖住注解</summary>
-        [Table("QuickSqlDocAnnotated", Comment = "注解给的表备注")]
+        [Table("QuickSqlDocAnnotated")]
+        [Description("注解给的表备注")]
         public class DocAnnotated
         {
             /// <summary>属性摘要不该盖住注解</summary>
-            [Column(Comment = "注解给的列备注")]
+            [Description("注解给的列备注")]
             public int Id { get; set; }
         }
         """;

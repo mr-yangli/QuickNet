@@ -55,7 +55,7 @@ namespace QuickSql.Providers.Xugu;
 /// 只是不长在这一颗关键字上；这里读到的是"文档列了三种而里面没有全文"）。同一格在
 /// <c>MySqlCodeFirst.EmitCreateIndex</c> 里那一段 <c>switch</c> 注释上立过一次（它写的是"三份抛里唯一一份有正面依据"）。</item>
 /// <item><b><c>rowversion</c> 是这一家 DDL 拒收的第一颗名字</b>【实测·否定其可用】（v0.34 第二笔，
-/// <see cref="EmitColumnDefinition"/> 里那一道）：这一族对 <c>[Column(DbTypes = …)]</c> 的<em>通例</em>是
+/// <see cref="EmitColumnDefinition"/> 里那一道）：这一族对 <c>[Column(TypeName = …)]</c> 的<em>通例</em>是
 /// "人写的名字原样发、provider 不翻译也不校验"——今天仍然如此，<c>rowversion</c> 是第一颗、也是唯一一颗
 /// 被点名的例外。它不是"这一家认不认这个词"的问题：认（RV-01a/b 建得成、目录读作 <c>ROWVERSION</c>、
 /// RV-11d→f 会自增），问题是<em>发出去之后本仓库用不了它</em>（读即 <c>DataOutOfBindException</c>，
@@ -201,7 +201,7 @@ public sealed class XuguCodeFirst(XuguTypes types) : ICodeFirstDialect
         if (string.Equals(storeType.Trim(), "rowversion", StringComparison.OrdinalIgnoreCase))
             throw new QuickSqlException("虚谷不建 rowversion 列：库里建得成、会自增，但驱动读不回那一列的值"
                 + "（带它的 SELECT 一取行就抛 System.DataOutOfBindException，RV-08/A-06 两批同一颗红，§14）。"
-                + "这一家请改用应用给值的并发列：[ConcurrencyToken] 而不带 [Column(DbTypes = \"rowversion\")]，"
+                + "这一家请改用应用给值的并发列：[ConcurrencyToken] 而不带 [Column(TypeName = \"rowversion\")]，"
                 + "比较式与写侧与另四家逐字同形（XuguConcurrency），缺的只是「由库递增」这一格 —— 那一格等的是 SPI，不是改名。");
 
         writer.Append(Identifiers.Quote(column.ColumnName)).Append(' ').Append(storeType);

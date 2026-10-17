@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations.Schema;
 using QuickSql.Metadata;
 
 namespace QuickSql.TestInfra;
@@ -17,7 +18,7 @@ public class MomentRow
 
     public DateTime Bare { get; set; }
 
-    [Column(DbTypes = "timestamptz")]
+    [Column(TypeName = "timestamptz")]
     public DateTime DeclaredOffset { get; set; }
 
     public DateTimeOffset Instant { get; set; }

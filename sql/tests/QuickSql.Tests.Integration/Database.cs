@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations.Schema;
 using System.Data;
 using System.Data.Common;
 using System.Globalization;
@@ -414,7 +415,7 @@ static class Database
     ///
     /// <para><b>第七家挂的是另一条账，而它比虚谷那一格更靠前</b>：本家不是"那一档建了而读不回来"，
     /// 是<b>那一档在本家没有入口</b>。<c>InventoryItem.RowVersion</c> 带的是
-    /// <c>[Column(DbTypes = "rowversion")]</c>，而型名在这一族不参与存储【实测·B1 ∶ C2 七颗型名原样回读】，
+    /// <c>[Column(TypeName = "rowversion")]</c>，而型名在这一族不参与存储【实测·B1 ∶ C2 七颗型名原样回读】，
     /// "由库给值"在这一族只有 rowid 那颗 <c>AUTOINCREMENT</c> 一个入口【实测·2802 ∶ 2810】——
     /// 于是那一列就是一列普通可空列，库永远不给它值。两半后果都在第一跑里数到了
     /// （<c>obj/logs/v37-sqlite-int-1.log</c>）：回填交回 <c>null</c>（那条用例红在
@@ -434,7 +435,7 @@ static class Database
 
         Assert.SkipWhen(Family == Target.Sqlite,
             "sqlite 这一家没有\u201c值归库给\u201d那一档：型名不参与存储（B1/C2），而库给值的入口只有 rowid 那颗 " +
-            "AUTOINCREMENT（2802/2810），所以 [Column(DbTypes = \"rowversion\")] 建的是一列普通可空列。" +
+            "AUTOINCREMENT（2802/2810），所以 [Column(TypeName = \"rowversion\")] 建的是一列普通可空列。" +
             "第一跑的两半读数在 v37-sqlite-int-1.log：回填交回 null，而\u201c别人改过\u201d永不成立（并发谓词本身是通的，" +
             "3302/3303）。本文件的十条用例判的都是\u201c库给那一格换了值\u201d，在本家没有对象。");
 
@@ -1519,7 +1520,7 @@ static class Database
         }
 
         // <b>第四家到这里就建不出这张表，而"建不出"必须留档、不能把整副夹具带走</b>：
-        // <c>InventoryItem.RowVersion</c> 带的是 <c>[Column(DbTypes = "rowversion")]</c>，而
+        // <c>InventoryItem.RowVersion</c> 带的是 <c>[Column(TypeName = "rowversion")]</c>，而
         // <c>PostgreSqlTypes.GetStoreType</c> 第一行是"人写过的型名原样还"（<c>StoreTypeName</c> 短路），
         // 于是那句 DDL 里 <c>"RowVersion" rowversion</c> 直达库—— 库答
         // <c>42704: type "rowversion" does not exist</c>【实测·D-04】。
@@ -1543,7 +1544,7 @@ static class Database
                 "而 provider 对人写的型名原样发出（StoreTypeName 短路），建表因此红在 42704（D-04）；" +
                 "同形换 bytea 建得成（D-05），所以缺的是那一型而不是那句语法。" +
                 "库给值的入口在本族只有 identity（K-03），没有逐次换二进制令牌的那一档 —— 缺口记 §14，" +
-                "要不要在这一家拒收 [Column(DbTypes = \"rowversion\")]（XuguCodeFirst v0.34 那一手）是待裁决。";
+                "要不要在这一家拒收 [Column(TypeName = \"rowversion\")]（XuguCodeFirst v0.34 那一手）是待裁决。";
 
             Console.WriteLine("EnsureInventoryItem：postgresql 一支建不出夹具表 —— " + InventoryItemGap);
 

@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations.Schema;
 using QuickSql.Metadata;
 using QuickSql.TestInfra;
 using Xunit;
@@ -81,7 +82,7 @@ public class DdlTests
         Database.Ready();
 
         // <b>第四家（postgresql）在这一条用例上没有可判的对象</b>：本用例的题面是"那句 DDL 在库里建出了什么"，
-        // 而那一句在本家<em>建不出表</em> —— 探针表带的还是 <c>[Column(DbTypes = "rowversion")]</c>，
+        // 而那一句在本家<em>建不出表</em> —— 探针表带的还是 <c>[Column(TypeName = "rowversion")]</c>，
         // <c>PostgreSqlTypes.GetStoreType</c> 第一行那颗 <c>StoreTypeName</c> 短路照人写型名原样发出去，于是 <c>EnsureTable</c> 红在
         // <c>42704: type "rowversion" does not exist</c>【实测·<c>obj/logs/v37-pg-recon-1.log</c> D-04 逐字同一颗，
         // 本用例那一次红落在 <c>obj/logs/v37-pg-int-1.log</c> 第 28 行】。同形换 <c>bytea</c> 建得成（D-05），
@@ -173,7 +174,7 @@ public class DdlTests
             //    那一句中文在这次抓取里是乱码，不作为厂商文案的证据；位置 L1 C8 正是 <c>LENGTH</c> 的首字母）。
             // 于是"把 <c>StoreFillsValue</c> 打开"这一手今天<em>补不出</em>这一档：库里那一格连读都读不回来，
             // 开关写上了也只是把一句能跑的 DDL 换成一句建出废列的 DDL。要不要在这一家<em>拒收</em>
-            // <c>[Column(DbType = "rowversion")]</c>（而不是原样发出去）曾是一笔记 §14 的待裁决 —— v0.34 第二笔
+            // <c>[Column(TypeName = "rowversion")]</c>（而不是原样发出去）曾是一笔记 §14 的待裁决 —— v0.34 第二笔
             // 已落地为拒收：三条 DDL 路在 <c>XuguCodeFirst.EmitColumnDefinition</c> 认型之后抛 <c>QuickSqlException</c>。
             // 本用例今天仍绿是因为 <c>EnsureTable</c> 见表即返，全新库建不出这两张夹具表那笔新账也记在 §14 同一格。
             Assert.Equal("1", filled["is_nullable"]);
@@ -411,12 +412,12 @@ public class StoreFilledProbe
 {
     public int Id { get; set; }
 
-    [Column(Length = 32)]
+    [QuickColumn(Length = 32)]
     public string? Tag { get; set; }
 
     /// <summary>值归库给的那一型：实体侧可空、库里 NOT NULL，这一格的分岔就是本题。</summary>
     [ConcurrencyToken]
-    [Column(DbTypes = "rowversion")]
+    [Column(TypeName = "rowversion")]
     public byte[]? Version { get; set; }
 
     /// <summary>另一格并发列：同样不给写，可库里没有任何东西给它值，所以 DDL 必须留 NULL。</summary>

@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations.Schema;
 using QuickSql.Aop;
 using QuickSql.Metadata;
 using QuickSql.Query;
@@ -687,7 +688,7 @@ public class ReadPathTests
         var batch = "quicksql-esc-" + Guid.NewGuid().ToString("N")[..8];
 
         // <b>第四家（postgresql）在这一判上没有对象</b>：它要一张 <c>InventoryItem</c>，而本家建不出那张表
-        // —— 表里带的还是那颗 <c>[Column(DbTypes = "rowversion")]</c>，42704（<c>Database.EnsureInventoryItem</c>
+        // —— 表里带的还是那颗 <c>[Column(TypeName = "rowversion")]</c>，42704（<c>Database.EnsureInventoryItem</c>
         // 那段把 S-10 ∶ D-04 ∶ D-05 三颗读数钉好了）。这一跑的第一版红在这里【实测·
         // <c>obj/logs/v37-pg-int-1.log</c> 第 11 行：<c>42P01: relation "QuickSqlInventoryItem" does not exist</c>】。
         //
@@ -1011,7 +1012,7 @@ public class ReadPathTests
 
         public Guid Key { get; set; }
 
-        [Column(Length = 32)]
+        [QuickColumn(Length = 32)]
         public string? Tag { get; set; }
     }
 }

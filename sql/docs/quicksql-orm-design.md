@@ -915,7 +915,7 @@ db.Orders.Load(o => o.Items);                                             // 【
 
 #### 落地记录（v0.20：跨类型写序这一档上的五处口径）
 
-**边只有一个来源，两侧共用同一份判据。** `SaveChanges` 读的是契约上的 `RelationshipContract`（`EntityContract.Relationships`），G1 与 G2 各自把声明折成 `RelationshipFacts`、汇到 `EntityContractFactory` 那一条收尾路径，列名换算与"点了名却没那一列"的拒绝都只有一份——和索引、和 §10.3 的列契约同一个取向。候选的形状三条：类类型、不是 `string`、不是集合形状（`List<T>`  implements `IEnumerable`，一条判据同时挡掉数组与 `Dictionary`）；`[Column(IsIgnore=true)]` 与 `[NotMapped]` 在类型测试**之前**判掉，所以一颗"我把它当普通属性"的意图不会被类型判据推翻。复合外键 `[ForeignKey("A,B")]` 是**一根**边带两个成员、成员按声明序，不拆成两根。对拍因此多了一格 `nav`（§13.11）：引用导航只落在一侧时，另一侧的 `SaveChanges` 就排不出这一根依赖，而两条路径"看起来都建出了这张表"——这一格的存在就是为了让那种假绿不成立。
+**边只有一个来源，两侧共用同一份判据。** `SaveChanges` 读的是契约上的 `RelationshipContract`（`EntityContract.Relationships`），G1 与 G2 各自把声明折成 `RelationshipFacts`、汇到 `EntityContractFactory` 那一条收尾路径，列名换算与"点了名却没那一列"的拒绝都只有一份——和索引、和 §10.3 的列契约同一个取向。候选的形状三条：类类型、不是 `string`、不是集合形状（`List<T>`  implements `IEnumerable`，一条判据同时挡掉数组与 `Dictionary`）；`[NotMapped]`（自研 `[Column(IsIgnore=true)]` 随旧形状退场后只剩这一颗）在类型测试**之前**判掉，所以一颗"我把它当普通属性"的意图不会被类型判据推翻。复合外键 `[ForeignKey("A,B")]` 是**一根**边带两个成员、成员按声明序，不拆成两根。对拍因此多了一格 `nav`（§13.11）：引用导航只落在一侧时，另一侧的 `SaveChanges` 就排不出这一根依赖，而两条路径"看起来都建出了这张表"——这一格的存在就是为了让那种假绿不成立。
 
 **命不中约定就是没有关系，而不是错误。** `[ForeignKey]` 缺席时按 `<导航名>Id` 找，且那一格必须已经是映射出来的列；找不到就当这条导航不存在（`A_column_named_like_a_foreign_key_is_not_an_edge_without_a_navigation` 钉的是反向：只有 `CustomerId` 列、没有 `Customer` 导航的 `TwoKeys` 不成边——光凭列名推依赖，会把"列名撞车的冗余列"判成环）。反过来，`[ForeignKey("Nobody")]` 点了名而 `Nobody` 没映射到列是配置错误：G2 启动期从 `MapRelationships` 抛 `QuickSqlException`、G1 编译期 `QuickSql004`，两侧同一句"引用导航 X 引用了未映射的属性 Y"（`A_foreign_key_naming_an_unmapped_member_is_refused_at_startup_not_dropped`）。**外键指向的那一侧不查**：主端有没有契约、它的键是哪几列，都不在这一步算——今天的消费者只要"谁依赖谁"那一条边。判定因此也**不要求目标类型是实体**：一个 `Uri` 属性配上 `UriId` 列同样算出一条边，而它唯一的用法（写序）对"会话里没有档的类型"天然无效（下面那条边界），所以这一格今天不咬人，等 §5.6 缝合路径落地时要重新问一遍"是不是实体"。**Fluent 这一层没有关系的槽位**，所以 §10.2 那条优先级链在这一格上只有第 3 层与第 4 层在跑。
 
@@ -1293,7 +1293,10 @@ public sealed class QuickSqlAop
 ```
 高 ───────────────────────────────────────────────────────────── 低
 1  Fluent 显式    mb.Entity<T>().Property(p => p.No).HasMaxLength(64).IsRequired()
-2  自研强属性     [Table] [Column(Name,DbTypes,Length,Precision,Scale,IsNullable,IsPrimary)] [Index] [Comment]
+2  自研强属性     [QuickColumn(Length,Precision,Scale,IsNullable,IsPrimary,IsIdentity)] [Index(memberNames,IsUnique)]
+                   [SplitTable] [DataSource] [ConcurrencyToken]   ← 只收系统注解表达不了的语义；
+                   名字/类型名/排除/主键/必填/长度/备注全部让位给系统注解（v0.39 起，
+                   自研的 [Table]/[Column] 已删除，没有 Obsolete 过渡期）
 3  DataAnnotations（默认全生效，无需任何开关）
      [Key] [Required] [StringLength(max, MinimumLength)] [MaxLength] [MinLength]
      [Column(Order, Name, TypeName)] [NotMapped] [ForeignKey] [InverseProperty]
@@ -1301,6 +1304,8 @@ public sealed class QuickSqlAop
      [ConcurrencyCheck] [Timestamp] [Display(Name/Description)] [DisplayName] [Comment]
      （前两颗今天不生效 —— 见本节末尾"并发列只有两个来源"）
      [DataType] [Range] [RegularExpression] [EmailAddress] [PhoneUrl] [CustomValidation]
+     另：备注那一格的接棒者是 **System.ComponentModel** 的 `[Description]`（表级与列级同一颗），
+     它占的正是从前的"自研 Comment"那格座次 —— 排在 Fluent 之后、[Display] 之前。
 4  约定           Id / {Entity}Id → 主键；int/long 主键 → 自增；string → 默认长度；enum → int；
                   导航属性 → FK（v0.20 落的是引用导航那一半：`<导航名>Id`，且那一格必须是已映射列）；
                   [ThreadStatic]/静态/接口默认属性 → 忽略
@@ -1311,7 +1316,7 @@ public sealed class QuickSqlAop
 
 - **跨层冲突**：取最高优先级，但**来源必须记下来**并可在 `doctor` / `Explain()` 里查（`Length=64 来自 Fluent，覆盖了 [StringLength(50)]`）。静默覆盖是排障黑洞。
 - **同层冲突**（比如同一属性上 `[StringLength(50)]` 和 `[MaxLength(20)]`）：**启动期直接抛错并列出两个来源**，不自动"取严格者"。因为一旦建表按 20、校验按 50，写进去的数据就会在别处炸，而这种 bug 三个月后才现形。**G1 能看见的那部分冲突在编译期就拒**（`QuickSql001`，消息模板与 G2 的 `MetadataConflictException` 逐字对齐；`QuickSql002` 管的是"索引引用了未映射属性"，不是冲突）。两侧只共用"必须拒"这条规则，不共用抛点，也不假装编译期那道更严 —— 而 **Fluent 与注解谁覆盖谁永远在运行期判**：生成器看不见 `ModelConfiguration`，所以被 Fluent 配置过的实体由 `GeneratedEntitySchemaRegistry.Find` 整只退回 G2（§12.7 落地记录的让路规则第 6 条），不在编译期猜。
-- `[Required]` 与 `[Column(IsNullable=true)]` 这种语义矛盾同样按跨层处理（自研属性赢），但在 `doctor` 里打 WARN —— 大概率是笔误。
+- `[Required]` 与 `[QuickColumn(IsNullable=Yes)]` 这种语义矛盾同样按跨层处理（自研属性赢），但在 `doctor` 里打 WARN —— 大概率是笔误。自 v0.39 起这一格写在新家 `[QuickColumn]` 上（旧 `[Column(IsNullable=true)]` 与它同格同座次，随自研 `[Column]` 一并退场）。
 
 #### 落地记录（v0.18：并发列只有两个来源，而第三个来源是给不出来的）
 
@@ -1322,6 +1327,10 @@ public sealed class QuickSqlAop
 #### 落地记录（v0.20：关系这一格只有两个来源，而第三个来源今天给不出）
 
 `[ForeignKey]`（第 3 层，只读**导航属性**上那一颗）与「`<导航名>Id`」（第 4 层）今天接在链上，解析点两侧各一处（G2 `ContractResolver.ResolveRelationships`、G1 `EntityFactsBuilder.RelationshipsOf`），折成的 `RelationshipFacts` 汇入 `EntityContractFactory` 那一条收尾路径——列名换算与"点了名却没那一列"的拒绝因此只有一份，和索引、和 §10.3 的列契约同一取向。出处照样记账（`Origin` 落在关系那一格上，`Layer` 是 `DataAccessAnnotation` 或 `Convention`），所以 §13.11 对拍那一格 `nav … origin=…` 比的不是"有没有边"，是"这条边被记成来自哪一层"。**第 1 层（Fluent）在这一格上是空的**：`ModelConfiguration` 没有关系槽位，所以这条链在"关系"这一列上少一层，`.HasForeignKey(...)` 那一张是新增公开形状、归 §16 待决那一类，不算本版自决。**反向标注那一形态没有实现**：EF Core 还允许把 `[ForeignKey("Customer")]` 写在 FK 标量属性上、内容指向导航名，而这一版只在**导航属性**上读那颗注解。它什么时候才出岔子值得说准：约定 `<导航名>Id` 恰好命得中时两种写法给同一条边（所以多数 EF 迁移样本看不出差别），命不中时今天判成"没有关系"而不是报错——静默退化，不是拒绝。这是已知缺口，记在 §14，重开条件是"有真实迁移样本撞上来"；先不猜形状，因为反向标注要和 `[InverseProperty]` 一起判才有意义，而后者今天整颗不生效（上面那行图里已经明写）。逐条口径（候选形状三条、复合外键是一根边、命不中约定不是错误、成环在碰驱动之前抛）在 §8.2 末尾那份 v0.20 落地记录里，本节只管"哪一层"。
+
+#### 落地记录（v0.39 第六笔 ∶ 注解层整编制换防——名字/类型名/排除/备注让位给系统注解）
+
+**自研的 `[Table]` 与 `[Column]` 整颗删除（没有 Obsolete 过渡期），系统注解接得住的语义一律不再重复造注解。**表名/模式走 `Schema.Table`、列名/provider 原生类型名走 `Schema.Column(name, TypeName)`、排除走 `[NotMapped]`、主键声明首选 `[Key]`、必填 `[Required]`、长度 `[StringLength]/[MaxLength]`，表级与列级备注都走 **System.ComponentModel** 的 `[Description]`——它占的正是从前的"自研 Comment"座次（Fluent 之后、`[Display]` 之前；`[Display]` 兜底链原样保住）。迁移映射逐一对应 ∶ `[Column(Name…)]`→系统 `[Column]`、`[Column(DbTypes=…)]`→`[Column(TypeName=…)]`（同一格、同一档）、`[Column(IsIgnore=true)]`→`[NotMapped]`、`[Column(IsPrimary=TriState.Yes)]` 首选 `[Key]`、尺寸与三态六格收进新立的 **`[QuickColumn]`**（`Length/Precision/Scale + IsNullable/IsPrimary/IsIdentity`，三态照旧`TriState`——`[Required]` 只有"非空"一个方向、`[Key]` 只管"谁是键"管不到"值谁给"，这两件仍要自研格）。G1 的触发器随之收敛为**系统 `[Table]` 单触发**（自研触发档与其"双 `[Table]` 裁决"一起退场；用两种 `[Table]` 抢名的负样本退场——同名双注解在声明层就是 CS0579）。**索引与 EF Core 的 `[Index]` 同形** ∶ 构造参数就是成员名单、没有名字格，`Unique` 改名 `IsUnique`；索引名一律走既有的约定命名，并把那条约定钉死为"**表名没模板用表名、分表（`{year}` 样模板）用类名**"——仓内四处显式点名（`IX_QuickSqlOrder_CreatedAt`、`IX_QUICKSQL_SHAPE_Title`、`IX_QuickSqlShapeProbe_Title`、`IX_ShardLog_Level`）在新规则下逐字算出同一个名字，黄金样本零改动；`UX_QuickSqlRowSwapPath_Board_LineNo`（唯一索引）换 EF 同形的 `IX_` 前缀。**两册与全仓 50 个文件的 240 余处调用点同步改写**。门禁 ∶ 离线方言 **1326 / E0 / F0 / S0**（比上版少 5 条 = 双 `[Table]` 冲突退场的 2 个 Fact + 2 行 Theory 案）；真库 **212 / E0 / F0** 五家族 ∶ SQL Server S19 ∶ MySQL S45 ∶ PostgreSQL S46 ∶ SQLite S56 ∶ Xugu S65（Xugu 首发一杆 `E17007` 瞬时红，连跑三把未复现，与已记账的驱动噪声同族）。
 
 ### 10.3 `ColumnContract`：三个消费点共用一份解析结果
 
@@ -1339,7 +1348,7 @@ public sealed record ColumnContract(
     bool          IsNullable, bool IsRequired,
     KeyRole       Key,                    // None | Primary | Alternate | Foreign
     ValueConverter? Converter,
-    string?       Comment,                // [Display]/[Comment] → DDL 注释（国产库注释支持差异大，见 §9）
+    string?       Comment,                // [Description]（System.ComponentModel）/Fluent HasComment/[Display] → DDL 注释（国产库注释支持差异大，见 §9）
     OriginTrace   Origin);                // 每个字段的来源，doctor 可打印
 ```
 
@@ -2129,7 +2138,7 @@ PR 附件那一份长这样（`-j short --filter "*"`，1001 行）。**两套�
    而这一段第一次用了 `CREATE TABLE … AS SELECT` 抄快照 —— 它仍然只写本探针自建的表，删的授权范围照上面 §13.17 那一格。
 
 
-   **排序规则不是环境细节，是 §10.4 的一半结论**（2026-09-20 在同一条 SQL 上换实例实测）。LocalDB 是 `SQL_Latin1_General_CP1_CI_AS`（代码页 1252），本机 `QuickSqlTest` 库的所有"varchar 存中文变 `?`"都测自它；而换到一台 `Chinese_PRC_CI_AS`（代码页 **936/GBK**）的 SQL Server 2016 SP2 企业版上，同一段 `CAST(N'中文测试' AS varchar(50))` 给出 **8 字节且回读原样是 `中文测试` —— 一个字节都没丢**。同一句话在两类库上含义相反，所以"限制写进 fixture"这条从建议变成硬要求：**集成层必须记录并断言当前实例的 `SERVERPROPERTY('Collation')` 与 `DATABASEPROPERTYEX(DB_NAME(),'Collation')`，任何字符集结论都要挂着这两个值说**。GBK 侧真正的坑不是丢字而是**量纲**：一个汉字 2 字节，于是 `varchar(64)` 只装得下 32 个汉字而 `nvarchar(64)` 装得下 64 个 —— `[Column(Length=64)]` 配 `varchar` 会在第 33 个汉字处静默截断（截断而非报错，因为 ANSI 默认允许）。这反而是 **nvarchar 默认 + §9.5 `doctor` 只读量纲探测**必须存在的实证：客户现场是中文排序规则的概率远高于 cp1252。参数绑定这一侧两类库行为一致：`DbType.String` 上线是 Unicode，`CAST(@t AS nvarchar(50)) = @t` 在 GBK 实例上返回 1，没有隐式降级。
+   **排序规则不是环境细节，是 §10.4 的一半结论**（2026-09-20 在同一条 SQL 上换实例实测）。LocalDB 是 `SQL_Latin1_General_CP1_CI_AS`（代码页 1252），本机 `QuickSqlTest` 库的所有"varchar 存中文变 `?`"都测自它；而换到一台 `Chinese_PRC_CI_AS`（代码页 **936/GBK**）的 SQL Server 2016 SP2 企业版上，同一段 `CAST(N'中文测试' AS varchar(50))` 给出 **8 字节且回读原样是 `中文测试` —— 一个字节都没丢**。同一句话在两类库上含义相反，所以"限制写进 fixture"这条从建议变成硬要求：**集成层必须记录并断言当前实例的 `SERVERPROPERTY('Collation')` 与 `DATABASEPROPERTYEX(DB_NAME(),'Collation')`，任何字符集结论都要挂着这两个值说**。GBK 侧真正的坑不是丢字而是**量纲**：一个汉字 2 字节，于是 `varchar(64)` 只装得下 32 个汉字而 `nvarchar(64)` 装得下 64 个 —— `[QuickColumn(Length=64)]` 配 `varchar` 会在第 33 个汉字处静默截断（截断而非报错，因为 ANSI 默认允许）。这反而是 **nvarchar 默认 + §9.5 `doctor` 只读量纲探测**必须存在的实证：客户现场是中文排序规则的概率远高于 cp1252。参数绑定这一侧两类库行为一致：`DbType.String` 上线是 Unicode，`CAST(@t AS nvarchar(50)) = @t` 在 GBK 实例上返回 1，没有隐式降级。
    **上面那句"必须记录并断言"从 v0.8 起是现状而不是要求**（2026-09-21，`CollationTests` 2 条，全只读、零写入）：读回 `SERVERPROPERTY('Collation')`、`DATABASEPROPERTYEX(DB_NAME(),'Collation')`、`COLLATIONPROPERTY(<库排序规则>,'CodePage')` 三个值，**由代码页算预测、再拿 `DATALENGTH`/`LEN`/往返比较的实测比对**。这个方向是故意的：写死"期望哪个排序规则"等于把用例钉在某个实例上，而本条要的恰恰是"换实例也要能判出这个实例是什么"。三条断言分别是①量纲（字符数与实例无关、字节数由代码页定，即 `varchar(64)` 与 `nvarchar(64)` 装的不是同一个量）②只有"原样"与"整串 `????`"两种形态（丢一半不在预测表里，而"整串变 `?`"这一支不报错，只能靠断言抓）③参数侧 `CAST(… AS nvarchar)` 恒等值、但 `CAST(… AS varchar)` 与字面量同一个代码页同一个结果（**"改用参数"不等于"绕开排序规则"**）。**"结论要挂着这两个值说"在代码里的落点**是 `Facts.Context`：每条断言的失败消息都带实例/库排序规则与代码页。两类实例各跑过一遍，各 24 条全绿（**v0.12 复跑仍是这两类实例，各 35 条全绿、Skipped 0**：多出来的 11 条是写路径的 `WritePathTests`，所以"写侧结论也挂着排序规则说"从这一版起也算现状。102 那一遍是环境变量留空、走仓库根那份连接串文件跑的，LocalDB 那一遍是显式给 `QUICKSQL_TEST_CONNECTION` 跑的，两条来源各证一次本项第 4 句）—— 192.168.0.102 的 SQL Server 2016 SP2 企业版是 `Chinese_PRC_CI_AS`/936/4 汉字 8 字节/不丢字；本机 LocalDB 是 SQL Server **2019 Express** 的 `SQL_Latin1_General_CP1_CI_AS`/1252/4 字节/整串塌成 `????`。**没被覆盖到的那一格也写着**：代码页表里的 `65001`（UTF-8，3 字节/汉字）两个实例都给不出（它们的库级默认排序规则都不是 UTF-8），那行是从上面 §10.4 的**列级** `COLLATE …_SC_UTF8` 实测搬来的，"那里已实测"与"这里没跑过"不同级，所以注释里分两句说。仍**没有实现**的是本项第 2 段的 `[ProviderTrait]` 标签机制（§14 未完项表里那一格还是空的）：现在只有 `Database.Ready()` 一条"连不上就带着理由 skip"的守卫，它管的是**可用性**不是**能力**，所以"这个实例不支持某特性所以跳过"目前无人表达。
 5. **能力契约测试**：每个 provider 声明的每个 capability 位都必须有一个真库执行通过的用例，防止「位掩码吹了但没实现」。
    **v0.22 复点：这一项今天有两种形态，而不是在第二家被跳过**（`tests/QuickSql.Tests.Dialects/CapabilityLedgerTests.cs`，4 条）。SQL Server 那一侧照旧：能力位由真库用例或下面的离线文本见证背书。金仓这一侧没有活库，于是落一份**会红的台账** —— 这一族 `DbCapabilities` 的 14 个声明位逐位写成一份内部数组，四句断言分别钉：① 每位恰好一行、一行不多（`Declared = 14` 与数组长度相互核住，加一位不写行会红，写行不加声明也会红）；② **"活库见证 0 位"这一句本身是被断住的**（`Assert.Equal(0, …)` —— 哪天接上真库、把某一位改成 `Live`，这一句会红，而红对了才是要的样子：它逼着改的人同时把 §13.5 与 §14 那两格一起改）；③ 那 7 位写着"离线文本已钉"的，其指名的黄金样本文件要 `File.Exists` 过（防台账里挂一份不存在的证据）；④ `Guid` 走原生 `uuid` 而不是 `char(36)` 这一格有独立的钉子（§4 那次翻案的落点）。于是这一项的判据从"每个位都要有真库用例"变成**"每个位都要有一个归属，而归属可以是'只有厂商文档'，但它必须被数出来"**：今天的账是 声明 14 = 离线已钉 7 + 仅厂商文档 7 + **活库 0**。**为什么单独立一份档而不写进注释**：§4 那句"真值来自厂商文档"在这一家无从执行，而注释会随时间变成没人读的免责声明；一份会红的台账把"我们其实没验过"变成一个可数的数，并把翻案的门槛摆在那里 —— 改一位归属要改数组，改数组会让第①句重新数过。**这份台账判不到的那一半同样写明**：它数的是"这一家声明了哪些位、各位有什么证据"，而 `DbCapabilities` 在 `src/` 里今天**零消费者**（全仓库只有 SPI 上那一颗属性声明、两处 provider 的位掩码、和一句 XML 文档注释引用它，`QuickSql.Core` 里 `Capabilities.` 0 处 —— 2026-09-22 按 grep 核）。所以台账保证"声明与证据对齐"，不保证"声明与行为对齐"；后者要等能力位真的接进决策，最可能先撞上的是 `MultiStatement`（§9.4 那句"这一条今天判据是空的"）与 `Bulk_Copy`（§12.1 那一整档高速层在这一家还没有对象）。那一半记在 §14 的"`[ProviderTrait]`"与新增那几格里。

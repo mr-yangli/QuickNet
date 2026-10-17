@@ -88,7 +88,7 @@ public sealed class XuguChangeGuard : IChangeGuard
         // 走 GetStoreType 而不是只读 StoreTypeName：后者只有 ApplyStorageDefaults 跑过才有值，
         // 而守卫在发射路径上调用，那一趟不保证已经走完（与另四家同一条理由）。
         // 切在第一个 '(' 或空格之前：TIME(3) 与 NUMERIC(18,4) 都要落到基名上，两颗大对象不带限定词，
-        // 而 [Column(DbType = "CLOB …")] 那种手写的带法也要落得下来 —— 这一家恰好是五家里
+        // 而 [Column(TypeName = "CLOB …")] 那种手写的带法也要落得下来 —— 这一家恰好是五家里
         // 唯一一处"同一档型既有带限定词的形状（TIME）也有不带的形状（CLOB）"，所以切分不能只认括号。
         var name = XuguTypes.Instance.GetStoreType(column);
         var cut = name.IndexOfAny(['(', ' ']);

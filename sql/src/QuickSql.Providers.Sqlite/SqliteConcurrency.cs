@@ -14,7 +14,7 @@ namespace QuickSql.Providers.Sqlite;
 /// 原因是更前面的一颗：<b>这一族的型名压根不参与存储</b>——七颗随手写的型名一次建表，目录原样回读它们
 /// （<c>DATETIME ∶ BOOLEAN ∶ DECIMAL(18,4) ∶ VARCHAR(10) ∶ NVARCHAR(10) ∶ BLOB ∶ UUID</c>【实测·B1/C2】），
 /// 而值往库里落成什么形状由 CLR 值型决定、驱动不看 <c>DbType</c> 与 <c>Size</c>【实测·500/500b/501】。
-/// 于是在本家写 <c>[Column(DbTypes = "rowversion")]</c> 得到的是一列普通列：它不会自增，
+/// 于是在本家写 <c>[Column(TypeName = "rowversion")]</c> 得到的是一列普通列：它不会自增，
 /// 因为"由库给值"在这一族只有两个入口——列上的 <c>AUTOINCREMENT</c>（只作用于 rowid 那一格
 /// 【实测·2802 ∶ 2810】）与触发器（本仓库没有那种形状，而本次四十二轮一条都没量过）。
 /// <b>这一条是【推断】，但它是由两颗实测撑着的推断</b>，与"文档没列它所以没有"那种按缺席读不同档：

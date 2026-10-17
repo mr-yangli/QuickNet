@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations.Schema;
 using System.Data.Common;
 using System.Text;
 using QuickSql.Metadata;
@@ -481,7 +482,7 @@ public sealed class XuguDialectTests
         Assert.False(Provider.ChangeGuard.Compares(note with { StoreTypeName = "CLOB" }));
         Assert.True(Provider.ChangeGuard.Compares(note with { StoreTypeName = "VARCHAR(64)" }));
 
-        // 带限定词要落到基名上：TIME(3) 与 NUMERIC(18,4) 都带括号，而 [Column(DbTypes = "CLOB …")] 那种
+        // 带限定词要落到基名上：TIME(3) 与 NUMERIC(18,4) 都带括号，而 [Column(TypeName = "CLOB …")] 那种
         // 手写的带法带的是空格 —— 这一家是五家里唯一一处"同一档型既有带括号形状也有不带形状"的，切分不能只认括号。
         Assert.False(Provider.ChangeGuard.Compares(note with { StoreTypeName = "CLOB 128" }));
 

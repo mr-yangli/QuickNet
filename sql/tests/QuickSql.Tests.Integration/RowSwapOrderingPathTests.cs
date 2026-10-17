@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations.Schema;
 using QuickSql.Metadata;
 using QuickSql.Schema;
 using QuickSql.TestInfra;
@@ -15,7 +16,7 @@ namespace QuickSql.Tests.Integration;
 ///
 /// <para><b>为什么这一半只能在库里看</b>：离线那册判的是状态机（谁 Added、谁 Deleted），
 /// 而「库里那条唯一索引挡没挡」要的是一台真会把约束当回事的库。这里连唯一索引本身也是库建的
-/// （<c>SyncStructureAsync</c> 从契约上的 <c>[Index(Unique = true)]</c> 产出 <c>CREATE UNIQUE INDEX</c>），
+/// （<c>SyncStructureAsync</c> 从契约上的 <c>[Index(IsUnique = true)]</c> 产出 <c>CREATE UNIQUE INDEX</c>），
 /// 所以本案审的是「发句子的先后」，不是「约束在不在」。</para>
 ///
 /// <para><b>裁判一律问裸 ADO</b>，与 <see cref="ApplicationKeyPathTests"/> 同一条纪律：写的一侧是被审的会话，
@@ -26,17 +27,17 @@ public sealed class RowSwapOrderingPathTests
     /// <summary>靶实体：一颗归客户端给的主键（<c>Guid</c>，免掉自增那一档的形状差）+ 一条业务唯一索引。
     /// <c>LineNo</c> 就是明细的行号，<c>Board</c> 是"同一张单"的那个键。</summary>
     [Table("QuickSqlRowSwapPath")]
-    [Index("UX_QuickSqlRowSwapPath_Board_LineNo", nameof(Board), nameof(LineNo), Unique = true)]
+    [Index(nameof(Board), nameof(LineNo), IsUnique = true)]
     public sealed class SwapRow
     {
         public Guid Id { get; set; }
 
-        [Column(Length = 32)]
+        [QuickColumn(Length = 32)]
         public string? Board { get; set; }
 
         public int LineNo { get; set; }
 
-        [Column(Length = 32)]
+        [QuickColumn(Length = 32)]
         public string? Label { get; set; }
     }
 

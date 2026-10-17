@@ -143,7 +143,7 @@ public sealed class Gbase8sTypes : ITypeMap
             return Blob;
 
         // 枚举存整数，与另五族同一决定，而这一家多一句：INTEGER 是 32 位，而 CLR 枚举的底层型
-        // 可以是 long —— 底层型是 long 的枚举在这一家需要 [Column(DbType=...)] 点名 BIGINT。
+        // 可以是 long —— 底层型是 long 的枚举在这一家需要 [Column(TypeName=...)] 点名 BIGINT。
         // 另五家没写这一句不是它们对了，是它们的 INT 那一臂同样窄（MySQL 落 INT 也一样）。
         if (clrType.IsEnum)
             return "INTEGER";
@@ -210,10 +210,10 @@ public sealed class Gbase8sTypes : ITypeMap
             // 这一家连取号函数那一族都没有，类注释第六条）。这里的 36 是<em>字符</em>，而这一家的
             // CHAR(n) 量的是<em>字节</em>：36 颗 ASCII 恰好 36 字节，所以这颗数在本家不需要乘 4，
             // 而这一点只有 GUID 的 'D' 形（恒 ASCII）成立。想换成手写仍然够得到：
-            // [Column(DbType = ...)] 在第一行短路。
+            // [Column(TypeName = ...)] 在第一行短路。
             var t when t == typeof(Guid) => "CHAR(36)",
             var t when t == typeof(char) => "CHAR(1)",
-            _ => throw new QuickSqlException($"GBase 8s 未登记 CLR 类型 {clrType.Name} 的存储类型，请显式给 [Column(DbType=...)]"),
+            _ => throw new QuickSqlException($"GBase 8s 未登记 CLR 类型 {clrType.Name} 的存储类型，请显式给 [Column(TypeName=...)]"),
         };
     }
 

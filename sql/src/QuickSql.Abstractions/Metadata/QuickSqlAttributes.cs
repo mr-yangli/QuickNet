@@ -1,17 +1,5 @@
 namespace QuickSql.Metadata;
 
-/// <summary>自研强属性层（§10.2 优先级 2）。只用于注解本身表达不了的语义；
-/// 能由 DataAnnotations 表达的绝不新增属性，否则实体会同时存在两套写法。</summary>
-[AttributeUsage(AttributeTargets.Class)]
-public sealed class TableAttribute(string name) : Attribute
-{
-    public string Name { get; } = name;
-
-    public string? Schema { get; set; }
-
-    public string? Comment { get; set; }
-}
-
 /// <summary>注解必须能区分「没写」和「写了 false」，否则优先级链无法判定（§10.2）。
 /// <c>bool</c> 表达不了这件事，所以自研属性一律用三态。</summary>
 public enum TriState
@@ -21,54 +9,58 @@ public enum TriState
     No = 2,
 }
 
+/// <summary>自研强属性层（§10.2 优先级 2）。名字、类型名、排除、主键、必填、长度、备注这些
+/// 系统注解（<c>[Table]</c>、<c>[Column]</c>、<c>[NotMapped]</c>、<c>[Key]</c>、<c>[Required]</c>、
+/// <c>[StringLength]/[MaxLength]</c>、<c>[Description]/[Display]</c>）接得住的语义一律不在这里重复；
+/// 这一层只收 DataAnnotations 表达不了的语义：<see cref="QuickColumnAttribute"/> 的尺寸与三态、
+/// <see cref="IndexAttribute"/> 的复合索引（EF 同形）、以及分表/集群/并发/级联那四颗。</summary>
 [AttributeUsage(AttributeTargets.Property | AttributeTargets.Field)]
-public sealed class ColumnAttribute(string? name = null) : Attribute
+public sealed class QuickColumnAttribute : Attribute
 {
-    public string? Name { get; } = name;
-
-    /// <summary>provider 原生类型名，绕过类型映射表（<c>VARCHAR2(50 CHAR)</c>、<c>jsonb</c>）。</summary>
-    public string? DbTypes { get; set; }
-
+    /// <summary>字符串列的长度（应为多少个字符）。与 DataAnnotations 的
+    /// <c>[StringLength]/[MaxLength]</c> 同格、但优先级更高（§10.2：自研层赢过注解层）。</summary>
     public int Length { get; set; }
 
     public int Precision { get; set; }
 
     public int Scale { get; set; }
 
+    /// <summary>三态：「没写」「写了 nullable」「写了 not-null」。bool 表达不了这件事，
+    /// 优先级链无法判定（§10.2）；<c>[Required]</c> 只有"非空"一个方向，补不上另一半。</summary>
     public TriState IsNullable { get; set; } = TriState.Unset;
 
     public TriState IsPrimary { get; set; } = TriState.Unset;
 
-    /// <summary>No = 有列但不是数据库自增（客户端主键、序列由 <c>IKeyStrategy</c> 决定）。</summary>
+    /// <summary>No = 有列但不是数据库自增（客户端主键、序列由 <c>IKeyStrategy</c> 决定）。
+    /// 这一格没有 DataAnnotations 等价注解 —— <c>[Key]</c> 只管"谁是键"，管不到"值谁给"。</summary>
     public TriState IsIdentity { get; set; } = TriState.Unset;
-
-    public bool IsIgnore { get; set; }
-
-    public string? Comment { get; set; }
 }
 
+/// <summary>复合索引，形状与 EF Core 的 <c>[Index]</c> 同一版：点成员名、不给索引名 ——
+/// 名字由约定生成（<c>IX_{表}_{列1}_{列2}</c>，<see cref="EntityContractFactory"/> 那一份实现），
+/// 与 <c>[ForeignKey]</c> 靠约定命名同一种取向。"唯一"与 EF 同名（<see cref="IsUnique"/>）；
+/// <see cref="Clustered"/> 与 <see cref="Descending"/> 是 DataAnnotations 里没有的存储档，留给 provider
+/// 扩展用（EF Core 同语义的那格只住在 Fluent 侧）。</summary>
 [AttributeUsage(AttributeTargets.Class, AllowMultiple = true)]
-public sealed class IndexAttribute(string name, params string[] memberNames) : Attribute
+public sealed class IndexAttribute(params string[] memberNames) : Attribute
 {
-    public string Name { get; } = name;
-
     public string[] MemberNames { get; } = memberNames;
 
-    public bool Unique { get; set; }
+    public bool IsUnique { get; set; }
 
     public bool Clustered { get; set; }
 
     public bool Descending { get; set; }
 }
 
-/// <summary>把这一张<em>逻辑</em>表声明成分表：<see cref="TableAttribute.Name"/>（或 DataAnnotations 的
-/// <c>[Table]</c>、或类型名）此时给的是<b>带占位符的模板</b>，真正的表名按 <paramref name="kind"/>
-/// 从 <paramref name="field"/> 那一列的值算出来（占位符清单与各自的适用档在 <see cref="SplitRouting"/>）。</summary>
+/// <summary>把这一张<em>逻辑</em>表声明成分表：系统的 <c>[Table(Name)]</c>（或类型名）此时给的是<b>带占位符的模板</b>，
+/// 真正的表名按 <paramref name="kind"/> 从 <paramref name="field"/> 那一列的值算出来
+/// （占位符清单与各自的适用档在 <see cref="SplitRouting"/>）。</summary>
 /// <remarks><b>这一格不落 Fluent 等价写法</b>：Fluent 侧看不到它就得换一套校验时机，而分表最不能有的
 /// 是"两条路径算出两种表名"。要按运行期上下文改表名（影子表、租户表那一类）走的是另一格 ——
 /// 规格 §10.1 的 <c>TableRemap</c> 钩子，那颗今天仍未落地。</remarks>
 /// <param name="kind">分片算法档。</param>
-/// <param name="field">分片键的属性名。它必须是一列（被 <c>[Column(IsIgnore)]</c> 排除掉就当场抛），
+/// <param name="field">分片键的属性名。它必须是一列（被 <c>[NotMapped]</c> 排除掉就当场抛），
 /// 时间档要日期类型，<see cref="SplitKind.Hash"/> 接受整数与字符串。</param>
 [AttributeUsage(AttributeTargets.Class)]
 public sealed class SplitTableAttribute(SplitKind kind, string field) : Attribute

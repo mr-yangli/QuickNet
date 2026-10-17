@@ -139,12 +139,12 @@ public sealed class MySqlTypes : ITypeMap
                 "MySQL 系没有能装下 DateTimeOffset 偏移量的时刻类型：DATETIME 与 TIMESTAMP 存的都是不带偏移的时刻，"
                 + "而后者按会话时区解释。§9.3 给这一档写的退路是「降级 DateTime UTC + 列标记，读取端还原」，"
                 + "那两半（绑定侧的时区换算、契约上那颗「本列存 UTC」标记）今天都不存在，所以宁缺不猜（缺口在 §14）。"
-                + "今天要这一列：显式给 [Column(DbType = ...)] 自己选一个型并自己负责换算。"),
+                + "今天要这一列：显式给 [Column(TypeName = ...)] 自己选一个型并自己负责换算。"),
             var t when t == typeof(DateOnly) => "DATE",
             var t when t == typeof(TimeOnly) || t == typeof(TimeSpan) => "TIME(3)",
             var t when t == typeof(Guid) => "CHAR(36)",
             var t when t == typeof(char) => "CHAR(1)",
-            _ => throw new QuickSqlException($"MySQL 系（MySQL/MariaDB/TiDB）未登记 CLR 类型 {clrType.Name} 的存储类型，请显式给 [Column(DbType=...)]"),
+            _ => throw new QuickSqlException($"MySQL 系（MySQL/MariaDB/TiDB）未登记 CLR 类型 {clrType.Name} 的存储类型，请显式给 [Column(TypeName=...)]"),
         };
     }
 

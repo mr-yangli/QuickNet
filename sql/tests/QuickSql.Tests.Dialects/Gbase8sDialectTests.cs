@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations.Schema;
 using System.Data.Common;
 using System.Text;
 using QuickSql.Metadata;
@@ -346,7 +347,7 @@ public sealed class Gbase8sDialectTests
         Assert.True(Provider.ChangeGuard.Compares(contract.Columns.Single(c => c.MemberName == nameof(Order.Amount))));
 
         // 三颗黑名单：clob / blob / byte。前两颗是本家默认路径产得出来的（string 无宽度、byte[]），
-        // 第三颗只有人手写 [Column(DbTypes = "byte")] 才走到。
+        // 第三颗只有人手写 [Column(TypeName = "byte")] 才走到。
         Assert.False(Provider.ChangeGuard.Compares(note with { ClrType = typeof(byte[]), StoreTypeName = null }));
         Assert.False(Provider.ChangeGuard.Compares(note with { StoreTypeName = "BLOB" }));
         Assert.False(Provider.ChangeGuard.Compares(note with { StoreTypeName = "BYTE" }));

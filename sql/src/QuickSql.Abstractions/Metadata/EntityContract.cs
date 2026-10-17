@@ -10,7 +10,7 @@ namespace QuickSql.Metadata;
 /// <b>null 说的是"没声明"，不是"没有归属"</b>：没声明即 <see cref="DataSourceRouting.DefaultCluster"/>，
 /// 而那一座就是 <c>QuickSqlOrmOptions.ConnectionString</c> 那条串。留着 null 而不是填上 <c>main</c>，
 /// 为的是让"用户一个字没写"与"用户显式写了 main"在换算前后留得住区别。</param>
-/// <param name="Comment">表备注，来自 <c>[Table(Comment=…)]</c> 或 Fluent 的 <c>HasComment</c>（优先级同列名那一条链）。
+/// <param name="Comment">表备注，来自 <c>[Description]</c>（System.ComponentModel）或 Fluent 的 <c>HasComment</c>（优先级同表名那一条链）。
 /// 挂源生成器那一条路径上还多一颗兜底：项目开着 <c>QuickSqlXmlDocComments</c> 时，两层都没写的那一格取类型上的
 /// <c>/// &lt;summary&gt;</c>（反射侧没有这份来源，见 §13.11 的 <c>comment=</c> 那一格）。
 /// <b>null = 没有任何一层说过</b>，与空串（说过而说的是"没有备注"）不是一回事：§9.5 的结构同步比的就是这一格，

@@ -107,7 +107,7 @@ public class OracleTypes : ITypeMap
             var t when t == typeof(TimeOnly) || t == typeof(TimeSpan) => "INTERVAL DAY(0) TO SECOND(3)",
             var t when t == typeof(Guid) => "CHAR(36)",
             var t when t == typeof(char) => "CHAR(1)",
-            _ => throw new QuickSqlException($"Oracle 血统（达梦/神通）未登记 CLR 类型 {clrType.Name} 的存储类型，请显式给 [Column(DbType=...)]"),
+            _ => throw new QuickSqlException($"Oracle 血统（达梦/神通）未登记 CLR 类型 {clrType.Name} 的存储类型，请显式给 [Column(TypeName=...)]"),
         };
     }
 

@@ -155,7 +155,7 @@ public sealed class Gbase8sCodeFirst(Gbase8sTypes types) : ICodeFirstDialect
             throw new QuickSqlException("GBase 8s 不建 rowversion 列：这一族的类型清单里没有那一型（按缺席读【文档·IBM】，"
                 + "本次没有读到它的清单，更没有一台库能问）。它不是虚谷那一格（那一家是实测到「建得成、会自增、读不回」三格之后裁的），"
                 + "所以这里的判据只有一条：发一句库会拒的建表不如不发。"
-                + "这一家请改用应用给值的并发列：[ConcurrencyToken] 而不带 [Column(DbTypes = \"rowversion\")]，"
+                + "这一家请改用应用给值的并发列：[ConcurrencyToken] 而不带 [Column(TypeName = \"rowversion\")]，"
                 + "比较式与写侧与另五家逐字同形（Gbase8sConcurrency），缺的只是「由库递增」那一格 —— 那一格等的是 SPI 与一台库，不是改名。");
 
         writer.Append(Identifiers.Quote(column.ColumnName)).Append(' ').Append(SerialFor(column, storeType));
@@ -170,7 +170,7 @@ public sealed class Gbase8sCodeFirst(Gbase8sTypes types) : ICodeFirstDialect
     /// <c>IsIdentity</c> 恒为 false，写在那里是一颗永远走不到的分支（本次由生成出来的建表样本抓到）。
     /// <b>换名的判据取"算出来的型名"而不是取"人有没有写过"</b>，因为契约里那两格已经分不开了
     /// （<c>StoreTypeName</c> 被定型那一步填上之后，echo 与人写的同名）——所以人手工在自增列上写
-    /// <c>[Column(DbTypes = "INTEGER")]</c> 会被这里换成 <c>SERIAL</c>。那一格是有意的：
+    /// <c>[Column(TypeName = "INTEGER")]</c> 会被这里换成 <c>SERIAL</c>。那一格是有意的：
     /// <c>IsIdentity</c> 是这一列更近的事实，而写下的 <c>INTEGER</c> 在自增列上本来就不是一个成立的声明。
     /// 换成别的名字（<c>DECIMAL(20,0)</c>、<c>INT8</c>…）则原样穿过：这里只认自己算得出的那两颗。</summary>
     static string SerialFor(ColumnContract column, string storeType)

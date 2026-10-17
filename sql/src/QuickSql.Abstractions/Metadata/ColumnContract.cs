@@ -65,7 +65,7 @@ public sealed record ColumnContract
     /// <summary>provider 覆写后的存储类型名（<c>VARCHAR2(50 CHAR)</c> / <c>nvarchar(50)</c>）。</summary>
     public string? StoreTypeName { get; init; }
 
-    /// <summary>列备注，来自 <c>[Column(Comment=…)]</c>、Fluent 的 <c>HasComment</c> 或 <c>[Display]</c> 那一条链。
+    /// <summary>列备注，来自 <c>[Description]</c>（System.ComponentModel）、Fluent 的 <c>HasComment</c> 或 <c>[Display]</c> 那一条链。
     /// <b>null 与空串不是一回事</b>（同 <see cref="TableInfo.Comment"/>）：结构同步那一头按这一格决定要不要重发
     /// <c>COMMENT ON COLUMN</c>。G1 开着 <c>QuickSqlXmlDocComments</c> 时链尾多一颗源码注释兜底。</summary>
     public string? Comment { get; init; }

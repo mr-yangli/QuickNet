@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations.Schema;
 using System.Globalization;
 using System.Text;
 using QuickSql.Metadata;
@@ -374,7 +375,7 @@ public class TpPrincipal
 {
     public long Id { get; set; }
 
-    [Column(Length = 64)]
+    [QuickColumn(Length = 64)]
     public string? Note { get; set; }
 }
 
@@ -387,7 +388,7 @@ public class TpDependent
 
     public int OwnerId { get; set; }
 
-    [Column(Length = 64)]
+    [QuickColumn(Length = 64)]
     public string? Note { get; set; }
 
     public TpPrincipal? Owner { get; set; }
@@ -406,7 +407,7 @@ public class TpPeer
 
     public int? UpId { get; set; }
 
-    [Column(Length = 64)]
+    [QuickColumn(Length = 64)]
     public string? Note { get; set; }
 
     public TpPeer? Up { get; set; }

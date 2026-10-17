@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations.Schema;
 using System.Text;
 using QuickSql.Metadata;
 using QuickSql.Metadata.Fluent;
@@ -890,7 +891,7 @@ public sealed class SqliteDialectTests
         // 人已点名的那一格原样 echo（§4 那句"provider 不翻译人写的话"，七家同规），<b>而本家这一格多一句诚实的话</b>：
         // echo 出去的那串字在这一家<em>不改变存储</em>，只改变 affinity 配方与目录回显——
         // DECIMAL(18,4) 里插一句文本会静默变成 REAL 12.34（标度被抹平）【实测·606 ∶ 4206】。
-        // 也就是说 [Column(DbTypes="DECIMAL(18,4)")] 在这里能得到"目录回显这一串"而得不到"定点存储"，
+        // 也就是说 [Column(TypeName="DECIMAL(18,4)")] 在这里能得到"目录回显这一串"而得不到"定点存储"，
         // 这是七家里只有本家成立的一格，缺口与 §10.4 并排。
         Checks.Has("\"Amount\" DECIMAL(18,4) NULL", ddl);
         Checks.Has("TEXT", Provider.Types.GetStoreType(amount with { StoreTypeName = null }));

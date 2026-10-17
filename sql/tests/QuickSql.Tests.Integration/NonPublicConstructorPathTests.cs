@@ -1,5 +1,5 @@
+using System.ComponentModel.DataAnnotations.Schema;
 using QuickSql.Metadata;
-using ForeignKey = System.ComponentModel.DataAnnotations.Schema.ForeignKeyAttribute;
 using QuickSql.Schema;
 using QuickSql.TestInfra;
 using QuickSql.Transactions;
@@ -29,10 +29,10 @@ public sealed class NonPublicConstructorPathTests
     {
         public Guid Id { get; private set; }
 
-        [Column(Length = 32)]
+        [QuickColumn(Length = 32)]
         public string? Code { get; private set; }
 
-        [Column(Length = 32)]
+        [QuickColumn(Length = 32)]
         public string? Note { get; private set; }
 
         // 空集合就是证据本身：换成 GetUninitializedObject 装配，这一格会是 null 而不是"空但可追加"
@@ -59,7 +59,7 @@ public sealed class NonPublicConstructorPathTests
 
         public Guid HeaderId { get; set; }
 
-        [Column(Length = 32)]
+        [QuickColumn(Length = 32)]
         public string? Label { get; set; }
 
         internal SealedLine()
@@ -92,7 +92,7 @@ public sealed class NonPublicConstructorPathTests
     {
         public Guid Id { get; private set; }
 
-        [Column(Length = 32)]
+        [QuickColumn(Length = 32)]
         public string Code { get; private set; } = code;
 
         public void SetId(Guid id) => Id = id;

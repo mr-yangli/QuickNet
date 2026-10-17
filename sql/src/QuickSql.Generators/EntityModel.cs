@@ -114,10 +114,6 @@ sealed class ColumnModel
 
 sealed class IndexModel
 {
-    /// <summary>可空：留 null 时运行期按 <c>IX_实体_成员</c> 生成，与反射侧同一个条件。
-    /// 自研 <c>[Index]</c> 的构造器要求给名字，所以实际上只有这一条路能到 null。</summary>
-    public string? Name;
-
     public List<string> Members = [];
 
     public bool Unique;

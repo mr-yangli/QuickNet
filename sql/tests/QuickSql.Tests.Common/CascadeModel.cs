@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations.Schema;
 using QuickSql.Metadata;
 using Da = System.ComponentModel.DataAnnotations;
 using DaSchema = System.ComponentModel.DataAnnotations.Schema;
@@ -17,7 +18,7 @@ public class Board
 {
     public int Id { get; set; }
 
-    [Column(Length = 32)]
+    [QuickColumn(Length = 32)]
     public string? Title { get; set; }
 
     [NoCascade]
@@ -31,7 +32,7 @@ public class Card
 
     public int BoardId { get; set; }
 
-    [Column(Length = 32)]
+    [QuickColumn(Length = 32)]
     public string? Text { get; set; }
 }
 
@@ -45,7 +46,7 @@ public class Rack
     /// <summary>这一列看着多余，却是这张表能被子端<em>看见</em>的前提：一个只有自增主键的实体在
     /// <c>InsertEngine</c> 那里<em>没有任何可写的列</em>，那句 <c>INSERT</c> 只剩 <c>DEFAULT VALUES</c> 一种写法，
     /// 而那一档没接线（§12.3）。真的级联现场里父总是有内容的，所以这里补一列，而不是去补那一档 DDL。</summary>
-    [Column(Length = 32)]
+    [QuickColumn(Length = 32)]
     public string? Label { get; set; }
 
     [DaSchema.ForeignKey("RackKey")]
@@ -59,7 +60,7 @@ public class ShelfSlot
 
     public int RackKey { get; set; }
 
-    [Column(Length = 16)]
+    [QuickColumn(Length = 16)]
     public string? Bin { get; set; }
 
     /// <summary>第三层：级联有深度，摘行也有深度。这一格存在的唯一理由是要能问出
@@ -78,7 +79,7 @@ public class SlotHook
 
     public int SlotId { get; set; }
 
-    [Column(Length = 16)]
+    [QuickColumn(Length = 16)]
     public string? Name { get; set; }
 }
 
@@ -96,7 +97,7 @@ public class Paper
 {
     public int Id { get; set; }
 
-    [Column(Length = 64)]
+    [QuickColumn(Length = 64)]
     public string? Title { get; set; }
 }
 
@@ -122,7 +123,7 @@ public class LedgerNote
 
     public int LedgerRef { get; set; }
 
-    [Column(Length = 32)]
+    [QuickColumn(Length = 32)]
     public string? Memo { get; set; }
 }
 

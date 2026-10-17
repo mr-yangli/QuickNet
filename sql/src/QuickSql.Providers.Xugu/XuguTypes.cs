@@ -162,7 +162,7 @@ public sealed class XuguTypes : ITypeMap
     const int MaxVarcharChars = 60_000;
 
     /// <summary>CLR 型 → 存储型名；而<em>人已点名的那一格原样 echo</em>。
-    /// <c>[Column(DbTypes = …)]</c> 在这一族"认哪些名"的清单因此是：<b>全都认——按不校验、不翻译的规矩穿过</b>
+    /// <c>[Column(TypeName = …)]</c> 在这一族"认哪些名"的清单因此是：<b>全都认——按不校验、不翻译的规矩穿过</b>
     /// （§4 那句"provider 不翻译人写的话"，五家同规），唯一的例外不在这颗口上：
     /// <c>rowversion</c> 由 <c>XuguCodeFirst.EmitColumnDefinition</c> 在 DDL 发射点拒收（v0.34 第二笔，§14）——
     /// 那里管的是"我们要不要建它"，这里管的是"这一格叫什么"；读侧目录对账（<c>XuguSchemaReader</c>）
@@ -288,7 +288,7 @@ public sealed class XuguTypes : ITypeMap
                 "虚谷的 DateTimeOffset 列无法绑定：库侧有 TIMESTAMP WITH TIME ZONE 这一型（厂商文档），但驱动的 CLR 类型表里"
                 + "没有 System.DateTimeOffset，而 §4 的 SPI 里没有任何一处做时区换算。§9.3 给这一档写的退路"
                 + "（降级 DateTime UTC + 列标记 + 读取端还原）那两半今天都不存在，所以宁缺不猜（缺口记 §14，与 MySQL 那一格"
-                + "同一条判据而缺的东西不同一条）。今天要这一列：显式给 [Column(DbType = ...)] 自己选型并自己负责换算。"),
+                + "同一条判据而缺的东西不同一条）。今天要这一列：显式给 [Column(TypeName = ...)] 自己选型并自己负责换算。"),
 
             var t when t == typeof(DateOnly) => "DATE",
 
@@ -300,13 +300,13 @@ public sealed class XuguTypes : ITypeMap
             // 因为这里两边的档位<em>都</em>有出处：厂商说 GUID 就是 16 字节的 uuid【文档】，
             // 而两家 shipped 适配器一致发 char(36)【产物】。取后者跟着的是 §9.3 那句"跨库默认 CHAR(36) 以便手工查询"：
             // 二进制的字节置换要与驱动约定一致，而 SPI 里没有"连接串参数改变方言假设"那一格（本文件已经占了一颗 CHAR_SET，
-            // 不该再靠"猜驱动的置换"省四个字节）。想退回文本形态仍然够得到：[Column(DbType = "GUID")] 在第一行短路。
+            // 不该再靠"猜驱动的置换"省四个字节）。想退回文本形态仍然够得到：[Column(TypeName = "GUID")] 在第一行短路。
             // 顺带记一处文档给的副产品：这一家有 SYS_UUID()/UUID()/GEN_RANDOM_UUID()/NEWID() 四颗【文档】
             // "库给主键"的函数，而 §4 的 SPI 里没有"这一列的值归库给 Guid"那一格（StoreFillsValue 今天只有
             // rowversion 用得上）—— 缺口记 §14，与 MySQL 那句 ON UPDATE CURRENT_TIMESTAMP 同一批。
             var t when t == typeof(Guid) => "CHAR(36)",
             var t when t == typeof(char) => "CHAR(1)",
-            _ => throw new QuickSqlException($"虚谷未登记 CLR 类型 {clrType.Name} 的存储类型，请显式给 [Column(DbType=...)]"),
+            _ => throw new QuickSqlException($"虚谷未登记 CLR 类型 {clrType.Name} 的存储类型，请显式给 [Column(TypeName=...)]"),
         };
     }
 

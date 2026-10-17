@@ -222,7 +222,7 @@ static class EntityFactsWriter
          .AppendLine("        [");
 
         foreach (var index in m.Indexes)
-            b.AppendLine("            new " + Metadata + "IndexFacts(" + Lit(index.Name) + ", [" + string.Join(", ", index.Members.Select(Lit)) + "], " + Bool(index.Unique) + ", " + Bool(index.Clustered) + ", " + Bool(index.Descending) + "),");
+            b.AppendLine("            new " + Metadata + "IndexFacts(null, [" + string.Join(", ", index.Members.Select(Lit)) + "], " + Bool(index.Unique) + ", " + Bool(index.Clustered) + ", " + Bool(index.Descending) + "),");
 
         b.AppendLine("        ],")
          .AppendLine("        [");

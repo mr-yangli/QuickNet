@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations.Schema;
 using QuickSql.Query;
 using QuickSql.Sql;
 using QuickSql.TestInfra;
@@ -534,7 +535,7 @@ public sealed class DialectParityTests
         Checks.Has("`CheckedAt` DATETIME(3) NULL", token.Myq);
         Checks.Has("\"CHECKEDAT\" DATETIME(3) NULL", XuguColumnDefinition<InventoryItem>(nameof(InventoryItem.CheckedAt)));
 
-        // 外三家 echo 了 T-SQL 的类型名 <c>rowversion</c>：那是 <c>[Column(DbTypes = …)]</c> 的语义
+        // 外三家 echo 了 T-SQL 的类型名 <c>rowversion</c>：那是 <c>[Column(TypeName = …)]</c> 的语义
         // （provider 不翻译人写的话），而 InventoryItem 本来就是 SQL Server 专用靶。
         // 这一句写在这里是明记账：<b>那三份文本没有人会拿去执行</b>，它出现的唯一理由是把上面两格隔开。
         // （v0.34 第二笔前这句是"四份"；第五家从 echo 那一边搬到了抛的那一边。）

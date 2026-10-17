@@ -24,8 +24,7 @@ sealed class BuildOutcome
 
 static class EntityFactsBuilder
 {
-    const string QuickSqlTable = "QuickSql.Metadata.TableAttribute";
-    const string QuickSqlColumn = "QuickSql.Metadata.ColumnAttribute";
+    const string QuickSqlColumn = "QuickSql.Metadata.QuickColumnAttribute";
     const string QuickSqlIndex = "QuickSql.Metadata.IndexAttribute";
     const string QuickSqlSplit = "QuickSql.Metadata.SplitTableAttribute";
     const string QuickSqlDataSource = "QuickSql.Metadata.DataSourceAttribute";
@@ -41,6 +40,7 @@ static class EntityFactsBuilder
     const string DataMaxLength = "System.ComponentModel.DataAnnotations.MaxLengthAttribute";
     const string DataDisplay = "System.ComponentModel.DataAnnotations.DisplayAttribute";
     const string DataKey = "System.ComponentModel.DataAnnotations.KeyAttribute";
+    const string ScDescription = "System.ComponentModel.DescriptionAttribute";
 
     static readonly SymbolDisplayFormat Qualified = new(
         globalNamespaceStyle: SymbolDisplayGlobalNamespaceStyle.Omitted,
@@ -58,16 +58,12 @@ static class EntityFactsBuilder
     /// <c>/// &lt;summary&gt;</c> 只有编译器看得见，反射侧没有这一份。开着它，同一张表在两条启动路径上就能给出
     /// 两个备注（§13.11 的 <c>comment=</c> 那一格会红），所以它默认关、且只在消费方点名后才生效——
     /// "开它"要是一次签字，不是一次顺带。</summary>
-    public static BuildOutcome Build(GeneratorAttributeSyntaxContext context, bool viaQuickSqlTable, bool xmlDocComments)
+    public static BuildOutcome Build(GeneratorAttributeSyntaxContext context, bool xmlDocComments)
     {
         var outcome = new BuildOutcome();
         var entity = (INamedTypeSymbol)context.TargetSymbol;
         var at = context.TargetNode.GetLocation();
         var attributes = entity.GetAttributes();
-
-        // 两个 [Table] 同时存在时只由自研属性那一层产出（§10.2 的优先级），否则同一个实体会生成两份。
-        if (!viaQuickSqlTable && Find(attributes, QuickSqlTable) is not null)
-            return outcome;
 
         if (entity.IsGenericType || entity.IsUnboundGenericType)
             return Blocked(outcome, at, "泛型实体");
@@ -81,28 +77,19 @@ static class EntityFactsBuilder
         if (!entity.InstanceConstructors.Any(static c => c.Parameters.IsEmpty && c.DeclaredAccessibility == Accessibility.Public))
             return Blocked(outcome, at, "无参构造器不是公共的，`new T()` 在生成侧编不出来");
 
-        var table = Find(attributes, QuickSqlTable);
         var dataTable = Find(attributes, DataSchemaTable);
-
-        // 同层冲突在 G2 是启动期抛，在 G1 就是编译错（§10.2「不自动取更严的那条」）。
-        if (table is not null && dataTable is not null && Text(table, 0, "Name") != Text(dataTable, 0, "Name"))
-        {
-            outcome.Diagnostics.Add(Diagnostic.Create(QuickSqlDiagnostics.MetadataConflict, at,
-                $"类型 '{entity.Name}' 的同一层元数据来源互斥：[Table(\"{Text(table, 0, "Name")}\")] vs [Table(\"{Text(dataTable, 0, "Name")}\")]。QuickSql 不自动取更严的那条。"));
-
-            return outcome;
-        }
 
         var model = new EntityModel
         {
             Namespace = entity.ContainingNamespace is { IsGlobalNamespace: false } ns ? ns.ToDisplayString() : "",
             Entity = TypeExpression(entity),
             Name = GeneratedName(entity),
-            TableName = Text(table, 0, "Name") ?? Text(dataTable, 0, "Name") ?? entity.Name,
-            TableSchema = Text(table, -1, "Schema") ?? Text(dataTable, -1, "Schema"),
-            // 表备注只有自研那一层有（DataAnnotations 的 [Table] 没这一格），所以这里不比对 dataTable。
+            TableName = Text(dataTable, 0, "Name") ?? entity.Name,
+            TableSchema = Text(dataTable, -1, "Schema"),
+            // 表备注：组件模型的 [Description]（System.ComponentModel）继承自研 [Table(Comment=…)]
+            // 退场后的那一格，座次照旧（排在 Fluent 之后；Fluent 这里本来就看不见）。
             // 文档注释排在最末：注解写过就轮不到它（与下面列备注同一条取向）。
-            TableComment = Text(table, -1, "Comment") ?? (xmlDocComments ? SummaryOf(entity) : null),
+            TableComment = Text(Find(attributes, ScDescription), 0, "Description") ?? (xmlDocComments ? SummaryOf(entity) : null),
             Split = SplitOf(attributes),
             Source = SourceOf(attributes),
         };
@@ -205,12 +192,11 @@ static class EntityFactsBuilder
         var declaredLength = Number(column, -1, "Length") ?? 0;
 
         var (columnName, columnNameLayer, columnNameNote) =
-            Text(column, 0, "Name") is { } quicksqlName ? (quicksqlName, "QuickSqlAttribute", $"[Column(\"{quicksqlName}\")]")
-            : Text(dataColumn, 0, "Name") is { } dataName ? (dataName, "DataAccessAnnotation", $"[Column(\"{dataName}\")]")
+            Text(dataColumn, 0, "Name") is { } dataName ? (dataName, "DataAccessAnnotation", $"[Column(\"{dataName}\")]")
             : (name, "Convention", "约定：属性名");
 
         var (lengthValue, lengthNote) =
-            declaredLength > 0 ? (declaredLength, $"[Column(Length={declaredLength})]")
+            declaredLength > 0 ? (declaredLength, $"[QuickColumn(Length={declaredLength})]")
             : stringLength is not null ? (Number(stringLength, 0, "MaximumLength") ?? 0, $"[StringLength({Number(stringLength, 0, "MaximumLength") ?? 0})]")
             : maxLength is not null ? (Number(maxLength, 0, "Length") ?? 0, $"[MaxLength({Number(maxLength, 0, "Length") ?? 0})]")
             : (0, "未声明，交给 provider 默认");
@@ -239,10 +225,12 @@ static class EntityFactsBuilder
             ConcurrencyNote = concurrency ? "[ConcurrencyToken]" : null,
             Precision = Positive(Number(column, -1, "Precision")),
             Scale = Positive(Number(column, -1, "Scale")),
-            StoreType = Text(column, -1, "DbTypes") ?? Text(dataColumn, -1, "TypeName"),
-            // 备注的链与反射侧同一条（自研 [Column] > [Display(Description)] > [Display(Name)]，Fluent 那档
-            // 生成期整体上看不见），文档注释接在链尾兜底：写过显式备注就不轮到它。
-            Comment = Text(column, -1, "Comment") ?? Text(Find(declared, DataDisplay), -1, "Description") ?? Text(Find(declared, DataDisplay), -1, "Name")
+            StoreType = Text(dataColumn, -1, "TypeName"),
+            // 备注的链与反射侧同一条（[Description]（System.ComponentModel）> [Display(Description)]
+            // > [Display(Name)]，Fluent 那档生成期整体上看不见），文档注释接在链尾兜底：写过显式备注就不轮到它。
+            Comment = Text(Find(declared, ScDescription), 0, "Description")
+                      ?? Text(Find(declared, DataDisplay), -1, "Description")
+                      ?? Text(Find(declared, DataDisplay), -1, "Name")
                       ?? (xmlDocComments ? SummaryOf(property) : null),
             IsString = Core(type).SpecialType == SpecialType.System_String,
             DirectArm = DirectArmOf(type),
@@ -293,7 +281,7 @@ static class EntityFactsBuilder
     static (bool, string, bool) NullableOf(ITypeSymbol type, IPropertySymbol property, AttributeData? column, AttributeData? required)
     {
         if (Tri(column, "IsPrimary") == 1)
-            return (false, "[Column(IsPrimary=Yes)] ⇒ 非空", true);
+            return (false, "[QuickColumn(IsPrimary=Yes)] ⇒ 非空", true);
 
         if (Tri(column, "IsNullable") is 1 or 2)
         {
@@ -301,9 +289,9 @@ static class EntityFactsBuilder
 
             return (nullable, nullable
                 ? required is not null
-                    ? "WARN: [Required] 与 [Column(IsNullable=Yes)] 矛盾，按优先级取自研属性"
-                    : "[Column(IsNullable=Yes)]"
-                : "[Column(IsNullable=No)]", true);
+                    ? "WARN: [Required] 与 [QuickColumn(IsNullable=Yes)] 矛盾，按优先级取自研属性"
+                    : "[QuickColumn(IsNullable=Yes)]"
+                : "[QuickColumn(IsNullable=No)]", true);
         }
 
         if (required is not null)
@@ -324,14 +312,15 @@ static class EntityFactsBuilder
         return (annotated, annotated ? "C# 可空 ⇒ 可空列" : "C# 非空 ⇒ 非空列", true);
     }
 
-    /// <summary>「被显式排除」= 自研 <c>[Column(IsIgnore=true)]</c> 或 <c>[NotMapped]</c>。
+    /// <summary>「被显式排除」= <c>[NotMapped]</c>（系统注解；自研 <c>[Column(IsIgnore)]</c> 随自研
+    /// <c>[Column]</c> 一并退场）。
     /// 反射侧同一句判定，且它在链条上的位置也一样：排在类型判定<em>之前</em>，所以打在导航属性上的
     /// 那颗 <c>[NotMapped]</c> 只是"不映射",不会被下面那条当成关系。</summary>
     static bool IsExplicitlyIgnored(IPropertySymbol property)
     {
         var declared = property.GetAttributes();
 
-        return Bool(Find(declared, QuickSqlColumn), "IsIgnore") || Find(declared, DataNotMapped) is not null;
+        return Find(declared, DataNotMapped) is not null;
     }
 
     /// <summary>能进列清单的形状：<c>byte[]</c> 单独放行，其余要落在可映射闭包里。反射侧同一句。</summary>
@@ -404,7 +393,7 @@ static class EntityFactsBuilder
                     if (!model.Columns.Any(c => c.Member == member))
                     {
                         outcome.Diagnostics.Add(Diagnostic.Create(QuickSqlDiagnostics.ForeignKeyMemberUnmapped, At(property, at),
-                            $"引用导航 {property.Name} 引用了未映射的属性 {member}（可能被 [NotMapped] 或 [Column(IsIgnore)] 排除）"));
+                            $"引用导航 {property.Name} 引用了未映射的属性 {member}（可能被 [NotMapped] 排除）"));
 
                         return;
                     }
@@ -491,8 +480,12 @@ static class EntityFactsBuilder
 
         foreach (var index in entity.GetAttributes().Where(a => Name(a) == QuickSqlIndex))
         {
-            var members = Texts(index, 1);
-            var indexName = Text(index, 0, "Name");
+            // EF 同形：构造参数就是成员名单，没有名字那一格 —— 索引名一律留给运行期按约定给。
+            // 那条约定与反射侧 EntityContractFactory 同一句：表名没模板用表名，分表（表名是 {year} 样模板）
+            // 用类名 —— 消息里那串名字要对得上反射侧抛的那句（§13.11 的对拍连错误话术一起管）。
+            var members = Texts(index, 0);
+            var indexName = (model.TableName.Contains('{') ? entity.Name : model.TableName)
+                            + "_" + string.Join("_", members);
 
             foreach (var member in members)
             {
@@ -500,7 +493,7 @@ static class EntityFactsBuilder
                 {
                     // 反射侧是启动期抛 QuickSqlException；编译期同样只能是错，不能默默少一个索引。
                     outcome.Diagnostics.Add(Diagnostic.Create(QuickSqlDiagnostics.IndexMemberUnmapped, at,
-                        $"索引 {indexName ?? "(按约定命名)"} 引用了未映射的属性 {member}（可能被 [NotMapped] 或 [Column(IsIgnore)] 排除）"));
+                        $"索引 IX_{indexName} 引用了未映射的属性 {member}（可能被 [NotMapped] 排除）"));
 
                     return;
                 }
@@ -508,9 +501,8 @@ static class EntityFactsBuilder
 
             model.Indexes.Add(new IndexModel
             {
-                Name = indexName,
                 Members = [.. members],
-                Unique = Bool(index, "Unique"),
+                Unique = Bool(index, "IsUnique"),
                 Clustered = Bool(index, "Clustered"),
                 Descending = Bool(index, "Descending"),
             });

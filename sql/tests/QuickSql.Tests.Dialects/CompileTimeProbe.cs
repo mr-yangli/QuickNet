@@ -31,6 +31,8 @@ static class CompileTimeProbe
     public const string Header = """
         using QuickSql.Metadata;
         using QuickSql.TestInfra;
+        using System.ComponentModel;
+        using System.ComponentModel.DataAnnotations.Schema;
         using Da = System.ComponentModel.DataAnnotations;
         using DaSchema = System.ComponentModel.DataAnnotations.Schema;
 

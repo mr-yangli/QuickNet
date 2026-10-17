@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations.Schema;
 using System.Data;
 using QuickSql.Aop;
 using QuickSql.Metadata;
@@ -415,7 +416,7 @@ public sealed class SoftDeleteTests
     {
         public int Id { get; set; }
 
-        [Column(IsIdentity = TriState.Yes)]
+        [QuickColumn(IsIdentity = TriState.Yes)]
         public bool Deleted { get; set; }
     }
 }

@@ -164,7 +164,7 @@ public class MySqlCodeFirst(MySqlTypes types) : ICodeFirstDialect
             // PG 系与 Oracle 血统两族抛，T-SQL 那一族既不抛也不升格 —— 它落回 <c>_ =></c> 那一臂发成普通
             // <c>CREATE INDEX</c>，是一处"看起来建成了"的形状。v0.31 的第五家抛，而且它是三份"抛"里
             // 唯一一份有厂商文档正面依据的（文档列的索引种类是普通、UNIQUE、BITMAP 三种，没有全文那一档）。今天没有任何公共入口能造出这颗 <c>Kind</c>
-            // （<c>IndexAttribute</c> 只带 Unique/Clustered，<c>FluentIndex</c> 只带 Unique，解析链交不出
+            // （<c>IndexAttribute</c> 现在只带 IsUnique/Clustered，<c>FluentIndex</c> 只带 Unique，解析链交不出
             // <c>FullText</c>，provider 也就收不到），所以它记 §14 而不是本版缺陷。
             // 它同时是唯一一颗"ASC/DESC 在这里对全文索引没有意义"的：
             // 那一类索引按相关度排序，方向不是它的参数，所以这里不写方向而不是写一个被忽略的方向。

@@ -91,7 +91,7 @@ public sealed class SqlServerTypes : ITypeMap
             var t when t == typeof(TimeSpan) => "TIME(3)",
             var t when t == typeof(Guid) => "UNIQUEIDENTIFIER",
             var t when t == typeof(char) => "NCHAR(1)",
-            _ => throw new QuickSqlException($"SQL Server 未登记 CLR 类型 {clrType.Name} 的存储类型，请显式给 [Column(DbType=...)]"),
+            _ => throw new QuickSqlException($"SQL Server 未登记 CLR 类型 {clrType.Name} 的存储类型，请显式给 [Column(TypeName=...)]"),
         };
     }
 

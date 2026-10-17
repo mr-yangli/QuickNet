@@ -28,7 +28,7 @@ namespace QuickSql.Providers.Xugu;
 /// V 只进 <c>COUNT("V")</c> 也绿（RV-09c = 1 —— 缺省那一格库确实给了值，它不是 NULL）。于是这一档的形状
 /// 从"库没有那一型"换成"库有、会给值、会自增、不许写，而驱动这一侧交不出那个值"。上面那句
 /// "1 家库给值 ∶ 4 家应用给值"因此要重读成 <b>2 家库会给值，而其中这一家读不回</b>；卡点在 SPI 不在 provider
-/// （"要不要拒收 <c>[Column(DbType = "rowversion")]</c>"与「值归库给」缺的那颗事后回读槽位是同一颗，
+/// （"要不要拒收 <c>[Column(TypeName = "rowversion")]</c>"与「值归库给」缺的那颗事后回读槽位是同一颗，
 /// 两格都记 §14，裁决归用户）—— <b>这个括号到 v0.34 止拆成了两件事</b>：事后回读那颗槽位第一笔已经建起来
 /// （<c>SupportsPostStatementKeyRead</c>，今天只接单一自增键的形状，§12.4 第 1 项），而"要不要拒收"这一格
 /// 第二笔按「全部完善」的整批授权自决为<b>拒收</b>：DDL 发射点抛（<c>XuguCodeFirst.EmitColumnDefinition</c>），

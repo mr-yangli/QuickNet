@@ -283,7 +283,7 @@ public sealed class SqliteCodeFirst(SqliteTypes types) : ICodeFirstDialect
     /// （<c>long</c> → <c>BIGINT</c> 会被库拒，实测 306/2807）。<b>判据取"算出来的型名里有没有 INT"</b>：
     /// 有则说明这一列在契约里就是整数族，换成 <c>INTEGER</c> 只改声明字形而不改存储（310 那颗 30 亿是这一句的见证）；
     /// 没有则<em>抛</em>——一颗文本列上的自增在本家没有形状，而库里那一格今天已经证明不收（306 报的正是这一档）。
-    /// 人手工写的 <c>[Column(DbTypes = "…")]</c> 在这里同样被换掉，理由与 <c>Gbase8sCodeFirst.SerialFor</c>
+    /// 人手工写的 <c>[Column(TypeName = "…")]</c> 在这里同样被换掉，理由与 <c>Gbase8sCodeFirst.SerialFor</c>
     /// 那一段逐字相同：<c>IsIdentity</c> 是这一列更近的事实，而写下的那个名字在自增列上本来就不成立。</summary>
     string IdentityStoreType(ColumnContract column)
     {

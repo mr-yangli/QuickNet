@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations.Schema;
 using DaSchema = System.ComponentModel.DataAnnotations.Schema;
 using QuickSql.Metadata;
 using QuickSql.Metadata.Fluent;
@@ -164,7 +165,7 @@ public class CompositeFk
 
     public int OrderId { get; set; }
 
-    [Column(Length = 32)]
+    [QuickColumn(Length = 32)]
     public string? Sku { get; set; }
 }
 

@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations.Schema;
 using System.Text;
 using QuickSql.Metadata;
 using QuickSql.Metadata.Fluent;
@@ -323,6 +324,6 @@ public class AppVersioned
 
     /// <summary>一格普通可写列。没有它，这一行的 INSERT 会一个列都不剩 —— 那与本题无关，
     /// 却会让上面那句"列清单里没有 [Stamp]"红于一个错原因。</summary>
-    [Column(Length = 16)]
+    [QuickColumn(Length = 16)]
     public string? Name { get; set; }
 }

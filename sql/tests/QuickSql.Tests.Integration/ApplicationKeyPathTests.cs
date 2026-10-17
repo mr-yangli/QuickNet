@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations.Schema;
 using QuickSql.Metadata;
 using QuickSql.Schema;
 using QuickSql.TestInfra;
@@ -28,7 +29,7 @@ public sealed class ApplicationKeyPathTests
     {
         public long Id { get; set; }
 
-        [Column(Length = 32)]
+        [QuickColumn(Length = 32)]
         public string? Tag { get; set; }
     }
 

@@ -6,14 +6,13 @@ using Microsoft.CodeAnalysis.Diagnostics;
 
 namespace QuickSql.Generators;
 
-/// <summary>§10.2 解析链的编译期实现（§12.7 A 的 G1 级）。触发条件是实体带 <c>[Table]</c>——
-/// 自研属性或 DataAnnotations 的那个都算，因为「标注过」正是 §12.7 那张三级表里 G1 与 G2 的分界线。
-/// 没标注、有基类、属性不可公开写的实体不产出代码，运行期由 <c>GeneratedEntitySchemaRegistry</c>
+/// <summary>§10.2 解析链的编译期实现（§12.7 A 的 G1 级）。触发条件是实体带系统的 <c>[Table]</c>
+/// （System.ComponentModel.DataAnnotations.Schema）——「标注过」正是 §12.7 那张三级表里 G1 与 G2 的
+/// 分界线。没标注、有基类、属性不可公开写的实体不产出代码，运行期由 <c>GeneratedEntitySchemaRegistry</c>
 /// 逐条退回 G2（并按 <c>QuickSql003</c> 说明为什么没走 G1）。</summary>
 [Generator(LanguageNames.CSharp)]
 public sealed class EntityContractGenerator : IIncrementalGenerator
 {
-    const string QuickSqlTable = "QuickSql.Metadata.TableAttribute";
     const string DataSchemaTable = "System.ComponentModel.DataAnnotations.Schema.TableAttribute";
 
     /// <summary>把 C# 文档注释（<c>/// &lt;summary&gt;</c>）当成备注的最低优先档，默认<b>关</b>。
@@ -30,24 +29,14 @@ public sealed class EntityContractGenerator : IIncrementalGenerator
         var xmlDocComments = context.AnalyzerConfigOptionsProvider
             .Select(static (provider, _) => Read(provider.GlobalOptions, XmlDocCommentsOption));
 
-        var quicksql = context.SyntaxProvider
-            .ForAttributeWithMetadataName(
-                QuickSqlTable,
-                static (node, _) => node is TypeDeclarationSyntax { AttributeLists.Count: > 0 },
-                static (capture, _) => capture)
-            .Combine(xmlDocComments)
-            .Select(static (both, _) => EntityFactsBuilder.Build(both.Left, viaQuickSqlTable: true, both.Right));
-
-        var dataAnnotations = context.SyntaxProvider
+        var outcomes = context.SyntaxProvider
             .ForAttributeWithMetadataName(
                 DataSchemaTable,
                 static (node, _) => node is TypeDeclarationSyntax { AttributeLists.Count: > 0 },
                 static (capture, _) => capture)
             .Combine(xmlDocComments)
-            .Select(static (both, _) => EntityFactsBuilder.Build(both.Left, viaQuickSqlTable: false, both.Right));
-
-        var outcomes = quicksql.Collect().Combine(dataAnnotations.Collect())
-                       .Select(static (both, _) => both.Left.Concat(both.Right).ToList());
+            .Select(static (both, _) => EntityFactsBuilder.Build(both.Left, both.Right))
+            .Collect();
 
         context.RegisterSourceOutput(outcomes, static (spc, batch) =>
         {

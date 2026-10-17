@@ -7,6 +7,7 @@ using QuickSql.Metadata.Fluent;
 using QuickSql.Providers;
 using Da = System.ComponentModel.DataAnnotations;
 using DaSchema = System.ComponentModel.DataAnnotations.Schema;
+using Sc = System.ComponentModel;
 
 namespace QuickSql.Metadata;
 
@@ -102,15 +103,10 @@ public sealed class ContractResolver(IDbProvider provider, ModelConfiguration? c
 
     TableInfo ResolveTable(Type clrType, FluentEntity? fluent)
     {
-        var quicksql = clrType.GetCustomAttribute<TableAttribute>();
         var data = clrType.GetCustomAttribute<DaSchema.TableAttribute>();
-
-        if (quicksql is not null && data is not null && quicksql.Name != data.Name)
-            throw new MetadataConflictException(clrType.Name, [$"[Table(\"{quicksql.Name}\")]", $"[Table(\"{data.Name}\")]"]);
 
         var name =
             fluent?.TableName is { } fn ? fn
-            : quicksql?.Name is { } cn ? cn
             : data?.Name is { } dn ? dn
             : clrType.Name;
 
@@ -123,13 +119,13 @@ public sealed class ContractResolver(IDbProvider provider, ModelConfiguration? c
         // "同一张表在两条路径上属于两座库"有能发生的形状，而那一格的代价是语句发到另一座库里去。
         var source = clrType.GetCustomAttribute<DataSourceAttribute>();
 
-        // 表备注与表名同一条优先级链（Fluent > 自研 > DataAnnotations），只是最后一层没有等价注解：
-        // <c>System.ComponentModel.DataAnnotations.Schema.TableAttribute</c> 只有 Name/Schema 两格。
-        // 这一格从前是<em>读了又丢</em>的（注解与 Fluent 两边都能写、契约里没处放），于是"改了表备注"
-        // 在结构同步那一头根本不是"改了一格契约"，而是什么都没改。
-        var comment = fluent?.Comment ?? quicksql?.Comment;
+        // 表备注与表名同一条优先级链（Fluent > 注解 > 文档兜底），只是最后一层只长在 G1（xmlDoc 开关）。
+        // 系统的 <c>System.ComponentModel.DataAnnotations.Schema.TableAttribute</c> 只有 Name/Schema 两格，
+        // 备注那一格由组件模型的 <c>[Description]</c>（System.ComponentModel）继承：它就是从前的
+        // 自研 <c>[Table(Comment=…)]</c> 那一格退场后的接棒者，座次也照旧 —— 排在 Fluent 之后。
+        var comment = fluent?.Comment ?? clrType.GetCustomAttribute<Sc.DescriptionAttribute>()?.Description;
 
-        return new TableInfo(fluent?.Schema ?? quicksql?.Schema ?? data?.Schema, name,
+        return new TableInfo(fluent?.Schema ?? data?.Schema, name,
             split is null ? null : new SplitFacts(split.Kind, split.Field, split.Buckets),
             source is null ? null : new DataSourceFacts(source.Cluster),
             comment);
@@ -147,16 +143,13 @@ public sealed class ContractResolver(IDbProvider provider, ModelConfiguration? c
             if (property.GetIndexParameters().Length > 0)
                 continue;
 
-            var quicksql = property.GetCustomAttribute<ColumnAttribute>();
             var facts = new MemberFacts(property)
             {
-                QuickSqlColumn = quicksql,
+                QuickColumn = property.GetCustomAttribute<QuickColumnAttribute>(),
                 DataColumn = property.GetCustomAttribute<DaSchema.ColumnAttribute>(),
             };
 
-            if (quicksql?.IsIgnore == true)
-                facts.Ignored = "[Column(IsIgnore=true)]";
-            else if (property.GetCustomAttribute<DaSchema.NotMappedAttribute>() is not null)
+            if (property.GetCustomAttribute<DaSchema.NotMappedAttribute>() is not null)
                 facts.Ignored = "[NotMapped]";
             else if (!property.CanWrite)
                 // 没有写口的成员既落不回值（读取器给它赋值会在编译当场 ArgumentException:
@@ -346,7 +339,7 @@ public sealed class ContractResolver(IDbProvider provider, ModelConfiguration? c
         var property = member.Property;
         var name = property.Name;
         var fluentMember = fluent?.Members.GetValueOrDefault(name);
-        var quicksql = member.QuickSqlColumn;
+        var quickColumn = member.QuickColumn;
         var dataColumn = member.DataColumn;
 
         var required = property.GetCustomAttribute<Da.RequiredAttribute>();
@@ -360,37 +353,41 @@ public sealed class ContractResolver(IDbProvider provider, ModelConfiguration? c
 
         (string Value, MetadataLayer Layer, string Note) columnName =
             fluentMember?.ColumnName is { } fc ? (fc, MetadataLayer.Fluent, "Fluent HasColumnName")
-            : quicksql?.Name is { } nc ? (nc, MetadataLayer.QuickSqlAttribute, $"[Column(\"{nc}\")]")
             : dataColumn?.Name is { } dc ? (dc, MetadataLayer.DataAccessAnnotation, $"[Column(\"{dc}\")]")
             : (name, MetadataLayer.Convention, "约定：属性名");
 
         (int Value, MetadataLayer Layer, string Note) length =
             fluentMember?.MaxLength is { } fl ? (fl, MetadataLayer.Fluent, $"Fluent HasMaxLength({fl})")
-            : quicksql is { Length: > 0 } scl ? (scl.Length, MetadataLayer.QuickSqlAttribute, $"[Column(Length={scl.Length})]")
+            : quickColumn is { Length: > 0 } scl ? (scl.Length, MetadataLayer.QuickSqlAttribute, $"[QuickColumn(Length={scl.Length})]")
             : stringLength is not null ? (stringLength.MaximumLength, MetadataLayer.DataAccessAnnotation, $"[StringLength({stringLength.MaximumLength})]")
             : maxLength is not null ? (maxLength.Length, MetadataLayer.DataAccessAnnotation, $"[MaxLength({maxLength.Length})]")
             : (0, MetadataLayer.ProviderFallback, "未声明，交给 provider 默认");
 
-        var nullable = ResolveNullable(member, required, quicksql, fluentMember);
+        var nullable = ResolveNullable(member, required, quickColumn, fluentMember);
 
         var isKey = fluentMember?.IsKey == true
-                    || quicksql?.IsPrimary == TriState.Yes
+                    || quickColumn?.IsPrimary == TriState.Yes
                     || property.GetCustomAttribute<Da.KeyAttribute>() is not null;
 
         var identity = fluentMember?.IsIdentity
-                       ?? quicksql?.IsIdentity switch
+                       ?? quickColumn?.IsIdentity switch
                        {
                            TriState.Yes => true,
                            TriState.No => false,
                            _ => null,
                        };
 
-        int? precision = fluentMember?.Precision ?? (quicksql is { Precision: > 0 } p ? p.Precision : null);
-        int? scale = fluentMember?.Scale ?? (quicksql is { Scale: > 0 } s ? s.Scale : null);
+        int? precision = fluentMember?.Precision ?? (quickColumn is { Precision: > 0 } p ? p.Precision : null);
+        int? scale = fluentMember?.Scale ?? (quickColumn is { Scale: > 0 } s ? s.Scale : null);
 
-        var storeType = fluentMember?.StoreTypeName ?? quicksql?.DbTypes ?? dataColumn?.TypeName;
+        var storeType = fluentMember?.StoreTypeName ?? dataColumn?.TypeName;
+
+        // 备注的两档注解：组件模型的 [Description]（System.ComponentModel）是自研 [Column(Comment=…)]
+        // 退场后的接棒者，座次照旧 —— 排在 Fluent 之后；DataAnnotations 的 [Display]（描述/显示名）
+        // 接在它后面作兜底（这条链从前只到 Display，[Description] 与它们同层竞争）。
+        var description = property.GetCustomAttribute<Sc.DescriptionAttribute>()?.Description;
         var display = property.GetCustomAttribute<Da.DisplayAttribute>();
-        var comment = fluentMember?.Comment ?? quicksql?.Comment ?? display?.Description ?? display?.Name;
+        var comment = fluentMember?.Comment ?? description ?? display?.Description ?? display?.Name;
 
         // 并发列只有两个来源：自研属性与 Fluent（DataAnnotations 那一层没有等价注解 —— 带这个语义的
         // TimestampAttribute/ConcurrencyCheckAttribute 住在 EF Core 的程序集里，引它等于引 EF Core）。
@@ -424,23 +421,23 @@ public sealed class ContractResolver(IDbProvider provider, ModelConfiguration? c
     }
 
     static (bool Value, MetadataLayer Layer, string Note, bool Declared) ResolveNullable(
-        MemberFacts member, Da.RequiredAttribute? required, ColumnAttribute? quicksql, FluentMember? fluentMember)
+        MemberFacts member, Da.RequiredAttribute? required, QuickColumnAttribute? quickColumn, FluentMember? fluentMember)
     {
         if (fluentMember?.Required is { } fr)
             return (!fr, MetadataLayer.Fluent, $"Fluent IsRequired({fr})", true);
 
-        if (quicksql?.IsPrimary == TriState.Yes)
-            return (false, MetadataLayer.QuickSqlAttribute, "[Column(IsPrimary=Yes)] ⇒ 非空", true);
+        if (quickColumn?.IsPrimary == TriState.Yes)
+            return (false, MetadataLayer.QuickSqlAttribute, "[QuickColumn(IsPrimary=Yes)] ⇒ 非空", true);
 
-        if (quicksql?.IsNullable is TriState.Yes or TriState.No)
+        if (quickColumn?.IsNullable is TriState.Yes or TriState.No)
         {
-            var isNullable = quicksql.IsNullable == TriState.Yes;
+            var isNullable = quickColumn.IsNullable == TriState.Yes;
 
             return (isNullable, MetadataLayer.QuickSqlAttribute, isNullable
                 ? required is not null
-                    ? "WARN: [Required] 与 [Column(IsNullable=Yes)] 矛盾，按优先级取自研属性"
-                    : "[Column(IsNullable=Yes)]"
-                : "[Column(IsNullable=No)]", true);
+                    ? "WARN: [Required] 与 [QuickColumn(IsNullable=Yes)] 矛盾，按优先级取自研属性"
+                    : "[QuickColumn(IsNullable=Yes)]"
+                : "[QuickColumn(IsNullable=No)]", true);
         }
 
         if (required is not null)
@@ -471,7 +468,7 @@ public sealed class ContractResolver(IDbProvider provider, ModelConfiguration? c
         var facts = new List<IndexFacts>();
 
         foreach (var index in clrType.GetCustomAttributes<IndexAttribute>())
-            facts.Add(new IndexFacts(index.Name, [.. index.MemberNames], index.Unique, index.Clustered, index.Descending));
+            facts.Add(new IndexFacts(null, [.. index.MemberNames], index.IsUnique, index.Clustered, index.Descending));
 
         foreach (var index in fluent?.Indexes ?? [])
             facts.Add(new IndexFacts(index.Name, index.MemberNames, index.Unique, Descending: index.Descending));
@@ -483,7 +480,7 @@ public sealed class ContractResolver(IDbProvider provider, ModelConfiguration? c
     {
         public PropertyInfo Property { get; } = property;
 
-        public ColumnAttribute? QuickSqlColumn { get; init; }
+        public QuickColumnAttribute? QuickColumn { get; init; }
 
         public DaSchema.ColumnAttribute? DataColumn { get; init; }
 

@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations.Schema;
 using QuickSql.Metadata;
 using QuickSql.Schema;
 using QuickSql.TestInfra;
@@ -38,10 +39,10 @@ public sealed class NullabilityTighteningPathTests
     {
         public long Id { get; set; }
 
-        [Column(Length = 32)]
+        [QuickColumn(Length = 32)]
         public string Stamp { get; set; } = null!;
 
-        [Column(Length = 32)]
+        [QuickColumn(Length = 32)]
         public string? Icon { get; set; }
     }
 

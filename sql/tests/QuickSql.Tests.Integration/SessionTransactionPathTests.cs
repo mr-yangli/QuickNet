@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations.Schema;
 using QuickSql.Metadata;
 using QuickSql.Schema;
 using QuickSql.TestInfra;
@@ -33,10 +34,10 @@ public sealed class SessionTransactionPathTests
     {
         public Guid Id { get; set; }
 
-        [Column(Length = 32)]
+        [QuickColumn(Length = 32)]
         public string? Board { get; set; }
 
-        [Column(Length = 32)]
+        [QuickColumn(Length = 32)]
         public string? Label { get; set; }
     }
 

@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations.Schema;
 using QuickSql.Metadata;
 
 namespace QuickSql.TestInfra;
@@ -22,7 +23,7 @@ public class Pallet
 {
     public int Id { get; set; }
 
-    [Column(Length = 32)]
+    [QuickColumn(Length = 32)]
     public string? Label { get; set; }
 
     public List<PalletLine>? Lines { get; set; }
@@ -37,7 +38,7 @@ public class PalletLine
 
     public int PalletId { get; set; }
 
-    [Column(Length = 16)]
+    [QuickColumn(Length = 16)]
     public string? Name { get; set; }
 
     /// <summary>引用导航的外键列。按约定 <c>{导航属性名}Id</c> 命中 <see cref="Material"/>（§10.2 的约定层），
@@ -53,6 +54,6 @@ public class Material
 {
     public int Id { get; set; }
 
-    [Column(Length = 16)]
+    [QuickColumn(Length = 16)]
     public string? Spec { get; set; }
 }

@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations.Schema;
 using QuickSql.Metadata;
 using Da = System.ComponentModel.DataAnnotations;
 using DaSchema = System.ComponentModel.DataAnnotations.Schema;
@@ -8,14 +9,14 @@ namespace QuickSql.TestInfra;
 /// 所以这里的属性声明顺序是测试的一部分，重排会让黄金样本整片变红 —— 那是故意的，
 /// 因为"列序变了"在真实项目里就是一个要显式承认的变更。</summary>
 [Table("QuickSqlOrder")]
-[Index("IX_QuickSqlOrder_CreatedAt", nameof(CreatedAt))]
+[Index(nameof(CreatedAt))]
 public class Order
 {
     /// <summary>约定命中 <c>Id</c> ⇒ 主键 + 自增（整型主键才自动自增，§10.2 的约定层）。</summary>
     public int Id { get; set; }
 
     /// <summary>显式长度 ⇒ <c>nvarchar(64)</c>。不给长度的字符串是 <c>nvarchar(max)</c>（见 <see cref="Note"/>）。</summary>
-    [Column(Length = 64)]
+    [QuickColumn(Length = 64)]
     public string? CustomerName { get; set; }
 
     public int CustomerId { get; set; }
@@ -63,7 +64,7 @@ public class OrderItem
 
     public int OrderId { get; set; }
 
-    [Column(Length = 32)]
+    [QuickColumn(Length = 32)]
     public string? Sku { get; set; }
 
     public int Quantity { get; set; }
@@ -76,17 +77,17 @@ public class Customer
 {
     public int Id { get; set; }
 
-    [Column(Length = 64)]
+    [QuickColumn(Length = 64)]
     public string? Name { get; set; }
 
-    [Column(Length = 32)]
+    [QuickColumn(Length = 32)]
     public string? City { get; set; }
 
     /// <summary>中文要能原样存进去：字符串默认 <c>nvarchar</c> 就是因为 <c>varchar</c> 的下场<b>看排序规则</b> ——
     /// 库的默认排序规则是 <c>SQL_Latin1_General_CP1_CI_AS</c>（代码页 1252）时中文会<b>静默写成 '?'</b>，
     /// 是 <c>Chinese_PRC_CI_AS</c>（936）时一个字节不丢、但每个汉字占 2 字节（§10.4 实测两行）。
     /// 两类实例的这个分叉现在由 <c>CollationTests</c> 断言住，不再是注释里的说法（§13.4）。</summary>
-    [Column(Length = 32)]
+    [QuickColumn(Length = 32)]
     public string? Remark { get; set; }
 }
 
@@ -97,7 +98,7 @@ public class SessionToken
 {
     public Guid Id { get; set; }
 
-    [Column(Length = 64)]
+    [QuickColumn(Length = 64)]
     public string? Value { get; set; }
 
     public DateTime ExpiresAt { get; set; }
@@ -146,14 +147,14 @@ public class InventoryItem
 {
     public int Id { get; set; }
 
-    [Column(Length = 32)]
+    [QuickColumn(Length = 32)]
     public string? Sku { get; set; }
 
     public int Quantity { get; set; }
 
     /// <summary>只比较、不书写：不进 <c>SET</c>、不进 INSERT 的列清单，进 <c>WHERE</c> 与回填集（§8.2）。</summary>
     [ConcurrencyToken]
-    [Column(DbTypes = "rowversion")]
+    [Column(TypeName = "rowversion")]
     public byte[]? RowVersion { get; set; }
 
     /// <summary>第二个并发列，而且是<em>可空</em>的那一档：库里没有任何东西写它，所以它一直是 NULL。
@@ -181,12 +182,12 @@ public class BareReport
 [Table("QuickSqlAuditRow")]
 public class AuditRow
 {
-    [Column(Length = 64)]
+    [QuickColumn(Length = 64)]
     public string? Actor { get; set; }
 
     public DateTime At { get; set; }
 
-    [Column(Length = 128)]
+    [QuickColumn(Length = 128)]
     public string? Detail { get; set; }
 }
 
@@ -202,7 +203,7 @@ public class Project
 {
     public Guid Id { get; set; }
 
-    [Column(Length = 64)]
+    [QuickColumn(Length = 64)]
     public string? Name { get; set; }
 }
 
@@ -217,7 +218,7 @@ public class Milestone
 
     public Guid ProjectId { get; set; }
 
-    [Column(Length = 64)]
+    [QuickColumn(Length = 64)]
     public string? Title { get; set; }
 
     /// <summary>引用导航：约定外键 <c>ProjectId</c> 命中上一行那个 <c>Guid</c> 列 ⇒ 一根 <c>Milestone → Project</c> 的边。</summary>
@@ -272,7 +273,7 @@ public class Ticket : ISoftDelete
 {
     public int Id { get; set; }
 
-    [Column(Length = 64)]
+    [QuickColumn(Length = 64)]
     public string? Title { get; set; }
 
     /// <summary>租户列。过滤器 <c>t =&gt; t.TenantId == Tenant.Current</c> 读的就是它，
@@ -296,7 +297,7 @@ public class LooseNote : ISoftDelete
 {
     public int Id { get; set; }
 
-    [Column(Length = 64)]
+    [QuickColumn(Length = 64)]
     public string? Text { get; set; }
 
     /// <summary>在 CLR 侧是真的实现了接口（所以编译期看不出问题），在库里这一列不存在。</summary>
@@ -315,12 +316,12 @@ public class LooseNote : ISoftDelete
 /// 样本都会跟着变红。</para></summary>
 [Table("QuickSqlShardLog_{year}{month}")]
 [SplitTable(SplitKind.Month, nameof(OccurredAt))]
-[Index("IX_ShardLog_Level", nameof(Level))]
+[Index(nameof(Level))]
 public class ShardLog
 {
     public Guid Id { get; set; }
 
-    [Column(Length = 64)]
+    [QuickColumn(Length = 64)]
     public string? Message { get; set; }
 
     public int Level { get; set; }
@@ -349,7 +350,7 @@ public class TenantRow
     /// <summary>分片键（哈希档）。同一个值在任何进程里都算出同一个桶，那是这条声明唯一要担保的事。</summary>
     public int TenantId { get; set; }
 
-    [Column(Length = 64)]
+    [QuickColumn(Length = 64)]
     public string? Name { get; set; }
 }
 
@@ -367,7 +368,7 @@ public class ReportRow
 {
     public int Id { get; set; }
 
-    [Column(Length = 64)]
+    [QuickColumn(Length = 64)]
     public string? Metric { get; set; }
 
     public decimal Value { get; set; }
@@ -420,6 +421,6 @@ public class ArchiveNote
     /// <summary>分片键（时间档，年）。</summary>
     public DateTime WrittenAt { get; set; }
 
-    [Column(Length = 128)]
+    [QuickColumn(Length = 128)]
     public string? Body { get; set; }
 }

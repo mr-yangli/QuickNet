@@ -23,7 +23,7 @@ namespace QuickSql.Providers.PostgreSqlBase;
 /// <item><c>MultiResultSets</c>：这一族的多结果集只来自"一次发送多条语句"，刚关掉那一条就不好再声明这一条。</item>
 /// <item><c>Guid_Char36</c>：§4 那句"Kingbase 覆写 <c>Guid_Char36 | Boolean_Type</c>"在这一版被改掉，
 /// 理由是这一家有原生 <c>uuid</c>（16 字节二进制，与 <c>Guid_Raw16</c> 同形），而 <c>char(36)</c> 那一档
-/// 是给没有原生类型的库留的退路。逐列想退回文本形态仍然够得到 —— <c>[Column(DbType=…)]</c> 的
+/// 是给没有原生类型的库留的退路。逐列想退回文本形态仍然够得到 —— <c>[Column(TypeName=…)]</c> 的
 /// <c>StoreTypeName</c> 短路就在 <see cref="PostgreSqlTypes.GetStoreType"/> 第一行。论证回写在 §4。</item>
 /// </list>
 /// 每一位的出处都记在 §13.5 那本台账里：本家族的每一位今天都是"厂商文档 + 未实测"。</summary>

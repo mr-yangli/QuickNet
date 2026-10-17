@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations.Schema;
 using Microsoft.CodeAnalysis;
 using QuickSql;
 using QuickSql.Generators;
@@ -42,25 +43,6 @@ public sealed class GeneratorDiagnosticTests
     // ---------- QuickSql001：同层互斥 ----------
 
     [Fact]
-    public void Two_table_attributes_naming_different_tables_red_at_compile_time_with_the_startup_words()
-    {
-        var red = Assert.Single(CompileTimeProbe.Probe(ConflictingTableSource).Errors);
-
-        var thrown = Checks.Raised<MetadataConflictException>(() => Reflected().Contract<ConflictingTable>());
-
-        // 尾巴逐字相同（那才是「两处共用一份判定」的全部内容）。主语那一格两边不同，本版把它钉成事实：
-        // 编译期说「类型 X」，运行期那条 MetadataConflictException 复用「属性」这个主语，因为它的
-        // MemberName 槽位本来就同时收类型名与属性名（Exceptions.cs 上那条 ctor 的两半都在用）。
-        // 改哪一边都是改公开的异常文本，归用户定 —— 所以这里只许它「被点名」，不许它「被读成一致」。
-        Assert.Equal("QuickSql001", red.Id);
-        Assert.Equal("类型 'ConflictingTable'", SubjectOf(red.GetMessage()));
-        Assert.Equal("属性 'ConflictingTable'", SubjectOf(thrown.Message));
-        Assert.Equal("的同一层元数据来源互斥：[Table(\"ConflictingNames\")] vs [Table(\"ConflictingNamesToo\")]。"
-                     + "QuickSql 不自动取更严的那条。", TailOf(red.GetMessage()), StringComparer.Ordinal);
-        Assert.Equal(TailOf(red.GetMessage()), TailOf(thrown.Message), StringComparer.Ordinal);
-    }
-
-    [Fact]
     public void A_conflicting_length_pair_reds_with_the_startup_message_verbatim()
     {
         var red = Assert.Single(CompileTimeProbe.Probe(ConflictingLengthsSource).Errors);
@@ -70,17 +52,6 @@ public sealed class GeneratorDiagnosticTests
         // 这一条两侧连主语都是同一份（属性 'Code'），所以它是「逐字」那两个字的正证。
         Assert.Equal("QuickSql001", red.Id);
         Assert.Equal(thrown.Message, red.GetMessage());
-    }
-
-    [Fact]
-    public void Two_table_attributes_naming_the_same_table_are_not_a_conflict_on_either_side()
-    {
-        var run = CompileTimeProbe.Probe(TwoNamesSameTableSource);
-
-        Assert.Empty(run.Diagnostics.Where(static d => d.Id == "QuickSql001"));
-
-        // 反射侧同判据：只有名字不同才抛，所以这里必须建得出契约，且表名是那一条说了算的自研注解值。
-        Assert.Equal("SameTableName", Reflected().Contract<TwoNamesSameTable>().Table.Name);
     }
 
     // ---------- QuickSql002 / QuickSql004：成员名换不成列 ----------
@@ -151,9 +122,7 @@ public sealed class GeneratorDiagnosticTests
     }
 
     [Theory]
-    [InlineData(ConflictingTableSource)]
     [InlineData(ConflictingLengthsSource)]
-    [InlineData(TwoNamesSameTableSource)]
     [InlineData(IndexOnUnmappedMemberSource)]
     [InlineData(BadForeignKeySource)]
     [InlineData(DerivedEntitySource)]
@@ -169,30 +138,10 @@ public sealed class GeneratorDiagnosticTests
     // 量具本体在 CompileTimeProbe（与 XmlDocCommentTests 共用一份 TPA 引用装配）。
 
 
-    /// <summary>消息里「的」之前那一段（「类型 'X'」/「属性 'Code'」），也就是主语槽位。
-    /// 两侧的字面量在「的」前都留了一个半角空格，所以这里 TrimEnd 掉它——不裁就量不出槽位里那个名字，
-    /// 而「主语不同」这一条要的正是只比槽位。</summary>
-    static string SubjectOf(string message) => message[..message.IndexOf('的')].TrimEnd();
-
-    /// <summary>从「的」往下的后半（连着那个「的」）：那才是两侧共用的模板本体。</summary>
-    static string TailOf(string message) => message[message.IndexOf('的')..];
-
-
-    // ---------- 七份源文本：与运行期那七个真类型一一对应 ----------
+    // ---------- 五份源文本：与运行期那五个真类型一一对应 ----------
     //
     // 类名必须与真类型相同（消息里带名字，「两侧字符串相等」靠这个成立），所以全部放进
     // CompileTimeSamples 命名空间 —— 简单名相同而全名不同，不会与本项目那几个真类型撞。
-
-
-
-    const string ConflictingTableSource = CompileTimeProbe.Header + """
-        [Table("ConflictingNames")]
-        [DaSchema.Table("ConflictingNamesToo")]
-        public class ConflictingTable
-        {
-            public int Id { get; set; }
-        }
-        """;
 
     const string ConflictingLengthsSource = CompileTimeProbe.Header + """
         [Table("ConflictingLengths")]
@@ -206,18 +155,9 @@ public sealed class GeneratorDiagnosticTests
         }
         """;
 
-    const string TwoNamesSameTableSource = CompileTimeProbe.Header + """
-        [Table("SameTableName")]
-        [DaSchema.Table("SameTableName")]
-        public class TwoNamesSameTable
-        {
-            public int Id { get; set; }
-        }
-        """;
-
     const string IndexOnUnmappedMemberSource = CompileTimeProbe.Header + """
         [Table("QuickSqlUnmappedIndex")]
-        [Index("IX_QuickSqlUnmappedIndex_Nobody", "Nobody")]
+        [Index("Nobody")]
         public class IndexOnUnmappedMember
         {
             public int Id { get; set; }
@@ -263,21 +203,14 @@ public sealed class GeneratorDiagnosticTests
 
 // ---------- 本文件要用的两个真类型 ----------
 //
-// 另外三个（ConflictingTable / ConflictingLengths / BadFk）已经在 MetadataEquivalenceTests 与
+// 另外两个（ConflictingLengths / BadFk）已经在 MetadataEquivalenceTests 与
 // RelationshipTests 里，这里不重复声明：那两个文件欠的那句「编译期负样本没有断言口」今天有了断言口，
 // 而它们的类型仍是运行期那一半的唯一现场。下面两个是新形状，此前没有任何用例钉过。
-
-[Table("SameTableName")]
-[DaSchema.Table("SameTableName")]
-public class TwoNamesSameTable
-{
-    public int Id { get; set; }
-}
 
 /// <summary>索引点了一个换不成列的成员。<b>这一条此前只有编译期会红、运行期没人跑过</b>：
 /// §14 那一格点名的 <c>QuickSql002</c> 在运行期那一半一直是空的，本版顺手补上。</summary>
 [Table("QuickSqlUnmappedIndex")]
-[Index("IX_QuickSqlUnmappedIndex_Nobody", "Nobody")]
+[Index("Nobody")]
 public class IndexOnUnmappedMember
 {
     public int Id { get; set; }

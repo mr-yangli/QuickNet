@@ -97,7 +97,7 @@ public sealed class PostgreSqlTypes : ITypeMap
             var t when t == typeof(TimeOnly) || t == typeof(TimeSpan) => "TIME(3)",
             var t when t == typeof(Guid) => "UUID",
             var t when t == typeof(char) => "CHAR(1)",
-            _ => throw new QuickSqlException($"PG 系（金仓/openGauss/瀚高）未登记 CLR 类型 {clrType.Name} 的存储类型，请显式给 [Column(DbType=...)]"),
+            _ => throw new QuickSqlException($"PG 系（金仓/openGauss/瀚高）未登记 CLR 类型 {clrType.Name} 的存储类型，请显式给 [Column(TypeName=...)]"),
         };
     }
 

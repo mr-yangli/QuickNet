@@ -200,7 +200,7 @@ public sealed class SqliteTypes : ITypeMap
 
     /// <summary>CLR 型 → 声明字形；人已点名的那一格原样 echo（§4 那句"provider 不翻译人写的话"，七家同规）。
     /// <b>本族这一格多一句诚实的话</b>：echo 出去的那串字在这一家<em>不改变存储</em>，只改变 affinity
-    /// 配方与被点名时的那次比对 —— 也就是说 <c>[Column(DbType="DECIMAL(18,4)")]</c> 在这里能得到
+    /// 配方与被点名时的那次比对 —— 也就是说 <c>[Column(TypeName="DECIMAL(18,4)")]</c> 在这里能得到
     /// "目录回显这一串"而得不到"定点存储"，这是七家里只有本家成立的一格（缺口与 §10.4 那一段并排）。
     /// 与 <c>IsIdentity</c> 无关，理由与六家同一条（共用层先定型后判自增，<c>Gbase8sTypes</c> 第三条
     /// 记的那次改判在本家逐字成立），而本家的自增换的是键的写法，见 <see cref="SqliteCodeFirst"/>。</summary>
@@ -271,7 +271,7 @@ public sealed class SqliteTypes : ITypeMap
             // 的 CLR 型即使建成 TEXT 也会在发射时炸，那句要写在拒绝点而不是写在库里。
             _ => throw new QuickSqlException($"SQLite 未登记 CLR 类型 {clrType.Name} 的存储类型：这一族没有"
                 + "「库里不存在这一型」那种缺（声明任何字形都会被接受），所以缺的是本仓库的绑定臂。"
-                + "请显式给 [Column(DbType=...)]，并注意声明名在这家决定的是 affinity 而不是存储。"),
+                + "请显式给 [Column(TypeName=...)]，并注意声明名在这家决定的是 affinity 而不是存储。"),
         };
     }
 

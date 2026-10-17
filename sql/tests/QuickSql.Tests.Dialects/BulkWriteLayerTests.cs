@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations.Schema;
 using QuickSql.Aop;
 using QuickSql.Metadata;
 using QuickSql.Providers;
@@ -1177,10 +1178,10 @@ public sealed class BulkLedger
     public int Book { get; set; }
 
     [Da.Key]
-    [Column(Length = 16)]
+    [QuickColumn(Length = 16)]
     public string? Line { get; set; }
 
-    [Column(Length = 32)]
+    [QuickColumn(Length = 32)]
     public string? Memo { get; set; }
 }
 
@@ -1191,9 +1192,9 @@ public sealed class BulkLedger
 public sealed class BulkToken
 {
     [Da.Key]
-    [Column(Length = 32)]
+    [QuickColumn(Length = 32)]
     public string? Token { get; set; }
 
-    [Column(Length = 32)]
+    [QuickColumn(Length = 32)]
     public string? Note { get; set; }
 }

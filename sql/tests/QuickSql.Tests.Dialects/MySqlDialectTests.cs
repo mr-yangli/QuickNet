@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations.Schema;
 using System.Data.Common;
 using System.Text;
 using QuickSql.Metadata;
@@ -714,7 +715,7 @@ public sealed class MySqlDialectTests
         Checks.Has("DateTimeOffset", failure.Message);
         Checks.Has("降级", failure.Message);
 
-        // 未登记的 CLR 型同样抛，而它点名的正是那一条退路（显式给 [Column(DbType=…)]）—— 与上面那颗
+        // 未登记的 CLR 型同样抛，而它点名的正是那一条退路（显式给 [Column(TypeName=…)]）—— 与上面那颗
         // 只是消息里少了"没有那一型"的说法，所以两句各判一次：抛出这一行为本身要钉住两次。
         var unregistered = amount with { ClrType = typeof(Uri), StoreTypeName = null };
 
