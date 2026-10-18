@@ -17,7 +17,7 @@
   <!-- NuGet 打包元数据里本子树独有的那三颗。版本口径与 sql/ 那一份不同：v0.39 是 QuickSql 规格册的账，
        本库没有在册的版本序列，所以从 0.1.0-beta.1 起（预发布档，不进消费方默认解析）。 -->
   <PropertyGroup>
-    <Version>0.1.0-beta.5</Version>
+    <Version>0.1.0-beta.6</Version>
     <PackageReadmeFile>quickexcel-usage.md</PackageReadmeFile>
     <PackageTags>excel;xlsx;spreadsheet;import;export</PackageTags>
   </PropertyGroup>

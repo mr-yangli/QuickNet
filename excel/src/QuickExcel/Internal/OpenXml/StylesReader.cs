@@ -28,14 +28,18 @@ internal sealed class StylesReader
     public bool IsDateTimeStyle(int styleIndex) =>
         styleIndex >= 0 && styleIndex < _isDateTime.Length && _isDateTime[styleIndex];
 
+    /// <summary>进这条门的流归本方法管（v0.2 第二笔 ∶ A7 流泄漏）：调用方交的是 <c>st.Open()</c> 裸流，
+    /// 而 reading 那边只剩本句唯一消费点——过去既不挂 using 也不带 CloseInput，每读一份工作簿
+    /// 就漏一条 DeflateStream 等 GC 收尸。现在 Parse 抬头就接住收尾，空表早退那一支也一并归还。</summary>
     public static StylesReader Parse(Stream stylesPart)
     {
-        if (stylesPart is MemoryStream ms && ms.Length == 0) return Empty;
+        using var owned = stylesPart;
+        if (owned is MemoryStream ms && ms.Length == 0) return Empty;
         var customFmtCodes = new Dictionary<int, string>();
         var xfIds = new List<int>();
         bool inCellXfs = false;
 
-        using var xml = XmlReader.Create(stylesPart, Settings);
+        using var xml = XmlReader.Create(owned, Settings);
         while (xml.Read())
         {
             if (xml.NodeType != XmlNodeType.Element)
@@ -105,6 +109,6 @@ internal sealed class StylesReader
         IgnoreComments = true,
         IgnoreWhitespace = true,
         DtdProcessing = DtdProcessing.Prohibit,
-        CloseInput = false
+        CloseInput = false // 收尾归 Parse 抬头那句 using（A7 ∶ v0.2 第二笔），空表早退那支同一颗闸门
     };
 }
