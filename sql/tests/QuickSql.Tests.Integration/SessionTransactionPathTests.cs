@@ -286,4 +286,76 @@ public sealed class SessionTransactionPathTests
 
         Assert.Equal(0, StoredRows(board));
     }
+
+    // ── 嵌套 DbContext 与会话工厂的主从（v0.39 第二笔） ─────────────────
+
+    /// <summary>嵌套里层的 <c>Dispose</c> 不能顺带收走外层那一份。
+    /// 工厂槽位是「先到当主人」：外层先 <c>Set&lt;T&gt;()</c> 占了槽，里层后来只是搭着用；
+    /// 里层先走时只能收自己账本上的连接，槽与工厂还是外层的，外层之后的写照常落会话复用。
+    /// 修之前这一格的形状是：谁后注册就顶掉谁、谁先 Dispose 就把整条流的工厂清空——
+    /// 外层在里层走了之后每一句悄悄退回"每句取还池"，行为字段里字面看不出来。
+    /// (读数钉的行为面：两只各自 SaveChanges，各自的事务各自提交，裁判用裸 ADO 计数。)</summary>
+    [Fact]
+    public async Task An_inner_session_leaving_first_leaves_the_outer_factory_alone()
+    {
+        var orm = await NewStoreAsync();
+        var outerBoard = NewBoard();
+        var innerBoard = NewBoard();
+
+        await using (var outer = new DbContext(orm))
+        {
+            _ = outer.Set<SessionRow>();
+
+            await using (var inner = new DbContext(orm))
+            {
+                _ = inner.Set<SessionRow>();
+
+                inner.Add(new SessionRow { Id = Guid.NewGuid(), Board = innerBoard, Label = "里" });
+                await inner.SaveChangesAsync(ct);
+            }
+
+            // 里层已经先走了：槽、工厂、外层自己账本上的连接原封不动，这一句照常走会话复用。
+            outer.Add(new SessionRow { Id = Guid.NewGuid(), Board = outerBoard, Label = "外" });
+            await outer.SaveChangesAsync(ct);
+        }
+
+        Assert.Equal(1, StoredRows(innerBoard));
+        Assert.Equal(1, StoredRows(outerBoard));
+
+        ClearBoard(innerBoard);
+        ClearBoard(outerBoard);
+    }
+
+    /// <summary>反序的那一面：里层先到、当了主人——它走时连自己账本上的连接一起收走（那是它的账），
+    /// 外层后建时恰好槽已空出来，会重新装上自己的工厂，不因里层的离开而瘫。
+    /// 修之前的外层第一格 <c>Set&lt;T&gt;()</c> 在里层先行时会把外层的工厂顶掉，两条流各算各的账。</summary>
+    [Fact]
+    public async Task An_inner_session_that_arrived_first_leaves_the_slot_free_for_the_outer()
+    {
+        var orm = await NewStoreAsync();
+        var outerBoard = NewBoard();
+        var innerBoard = NewBoard();
+
+        await using (var inner = new DbContext(orm))
+        {
+            _ = inner.Set<SessionRow>();
+
+            inner.Add(new SessionRow { Id = Guid.NewGuid(), Board = innerBoard, Label = "先" });
+            await inner.SaveChangesAsync(ct);
+        }
+
+        await using (var outer = new DbContext(orm))
+        {
+            _ = outer.Set<SessionRow>();
+
+            outer.Add(new SessionRow { Id = Guid.NewGuid(), Board = outerBoard, Label = "后" });
+            await outer.SaveChangesAsync(ct);
+        }
+
+        Assert.Equal(1, StoredRows(innerBoard));
+        Assert.Equal(1, StoredRows(outerBoard));
+
+        ClearBoard(innerBoard);
+        ClearBoard(outerBoard);
+    }
 }

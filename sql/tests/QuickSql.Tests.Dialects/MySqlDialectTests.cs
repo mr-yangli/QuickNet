@@ -585,6 +585,28 @@ public sealed class MySqlDialectTests
         Checks.Absent("COMMENT", bare);
     }
 
+    /// <summary>注释字面量里的 <b>反斜杠</b>（v0.39 第二笔）。这一家缺省把 <c>\</c> 当转义符，而注释是
+    /// 契约文本直接排版进字面量执行的两处发射点（表注与列注）—— 原 <c>AppendStringLiteral</c> 只翻倍单引号，
+    /// <c>C:\temp</c> 会静默换形，而<b>尾随反斜杠</b>把闭合引号转义掉，字符串无处闭合，ALTER 当场语法错。
+    /// 所以这一族的两处发射点带 <c>backslashIsEscape</c> 档：<c>'</c> 与 <c>\</c> 各自翻倍
+    /// （引号翻倍两种 sql_mode 下都写法都合法）。另四家不管这一档——它们没有反斜杠转义这一说。</summary>
+    [Fact]
+    public void Comment_literals_escape_the_backslash_because_contract_text_lands_inlined()
+    {
+        var contract = orm().Schemas.Contract<Order>();
+        var name = contract.Columns.Single(c => c.MemberName == nameof(Order.CustomerName));
+
+        // 尾随反斜杠是这次的问题点：不翻倍时它转义掉闭合引号，一句 ALTER 语法错。
+        var column = Statement(w => Assert.True(Provider.CodeFirst.TryEmitColumnComment(
+            w, contract.Table, name with { Comment = @"C:\temp\尾\" })));
+        var table = Statement(w => Assert.True(Provider.CodeFirst.TryEmitTableComment(
+            w, contract.Table, @"C:\path \'_mix'")));
+
+        // \ → \\ ，' → '' ，双双翻倍后字符串在原文尽头闭合，注释逐字读得回去。
+        Checks.Has(@"MODIFY COLUMN `CustomerName` VARCHAR(64) NULL COMMENT 'C:\\temp\\尾\\'", column);
+        Checks.Has(@"ALTER TABLE `QuickSqlOrder` COMMENT = 'C:\\path \\''_mix'''", table);
+    }
+
     [Fact]
     public void A_full_text_index_is_emitted_because_it_is_native_here_and_the_parser_is_the_open_half()
     {

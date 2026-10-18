@@ -89,8 +89,16 @@ public ref struct SqlWriter
     }
 
     /// <summary>字面量字符串。SQL Server 在 cp1252 排序规则下会把非 ASCII 静默变成 <c>?</c>，
-    /// 所以 <paramref name="unicode"/> 必须由 <see cref="Metadata.ColumnContract.Unicode" /> 决定，不能默认 false。</summary>
-    public SqlWriter AppendStringLiteral(string value, bool unicode)
+    /// 所以 <paramref name="unicode"/> 必须由 <see cref="Metadata.ColumnContract.Unicode" /> 决定，不能默认 false。
+    ///
+    /// <para><paramref name="backslashIsEscape"/> 是 MySQL 那一族的发射档（v0.39 第二笔）：缺省 sql_mode 下
+    /// <c>\</c> 在字符串里是转义符，注释原文里一颗 <c>C:\path</c> 会静默换形，而收尾那颗<b>尾随反斜杠</b>
+    /// 更把闭合引号转义掉——字符串无处闭合，ALTER 当场语法错（数据值不走这一条：全在参数里，
+    /// 这一档只发生在 DDL 注释那种"契约文本直接排版进文本"的发射点，本仓只有 MySQL 血统的
+    /// 表/列两处）。所以带这一档的发射点把 <c>\</c> 翻倍成 <c>\\</c>（<c>'</c> 的翻倍照旧——
+    /// 引号翻倍两种 sql_mode 下都合法）。代价如实记：会话若显式开了 <c>NO_BACKSLASH_ESCAPES</c>，
+    /// <c>\\</c> 读回来是两颗反斜杠——显示差一颗与"ALTER 炸掉"之间取前者。</para></summary>
+    public SqlWriter AppendStringLiteral(string value, bool unicode, bool backslashIsEscape = false)
     {
         if (unicode)
             _builder.Append('N');
@@ -98,13 +106,16 @@ public ref struct SqlWriter
         _builder.Append('\'');
 
         var start = 0;
+
         for (var i = 0; i < value.Length; i++)
         {
-            if (value[i] != '\'')
+            var current = value[i];
+
+            if (current != '\'' && !(backslashIsEscape && current == '\\'))
                 continue;
 
-            _builder.Append(value, start, i - start + 1);
-            _builder.Append('\'');
+            _builder.Append(value, start, i - start);
+            _builder.Append(current).Append(current);
             start = i + 1;
         }
 

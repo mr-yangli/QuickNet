@@ -481,6 +481,8 @@ public sealed class WritePathTests
 
         Assert.False(failed.Success);
         Assert.Contains("业务判定不通过", failed.ErrorMessage, StringComparison.Ordinal);
+        // v0.39 第二笔旁路：业务异常是唯一一篇原文，回滚顺利时旁路空着。
+        Assert.Null(failed.RollbackFailure);
 
         // Success=false 必须由库里真的没有这一行来背书：只看结果对象的话，"回滚失败但报告失败"也能绿。
         Assert.Equal(0, storedOrders(name));

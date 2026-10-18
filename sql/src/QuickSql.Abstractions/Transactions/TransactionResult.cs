@@ -16,16 +16,23 @@ public record TransactionResult
     /// <summary>失败时的事务内首个异常。<b>已经吞掉了，不再向上抛</b>——形态 (2) 的承诺就是"不抛异常"。</summary>
     public Exception? Exception { get; init; }
 
+    /// <summary><b>回滚那一步自己的失败原文（v0.39 第二笔）</b>；成功路径与回滚顺利时为 null。
+    /// 这一条业务异常与回滚失败不是同一场事故的两面，各有各的原文；此前回滚失败会从
+    /// <c>finally</c> 里冒出来把业务异常<b>整个换掉</b>，现场只见"回滚失败"，真正的回滚原因
+    /// （锁冲突/约束）无迹可寻。现在业务异常永远走 <see cref="Exception"/>，回滚失败走这一条，
+    /// 两条都在时两个都看得到。</summary>
+    public Exception? RollbackFailure { get; init; }
+
     internal static TransactionResult Ok() => new() { Success = true };
 
-    internal static TransactionResult Failed(Exception exception)
-        => new() { Success = false, ErrorMessage = Text(exception), Exception = exception };
+    internal static TransactionResult Failed(Exception exception, Exception? rollbackFailure = null)
+        => new() { Success = false, ErrorMessage = Text(exception), Exception = exception, RollbackFailure = rollbackFailure };
 
     internal static TransactionResult<T> Ok<T>(T value)
         => new() { Success = true, Value = value };
 
-    internal static TransactionResult<T> Failed<T>(Exception exception)
-        => new() { Success = false, Value = default, ErrorMessage = Text(exception), Exception = exception };
+    internal static TransactionResult<T> Failed<T>(Exception exception, Exception? rollbackFailure = null)
+        => new() { Success = false, Value = default, ErrorMessage = Text(exception), Exception = exception, RollbackFailure = rollbackFailure };
 
     /// <summary>取最内层消息：<c>DbException</c> 常被 <c>TargetInvocationException</c> 一类壳包着，
     /// 只报外层就等于没报。</summary>

@@ -144,12 +144,14 @@ public class MySqlCodeFirst(MySqlTypes types) : ICodeFirstDialect
     }
 
     /// <summary>表注释那一句（类注释第六条）：一句表选项，不吃 <c>Definition</c>，因为这一句不碰任何一列。
-    /// 与列侧同一条 <c>unicode: false</c> 的取法（这一家没有 <c>N'…'</c> 前缀，字符集在建表那一串上已经定了）。</summary>
+    /// 与列侧同一条 <c>unicode: false</c> 的取法（这一家没有 <c>N'…'</c> 前缀，字符集在建表那一串上已经定了）。
+    /// 反斜杠那一档必须带着（v0.39 第二笔，见 <see cref="SqlWriter.AppendStringLiteral"/>）：
+    /// 注释是契约文本直接排版进字面量的发射点，而这一家缺省把 <c>\</c> 当转义符。</summary>
     public bool TryEmitTableComment(SqlWriter writer, TableInfo table, string? comment)
     {
         writer.Append("ALTER TABLE ");
         EmitTable(writer, table);
-        writer.Append(" COMMENT = ").AppendStringLiteral(comment ?? string.Empty, unicode: false);
+        writer.Append(" COMMENT = ").AppendStringLiteral(comment ?? string.Empty, unicode: false, backslashIsEscape: true);
 
         return true;
     }
@@ -231,8 +233,10 @@ public class MySqlCodeFirst(MySqlTypes types) : ICodeFirstDialect
 
         // 注释跟着定义走而不是跟着一句独立语句走（类注释第四条）。只有契约真写了才发：
         // 契约没写而库里有一处注释时，改精度那一句会把那一处注释抹掉 —— 这一档已知，记 §14。
+        // 反斜杠那一档必须带着（v0.39 第二笔，见 SqlWriter.AppendStringLiteral 的注释）：
+        // 注释与表注释是这一族仅有的两处"契约文本直接排版进字面量"的执行路径。
         if (includeComment && column.Comment is { Length: > 0 } comment)
-            writer.Append(" COMMENT ").AppendStringLiteral(comment, unicode: false);
+            writer.Append(" COMMENT ").AppendStringLiteral(comment, unicode: false, backslashIsEscape: true);
     }
 
     /// <summary>模式为空就不写限定（见类注释第一条）：这一家裸名说的是"当前连接所选的数据库"，

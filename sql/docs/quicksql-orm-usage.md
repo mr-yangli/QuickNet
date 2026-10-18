@@ -440,7 +440,8 @@ await orm.Insert(row).ExecuteAffrowsAsync();
 pinned.Commit();
 
 var result = await orm.ExecuteInTransactionAsync(async ct => { ... }); // (2) 返回 TransactionResult；:422
-if (!result.Success) Log(result.Exception);         // TransactionResult { Success, ErrorMessage, Exception }
+if (!result.Success) Log(result.Exception);         // TransactionResult { Success, ErrorMessage, Exception, RollbackFailure }
+                                                    // 业务原文永远在 Exception；回滚那一步自己的失败（锁冲突/连接断）住 RollbackFailure 旁路，两条都在时两个都看得到
 ```
 
 泛型重载 `ExecuteInTransactionAsync<T>(...)` 返回 `TransactionResult<T>`（多一颗 `Value`）。`DbContext` 会加入环境事务（会话里的语句走的正是那条被事务独占的连接，`AdoExecutor.cs` 的 `RentAsync` 那一支）。
@@ -494,7 +495,7 @@ if (!result.Success) Log(result.Exception);         // TransactionResult { Succe
   o.Note = "改一下";
   await db.SaveChangesAsync();
   ```
-- **事务** —— `orm.BeginTransaction()` 显式、`orm.ExecuteInTransactionAsync(async ct => {…})` 包一段、`orm.BeginAmbientTransaction()` 环境事务（`DbContext` 会并入）、`orm.BeginSessionTransaction()` 把事务钉在这只 orm 上（装配层隔着一层 async 开事务、语句却由调用方那一帧发时用的就是这颗；→ §2.6）。事务钉在一座集群上，跨集群嵌套当场拒。→ 详见 §2.6、§3.7
+- **事务** —— `orm.BeginTransaction()` 显式、`orm.ExecuteInTransactionAsync(async ct => {…})` 包一段、`orm.BeginAmbientTransaction()` 环境事务（`DbContext` 会并入）、`orm.BeginSessionTransaction()` 把事务钉在这只 orm 上（装配层隔着一层 async 开事务、语句却由调用方那一帧发时用的就是这颗；→ §2.6）。事务钉在一座集群上，跨集群嵌套当场拒。→ 详见 §2.6、§3.7。**收口两条（v0.39）** ∶ 形态 (2) 的回滚失败不再盖掉业务异常原文（`RollbackFailure` 承旁路）；同一只 orm 上嵌套的 `DbContext` 共享一条流的会话连接工厂——先到当主人、后到不动字，里层先 `Dispose` 拆不了外层的槽与连接
 - **分表 / 读写分离 / 换库** —— 分表 `[SplitTable]` 注解 + 链式 `.SplitTable(片)`（§3.6）；读写分离在 `QuickSqlOrmOptions.Replicas`∶`Clusters` 声明、运行期按主从路由（§3.7）；换库只动 csproj 那颗 provider ∶ 一处 `DbKind` ∶ 连接串，实体与链一字不动（§1.9，踩坑见 §4.4）。
 
 ### 3.0 最小可离线跑通的例子

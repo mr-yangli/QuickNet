@@ -518,6 +518,8 @@ public sealed class UpdateDeletePathTests
 
         Assert.False(failed.Success);
         Assert.Contains("业务判定不通过", failed.ErrorMessage, StringComparison.Ordinal);
+        // v0.39 第二笔旁路：回滚失败记在 RollbackFailure 一旁，不盖业务原文。
+        Assert.Null(failed.RollbackFailure);
 
         // 删除的回滚是这条链上最难假扮成绿的一条：插入回滚只是"少一行"，删除回滚要求那一行连内容一起回来。
         var restored = Row(id);

@@ -418,7 +418,11 @@ public sealed class QuickSqlOrm
 
     /// <summary>形态 (2)：不抛异常、返回结果对象（对齐 SqlSugar 的 <c>UseTran</c>）。
     /// <b>回滚失败不在这里吞</b>：<c>Dispose</c> 兜底回滚，那一步炸了就让它抛出去 ——
-    /// "事务已回滚"这个结论必须由事务自己证明，不能由一个 <c>Success = false</c> 代替。</summary>
+    /// "事务已回滚"这个结论必须由事务自己证明，不能由一个 <c>Success = false</c> 代替。
+    /// <para><b>v0.39 第二笔对"炸了就抛"加了一条边界</b>：业务异常在先、回滚失败在后时，
+    /// 抛出去的必须是<em>原先那一句</em>——回滚失败（锁冲突/连接断了）从旁路记进
+    /// <see cref="TransactionResult.RollbackFailure"/>，不再从收口冒出来把业务异常整个换掉。
+    /// 业务原因在先的那场事故才是调用方要分支的那一场；收口失败两条都在时两个都看得到。</para></summary>
     public async Task<TransactionResult> ExecuteInTransactionAsync(
         Func<CancellationToken, Task> body,
         CancellationToken ct = default,
@@ -435,7 +439,9 @@ public sealed class QuickSqlOrm
         }
         catch (Exception exception)
         {
-            return TransactionResult.Failed(exception);
+            // 兜底回滚在这里完成（不留给 finally）：失败记进旁路而不是从收口冒出来盖掉业务异常。
+            // RollbackQuiet 只住具体类上（接口是公开面）；BeginTransaction 造的恒是具体类本尊。
+            return TransactionResult.Failed(exception, ((QuickSqlTransaction) tran).RollbackQuiet());
         }
         finally
         {
@@ -459,7 +465,8 @@ public sealed class QuickSqlOrm
         }
         catch (Exception exception)
         {
-            return TransactionResult.Failed<T>(exception);
+            // 同上：回滚失败走旁路，业务异常保住。
+            return TransactionResult.Failed<T>(exception, ((QuickSqlTransaction) tran).RollbackQuiet());
         }
         finally
         {

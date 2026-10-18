@@ -197,23 +197,45 @@ public class DbContext(QuickSqlOrm orm) : IAsyncDisposable, IDisposable
             return await _tracker.FlushDueAsync(ct).ConfigureAwait(false);
 
         using var tran = Orm.BeginTransaction(cluster ?? DataSourceRouting.DefaultCluster);
-        var report = await _tracker.FlushDueAsync(ct).ConfigureAwait(false);
-        tran.Commit();
 
-        return report;
+        try
+        {
+            var report = await _tracker.FlushDueAsync(ct).ConfigureAwait(false);
+            tran.Commit();
+
+            return report;
+        }
+        catch
+        {
+            // 兜底回滚在 catch 里就位（v0.39 第二笔）：<c>using</c> 收口处的 <see cref="Rollback"/>
+            // 可能抛（锁冲突、连接断了），从那里冒出来会把这个 SQL 异常<b>整个换掉</b>——现场只见
+            // "回滚失败"，查不到为什么进过这里。所以回滚走静默口（失败丢弃），原始异常照原样
+            // 向外（裸 <c>throw;</c> 连堆栈都保真）：收口失败永远排在业务异常之后。
+            // <c>RollbackQuiet</c> 只住具体类上（接口是公开面，上不去内部方法）；
+            // BeginTransaction 造的恒是 <see cref="QuickSqlTransaction"/> 本尊。
+            ((QuickSqlTransaction) tran).RollbackQuiet();
+
+            throw;
+        }
     }
 
     // ── 会话级连接复用（§8.4） ───────────────────────────────────────
 
     /// <summary>注册连接工厂——只挂一只 delegate，不建连接。连接在首条语句执行时由
-    /// <c>AdoExecutor.OpenAsync</c> 按 (集群, 角色) 调工厂懒建，之后同一会话用到那一格的语句都复用它。</summary>
+    /// <c>AdoExecutor.OpenAsync</c> 按 (集群, 角色) 调工厂懒建，之后同一会话用到那一格的语句都复用它。
+    ///
+    /// <para><b>嵌套即共享（v0.39 第二笔）</b>：槽位已被同一条流上的另一只 DbContext 占着时，这里当场不动字
+    /// ——先到的那只是主人，之后的连接全经主人的工厂落到主人的账本上。没有这一格的两种翻车：</para>
+    /// <list type="number">
+    /// <item>里层先 <c>Set&lt;T&gt;()</c> 就把外层的工厂顶掉，之后外层新建的连接记到<em>里层</em>的账本上，
+    /// 里层先释放时把外层还在用的连接一起收走；</item>
+    /// <item>谁后释放谁清槽，里层先 <c>Dispose</c> 就把整条流的工厂清空——外层之后每一句悄悄退回
+    /// "每句取还池"，会话复用与写后读（<see cref="FlowWroteCluster"/> 那半边）"<em>无声</em>"失效。</item>
+    /// </list>
+    /// <para>两条都对照 <see cref="AdoExecutor.InstallFlowWrites"/>——那里的 <c>ownsSlot</c> 记账
+    /// 早就把同一形状修过一次，工厂这一格照抄同一套。</para></summary>
     internal void EnsureSessionFactory()
-    {
-        if (_sessionConnections.Count > 0)
-            return;
-
-        AdoExecutor.SetSessionFactory(CreateSessionConnection);
-    }
+        => AdoExecutor.InstallSessionFactory(this, CreateSessionConnection);
 
     /// <summary>连接工厂本体：<c>AdoExecutor.RentAsync</c> 在某一格第一次要用连接时调它。
     /// 创建、打开、绑定，一步到位。同一格（同一座集群的同一个角色）之后的语句走已绑定的那一条，不再调工厂。
@@ -240,6 +262,10 @@ public class DbContext(QuickSqlOrm orm) : IAsyncDisposable, IDisposable
 
     /// <summary>归还会话连接——AsyncLocal 的格子先同步注销，再逐条关连接还池。
     ///
+    /// <para><b>工厂槽位只有主人能清</b>（v0.39 第二笔）：嵌套时先到的是主人，后到的在 <c>Dispose</c> 里
+    /// 不动工厂——里层先结束不能把外层还在用的工厂与连接一起带走。各自关的只是<b>自己账本上</b>那些连接：
+    /// 嵌套期间经主人工厂新建的连接记主人的账，随主人收尾。</para>
+    ///
     /// <para><b>这个方法本身不能是 <c>async</c></b>，而这不是排版顺序：<c>AsyncLocal</c> 的值只有<b>同步被调方</b>
     /// 写得回调用方的帧，一个 <c>async</c> 方法里哪怕在第一个 <c>await</c> 之前赋值，那份写也只活在它自己的副本上
     /// （同一条规则写在 <see cref="QuickSqlTransaction"/> 的 remarks 与 <c>AdoExecutor._flowWrites</c> 的注释里）。
@@ -250,7 +276,7 @@ public class DbContext(QuickSqlOrm orm) : IAsyncDisposable, IDisposable
     /// <para>同步 <c>Dispose</c> 走的是同一颗注销，只是连接关闭也同步。</para></summary>
     public ValueTask DisposeAsync()
     {
-        AdoExecutor.ClearSessionFactory();
+        AdoExecutor.ClearSessionFactory(this);
         _flowWrites.Dispose();
 
         return CloseSessionConnectionsAsync();
@@ -272,7 +298,7 @@ public class DbContext(QuickSqlOrm orm) : IAsyncDisposable, IDisposable
     /// <summary>同步壳，给不用 <c>await using</c> 的调用方。DI 容器的 scoped 释放通常走 <c>DisposeAsync</c>。</summary>
     public void Dispose()
     {
-        AdoExecutor.ClearSessionFactory();
+        AdoExecutor.ClearSessionFactory(this);
 
         foreach (var connection in _sessionConnections)
         {

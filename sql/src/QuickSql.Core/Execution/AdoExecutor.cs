@@ -39,15 +39,33 @@ public sealed partial class AdoExecutor
     // 记过同一条规则），所以这里靠"引用不变、内容在长"的那个对象把两侧粘住。
 
     static readonly AsyncLocal<SessionConnections?> _sessionConnections = new();
-    static readonly AsyncLocal<Func<string, ConnectionRole, DbConnection>?> _sessionConnectionFactory = new();
+
+    /// <summary>会话工厂槽位。<b>槽里存的是 (工厂, 主人) 而不是裸 delegate</b>（v0.39 第二笔）：
+    /// 嵌套是常态而不是意外——里外两只 DbContext 同一条流上各有一只，先Set 的那只成为主人，
+    /// 后到的只在位不改字。没有这一格的结局是：里层先 <c>Set&lt;T&gt;()</c> 时挡住外层的工厂
+    /// （或反过来），里层先 <c>Dispose</c> 时把整条流的工厂清掉——外层之后每一句悄悄退回
+    /// "每句取还池"，会话复用与写后读的保证无声失效。对照 <see cref="InstallFlowWrites"/> 同一块
+    /// 已经用 owner 记账修过的形状：嵌套即共享，主人拆除，非主人不得清除。</summary>
+    static readonly AsyncLocal<SessionFactorySlot?> _sessionFactory = new();
 
     /// <summary>"同一条流上这座集群写过"的戳子。写它的必须是同步帧（<see cref="InstallFlowWrites"/>），
     /// 异步的写语句只<em>改</em>那个对象、不<em>换</em>槽位。</summary>
     static readonly AsyncLocal<FlowWrites?> _flowWrites = new();
 
-    internal static void SetSessionFactory(Func<string, ConnectionRole, DbConnection> factory) => _sessionConnectionFactory.Value = factory;
+    /// <summary>注册会话工厂（<b>主人记账版</b>，见 <see cref="_sessionFactory"/>）：槽位空着就挂上并成为主人；
+    /// 已被占用（同一条流上另一只 DbContext 先到）就当场不动字——嵌套即共享，后到的那只不发自己的工厂，
+    /// 之后的连接照旧经主人的工厂落到主人的账本上，里层先结束也拆不了主人的槽。</summary>
+    internal static void InstallSessionFactory(object owner, Func<string, ConnectionRole, DbConnection> factory)
+        => _sessionFactory.Value ??= new SessionFactorySlot(owner, factory);
 
-    internal static void ClearSessionFactory() => _sessionConnectionFactory.Value = null;
+    /// <summary>拆会话工厂。<b>只有主人能拆</b>：非主人的 <c>Dispose</c> 里这一格不动
+    /// （对照 <see cref="FlowWritesHandle"/> 的 <c>ownsSlot</c> 判法同一条纪律），
+    /// 否则里层先释放就把外层还在用的工厂整条拔掉——那是 v0.39 第二笔修掉的静默退化。</summary>
+    internal static void ClearSessionFactory(object owner)
+    {
+        if (_sessionFactory.Value is { } slot && ReferenceEquals(slot.Owner, owner))
+            _sessionFactory.Value = null;
+    }
 
     internal static void BindSessionConnection(string cluster, ConnectionRole role, DbConnection connection)
         => (_sessionConnections.Value ??= new SessionConnections()).Set(cluster, role, connection);
@@ -448,9 +466,9 @@ public sealed partial class AdoExecutor
 
         if (sessions is not null && sessions.TryGet(cluster, ConnectionRole.Primary, out var bound))
             sessionConn = bound;
-        else if (_sessionConnectionFactory.Value is { } factory)
+        else if (_sessionFactory.Value is { } slot)
         {
-            sessionConn = factory(cluster, ConnectionRole.Primary);
+            sessionConn = slot.Factory(cluster, ConnectionRole.Primary);
             BindSessionConnection(cluster, ConnectionRole.Primary, sessionConn);
         }
 
@@ -586,9 +604,9 @@ public sealed partial class AdoExecutor
 
         // 工厂在位但这一格还没建——首次用到时调工厂取连接，之后同一会话复用那一条。
         // 从库因此是"会话钉住一颗"而不是"每句换一颗"：一轮询落在会话上，会话内的两次读才互相看得见对方的顺序。
-        if (_sessionConnectionFactory.Value is { } factory)
+        if (_sessionFactory.Value is { } factory)
         {
-            var conn = factory(cluster, route.Role);
+            var conn = factory.Factory(cluster, route.Role);
             BindSessionConnection(cluster, route.Role, conn);
 
             return new RentedConnection(conn, transaction: null, ownsConnection: false, route);
@@ -799,6 +817,15 @@ public sealed partial class AdoExecutor
         }
 
         public IReadOnlyList<DbConnection> Connections => [.. _bySlot.Values];
+    }
+
+    /// <summary>会话工厂槽位的本体：(工厂, 主人) 一对。主人在 <see cref="ClearSessionFactory"/> 里按引用比一次，
+    /// 与 <see cref="UnbindSessionTransaction"/> 那颗"只摘自己那一场"的判法同一形状。</summary>
+    sealed class SessionFactorySlot(object owner, Func<string, ConnectionRole, DbConnection> factory)
+    {
+        internal object Owner { get; } = owner;
+
+        internal Func<string, ConnectionRole, DbConnection> Factory { get; } = factory;
     }
 
     /// <summary>"这条流上哪几座集群写过"的一本账。<b>槽位里放的是这本账而不是一个布尔</b>：

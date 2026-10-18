@@ -149,7 +149,11 @@ public sealed class QuickSqlTransaction : IQuickSqlTransaction
         }
     }
 
-    /// <summary>不抛：<see cref="Dispose"/> 在未提交时就是靠调它来兜底，而 Dispose 可以发生在已结束的事务上。</summary>
+    /// <summary>回滚。未结束时真的回滚并<b>可以抛驱动错误</b>（锁冲突、连接断了——那是要看见的），
+    /// 已结束则直接返回（幂等）。<see cref="Dispose"/> 兜底走这一口没有例外豁免，
+    /// 收口处要"回滚失败也不吞换业务异常"的那一格走 <see cref="RollbackQuiet"/>。
+    /// <para>（doc 对齐 v0.39 第二笔：原稿那句"不抛"与实现一直不符——try/finally 没有 catch，
+    /// 驱动的回滚错误照抛。承诺改为如实：幂等与 Finish 一定执行，异常照实向上。）</para></summary>
     public void Rollback()
     {
         if (Completed)
@@ -173,6 +177,27 @@ public sealed class QuickSqlTransaction : IQuickSqlTransaction
         finally
         {
             Finish();
+        }
+    }
+
+    /// <summary>形态 (2) 收口专用的回滚：<b>无论成败都不抛，失败把原文<em>当返回值</em>交出去</b>。
+    /// 与 <see cref="Rollback"/> 同一条执行路径（含 finally 里的 <see cref="Finish"/>），
+    /// 差别只在异常的去向——回滚失败绕不出这里，就没有机会盖掉调用方手里的业务异常。
+    /// 抛在这里是数据，不是信号。</summary>
+    internal Exception? RollbackQuiet()
+    {
+        if (Completed)
+            return null;
+
+        try
+        {
+            Rollback();
+
+            return null;
+        }
+        catch (Exception exception)
+        {
+            return exception;
         }
     }
 
