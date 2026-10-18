@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.IO.Compression;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -198,4 +199,145 @@ public class PdfExportTests
     }
 
     private static string Latin1(byte[] bytes) => Encoding.Latin1.GetString(bytes);
+
+    // ── 畸形字体防御（v0.2 第二笔） ──────────────────────────────────────
+    // FontFile 显式指定时 LoadOrThrow 直接把 Ttf.Load 的失败包成 QuickPdfException 交出，不会落回
+    // 内置候选——所以畸形文件的三种形状都能在公开面上验到，不需要反射进 internal Ttf。
+    // 断言的重点是异常的**形状**：必须是 InvalidDataException 那一路"文件坏了"，
+    // 不得再出现越界/溢出那种"责怪调用语句"的误导。Format 12 那格买的是"当场回来"：真按声称
+    // 21 亿格去转，旧实现在这台机器上是分钟量级；clamp 后毫秒级——用例本身不计时，
+    // 挂住的是"新实现必须整场秒级完成"这一桩事实。
+
+    private static string TempFont(params byte[] data)
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"qp-malfont-{Guid.NewGuid():N}.ttf");
+        File.WriteAllBytes(path, data);
+        return path;
+    }
+
+    private static Exception? Core(QuickPdfException ex) => ex.InnerException;
+
+    private static bool Misleading(Exception? ex) =>
+        ex is ArgumentOutOfRangeException or OverflowException or IndexOutOfRangeException
+            or NullReferenceException or AccessViolationException;
+
+    [Fact]
+    public void A_truncated_sfnt_directory_reports_the_malformation_not_an_out_of_range()
+    {
+        var garbage = new byte[64];
+        BinaryPrimitives.WriteUInt32BigEndian(garbage, 0x00010000);
+        BinaryPrimitives.WriteUInt16BigEndian(garbage.AsSpan(4), 60000); // numTables，目录装不下
+        var path = TempFont(garbage);
+        try
+        {
+            var ex = Record.Exception(() =>
+                Pdf.GetAsByteArray(Sample, new PdfOptions { FontFile = path }));
+            Assert.False(Misleading(Core(AsQ(ex))), "leaked a misleading exception");
+            Assert.IsType<InvalidDataException>(Core(AsQ(ex)));
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Fact]
+    public void A_fraudulent_ttc_directory_is_refused_with_a_naming_message()
+    {
+        var garbage = new byte[40];
+        BinaryPrimitives.WriteUInt32BigEndian(garbage, 0x74746366); // ttcf
+        BinaryPrimitives.WriteUInt32BigEndian(garbage.AsSpan(8), 0x7FFFFFFF); // numFonts
+        var path = TempFont(garbage);
+        try
+        {
+            var ex = Record.Exception(() =>
+                Pdf.GetAsByteArray(Sample, new PdfOptions { FontFile = path }));
+            Assert.False(Misleading(Core(AsQ(ex))), "leaked a misleading exception");
+            Assert.IsType<InvalidDataException>(Core(AsQ(ex)));
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Fact]
+    public void A_cmap12_group_claiming_two_billion_code_points_clamps_instead_of_spinning()
+    {
+        byte[] sfnt = BuildMinimalFraudTtf(start: 0x4E00, end: 0x007FFFFF, gidStart: 1);
+        var path = TempFont(sfnt);
+        try
+        {
+            // 本场在场读数（v0.2 第二笔）：这一份最小 sfnt 过得去目录、过得去格子经济——
+            // gidStart=1 合法，全家撑起一只 gid=1 的字体，GetAsByteArray 竟真排出了一册 PDF。
+            // 所以这格不赌"必有异常"：**完成或被 InvalidDataException 拒，两条路都放过**，
+            // 而旧实现按声称的 21 亿格空转是分钟量级——用例能整场秒级跑完本身就在作证 clamp 生效。
+            var ex = Record.Exception(() =>
+                Pdf.GetAsByteArray(Sample, new PdfOptions { FontFile = path }));
+
+            if (ex is null)
+                return;
+
+            Assert.True(ex is QuickPdfException, $"leaked a raw exception: {ex}");
+            Assert.False(Misleading(Core((QuickPdfException)ex)), $"leaked a misleading exception: {Core((QuickPdfException)ex)}");
+        }
+        finally { File.Delete(path); }
+    }
+
+    private static QuickPdfException AsQ(Exception? ex)
+    {
+        Assert.True(ex is QuickPdfException, $"expected QuickPdfException, got {ex}");
+        return (QuickPdfException)ex!;
+    }
+
+    /// <summary>最小 sfnt 拼装（仅够 Load 走到 cmap12 那一格）：目录 6 张表齐、
+    /// head 46 字节（upm=1000）、hhea 36 字节、maxp 6 字节、hmtx 四字节、glyf 空、
+    /// cmap 一条 (3,10) 指向格式 12 的子表，其 numGroups=1、那一组就是用例点名的超额区间。</summary>
+    private static byte[] BuildMinimalFraudTtf(uint start, uint end, uint gidStart)
+    {
+        const int numTables = 6;
+        // 表序（目录按出现次序写，Load 是按名字查的，次序自由）：head ∶ hhea ∶ maxp ∶ hmtx ∶ glyf ∶ cmap
+        var head = new byte[46];
+        var hhea = new byte[36];
+        var maxp = new byte[6];
+        var hmtx = new byte[4];
+        var glyf = Array.Empty<byte>();
+        var cmap = BuildCmap(start, end, gidStart);
+        var payload = new[] { ("head", head), ("hhea", hhea), ("maxp", maxp), ("hmtx", hmtx), ("glyf", glyf), ("cmap", cmap) };
+
+        int headerLen = 12 + numTables * 16;
+        var buf = new byte[headerLen + payload.Sum(t => (t.Item2.Length + 3) & ~3)];
+
+        BinaryPrimitives.WriteUInt32BigEndian(buf, 0x00010000);
+        BinaryPrimitives.WriteUInt16BigEndian(buf.AsSpan(4), numTables);
+
+        int dataOff = headerLen;
+        for (int i = 0; i < numTables; i++)
+        {
+            int rec = 12 + i * 16;
+            Encoding.ASCII.GetBytes(payload[i].Item1).CopyTo(buf, rec);
+            BinaryPrimitives.WriteInt32BigEndian(buf.AsSpan(rec + 8), dataOff);
+            BinaryPrimitives.WriteInt32BigEndian(buf.AsSpan(rec + 12), payload[i].Item2.Length);
+            payload[i].Item2.CopyTo(buf, dataOff);
+
+            // 表内真正被 Load 读的三格，逐张写值：head.upm=1000 ∶ hhea.numberOfHMetrics=1 ∶ maxp.numGlyphs=1
+            if (payload[i].Item1 == "head") BinaryPrimitives.WriteUInt16BigEndian(buf.AsSpan(dataOff + 18), 1000);
+            if (payload[i].Item1 == "hhea") BinaryPrimitives.WriteUInt16BigEndian(buf.AsSpan(dataOff + 34), 1);
+            if (payload[i].Item1 == "maxp") BinaryPrimitives.WriteUInt16BigEndian(buf.AsSpan(dataOff + 4), 1);
+
+            dataOff += (payload[i].Item2.Length + 3) & ~3;
+        }
+        return buf;
+    }
+
+    private static byte[] BuildCmap(uint start, uint end, uint gidStart)
+    {
+        // header(4) + 一条记录(8) + 子表（format/两格预留）(4) + length/lang(8) + numGroups(4) + 那一组(12) = 40
+        var cmap = new byte[40];
+        BinaryPrimitives.WriteUInt16BigEndian(cmap, 0);       // version
+        BinaryPrimitives.WriteUInt16BigEndian(cmap.AsSpan(2), 1); // numTables
+        BinaryPrimitives.WriteUInt16BigEndian(cmap.AsSpan(4), 3); // platform 3
+        BinaryPrimitives.WriteUInt16BigEndian(cmap.AsSpan(6), 10); // encoding 10（rank 0 首选，fmt 12）
+        BinaryPrimitives.WriteInt32BigEndian(cmap.AsSpan(8), 12); // 子表在 cmap 表内的偏移
+        BinaryPrimitives.WriteUInt16BigEndian(cmap.AsSpan(12), 12); // format 12
+        BinaryPrimitives.WriteInt32BigEndian(cmap.AsSpan(24), 1);   // subtable+12 ∶ numGroups（24 = 12+4+8）
+        BinaryPrimitives.WriteUInt32BigEndian(cmap.AsSpan(28), start);
+        BinaryPrimitives.WriteUInt32BigEndian(cmap.AsSpan(32), end);
+        BinaryPrimitives.WriteUInt32BigEndian(cmap.AsSpan(36), gidStart);
+        return cmap;
+    }
 }

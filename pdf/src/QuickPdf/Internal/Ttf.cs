@@ -43,6 +43,12 @@ internal sealed class Ttf
 
     public static Ttf Load(byte[] file)
     {
+        // 畸形字体防御（v0.2 第二笔）：下面每一步的读数都以"文件装载进来的字节"为边界，
+        // 越界一律 InvalidDataException（调用方里 TryLoad 据此换下一个候选），而不是
+        // ArgumentOutOfRangeException / OverflowException 那种"责怪调用语句"的误导形状。
+        if (file is not { Length: > 12 })
+            throw new InvalidDataException("Font file is empty or too short to be a sfnt.");
+
         // msyh.ttc / simsun.ttc are collections: extract font #0 as a standalone sfnt first.
         if (BinaryPrimitives.ReadUInt32BigEndian(file) == 0x74746366 /* ttcf */)
             file = ExtractFontFromTtc(file, 0);
@@ -54,7 +60,14 @@ internal sealed class Ttf
             || !tables.ContainsKey("cmap") || !tables.ContainsKey("glyf"))
             throw new InvalidDataException("Not a usable TrueType (glyf) font — CFF/OTF cannot go into /FontFile2.");
 
+        // 固定字段读之前先把每张要用的表声明出最小长度：偏移有效不代表字段在场。
+        RequireLength(span, head, 46, "head");
+        RequireLength(span, hhea, 36, "hhea");
+        RequireLength(span, maxp, 6, "maxp");
+
         int upm = BinaryPrimitives.ReadUInt16BigEndian(span.Slice(head.Offset + 18));
+        if (upm <= 0)
+            throw new InvalidDataException($"Malformed font: unitsPerEm is {upm}; every advance divides by it.");
         int xMin = BinaryPrimitives.ReadInt16BigEndian(span.Slice(head.Offset + 36));
         int yMin = BinaryPrimitives.ReadInt16BigEndian(span.Slice(head.Offset + 38));
         int xMax = BinaryPrimitives.ReadInt16BigEndian(span.Slice(head.Offset + 40));
@@ -75,6 +88,30 @@ internal sealed class Ttf
         return ttf;
     }
 
+    /// <summary>定点读的总闸（v0.2 第二笔）：表偏移/长度是文件直读的，"字段在场"这件事用长度明证一次，
+    /// 之后那句 ReadXxx 才配说它拿的是表里的字段而不是文件外的垃圾。</summary>
+    private static void RequireLength(ReadOnlySpan<byte> s, (int Offset, int Length) table, int min, string what)
+    {
+        if (table.Length < min)
+            throw new InvalidDataException($"Malformed font: {what} table is {table.Length} bytes, needs >= {min}.");
+    }
+
+    /// <summary>带防御的定点读（v0.2 第二笔）：越界交 InvalidDataException 而不是越界异常的误导形状。
+    /// 只在装载路径上走（每字形零次），替身换不来什么也不亏什么。</summary>
+    private static ushort ReadU16(ReadOnlySpan<byte> s, int pos, string what)
+    {
+        if ((uint)pos > (uint)(s.Length - 2))
+            throw new InvalidDataException($"Malformed font: {what} at byte {pos} reads past the end of {s.Length} bytes.");
+        return BinaryPrimitives.ReadUInt16BigEndian(s.Slice(pos));
+    }
+
+    private static uint ReadU32(ReadOnlySpan<byte> s, int pos, string what)
+    {
+        if ((uint)pos > (uint)(s.Length - 4))
+            throw new InvalidDataException($"Malformed font: {what} at byte {pos} reads past the end of {s.Length} bytes.");
+        return BinaryPrimitives.ReadUInt32BigEndian(s.Slice(pos));
+    }
+
     /// <summary>
     /// Rebuilds one font from a 'ttcf' collection as a standalone sfnt: copy the chosen font's table
     /// directory, then each table's bytes 4-byte aligned. The result is a valid .ttf stream that PDF
@@ -85,11 +122,19 @@ internal sealed class Ttf
         int numFonts = (int)BinaryPrimitives.ReadUInt32BigEndian(file.AsSpan(8));
         if ((uint)fontIndex >= (uint)numFonts)
             throw new InvalidDataException($"Font index {fontIndex} out of range (collection has {numFonts} fonts).");
+        // 畸形防御（v0.2 第二笔）：目录长度、字体偏移、逐表 (offset, length) 全部在文件边界内明证过才动手。
+        // 长算写死：numFonts * 4 按 int 算在 numFonts 接近 2^30 时回卷成小数，那道判就放行伪造目录了。
+        if ((long)file.Length < 12L + (long)numFonts * 4)
+            throw new InvalidDataException($"Malformed font: ttcf directory claims {numFonts} fonts, file ends before all offsets.");
         int fontOff = BinaryPrimitives.ReadInt32BigEndian(file.AsSpan(12 + fontIndex * 4));
+        if (fontOff < 0 || (long)fontOff + 12 > file.Length)
+            throw new InvalidDataException($"Malformed font: font offset {fontOff} lies outside the file.");
 
         var src = file.AsSpan(fontOff);
         var whole = file.AsSpan(); // TTC table offsets are absolute from the file start
         ushort numTables = BinaryPrimitives.ReadUInt16BigEndian(src.Slice(4));
+        if ((long)fontOff + 12 + numTables * 16 > file.Length)
+            throw new InvalidDataException($"Malformed font: table directory of {numTables} tables runs past the end of the file.");
 
         // size = 12-byte header + 16-byte records + padded table data
         int total = 12 + numTables * 16;
@@ -97,6 +142,9 @@ internal sealed class Ttf
         for (int i = 0; i < numTables; i++)
         {
             int len = BinaryPrimitives.ReadInt32BigEndian(src.Slice(12 + i * 16 + 12));
+            int toff = BinaryPrimitives.ReadInt32BigEndian(src.Slice(12 + i * 16 + 8));
+            if (len < 0 || (long)toff + len > file.Length)
+                throw new InvalidDataException($"Malformed font: table #{i} (offset {toff}, length {len}) lies outside the collection.");
             sizes[i] = (len + 3) & ~3;
             total += sizes[i];
         }
@@ -137,6 +185,10 @@ internal sealed class Ttf
             throw new InvalidDataException("Unrecognised sfnt version.");
 
         int numTables = BinaryPrimitives.ReadUInt16BigEndian(s.Slice(4));
+        // 畸形防御（v0.2 第二笔）：目录先得放得下，逐表 (offset, length) 得在文件边界内——
+        // 这里验一次，之后所有消费点（head/hhea/maxp/hmtx/cmap/name/glyf）的定点读都成立在它上面。
+        if (12 + numTables * 16 > s.Length)
+            throw new InvalidDataException($"Malformed font: table directory of {numTables} tables runs past the {s.Length}-byte file.");
         var map = new Dictionary<string, (int Offset, int Length)>(numTables);
         for (int i = 0; i < numTables; i++)
         {
@@ -144,6 +196,8 @@ internal sealed class Ttf
             string name = System.Text.Encoding.ASCII.GetString(s.Slice(rec, 4));
             int off = BinaryPrimitives.ReadInt32BigEndian(s.Slice(rec + 8));
             int len = BinaryPrimitives.ReadInt32BigEndian(s.Slice(rec + 12));
+            if (off < 0 || len < 0 || (long)off + len > s.Length)
+                throw new InvalidDataException($"Malformed font: table '{name}' (offset {off}, length {len}) lies outside the file.");
             map[name] = (off, len);
         }
         return map;
@@ -155,7 +209,7 @@ internal sealed class Ttf
         int last = 0;
         for (int g = 0; g < numHMetrics; g++)
         {
-            last = BinaryPrimitives.ReadUInt16BigEndian(s.Slice(hmtx.Offset + g * 4));
+            last = ReadU16(s, hmtx.Offset + g * 4, $"hmtx advance #{g}"); // 畸形防御（v0.2 第二笔）：逐项过界判
             adv[g] = last;
         }
         for (int g = numHMetrics; g < adv.Length; g++) adv[g] = last; // trailing glyphs reuse the last advance
@@ -165,17 +219,19 @@ internal sealed class Ttf
     private static string ReadPostScriptName(ReadOnlySpan<byte> s, Dictionary<string, (int Offset, int Length)> tables)
     {
         if (!tables.TryGetValue("name", out var name)) return "QuickPdfFont";
-        int count = BinaryPrimitives.ReadUInt16BigEndian(s.Slice(name.Offset + 2));
-        int strStart = name.Offset + BinaryPrimitives.ReadUInt16BigEndian(s.Slice(name.Offset + 4));
+        int count = ReadU16(s, name.Offset + 2, "name.namerecordCount");
+        int strStart = name.Offset + ReadU16(s, name.Offset + 4, "name.stringOffset");
         for (int i = 0; i < count; i++)
         {
             int rec = name.Offset + 6 + i * 12;
-            int nameId = BinaryPrimitives.ReadUInt16BigEndian(s.Slice(rec + 6));
-            int len = BinaryPrimitives.ReadUInt16BigEndian(s.Slice(rec + 8));
-            int off = strStart + BinaryPrimitives.ReadUInt16BigEndian(s.Slice(rec + 10));
+            int nameId = ReadU16(s, rec + 6, "name.nameId");
+            int len = ReadU16(s, rec + 8, "name.length");
+            int off = strStart + ReadU16(s, rec + 10, "name.offset");
             if (nameId == 29 || nameId == 6) // 29 = PostScript name; 6 = fallback
             {
-                ushort plat = BinaryPrimitives.ReadUInt16BigEndian(s.Slice(rec));
+                if (off < 0 || len < 0 || (long)off + len > s.Length)
+                    throw new InvalidDataException($"Malformed font: name record #{i} (offset {off}, length {len}) lies outside the file.");
+                ushort plat = ReadU16(s, rec, "name.platform");
                 var raw = s.Slice(off, len);
                 if (plat == 3) // UTF-16BE
                 {
@@ -192,15 +248,15 @@ internal sealed class Ttf
     private void BuildCmap(ReadOnlySpan<byte> s)
     {
         var cmap = _tables["cmap"];
-        int num = BinaryPrimitives.ReadUInt16BigEndian(s.Slice(cmap.Offset + 2));
+        int num = ReadU16(s, cmap.Offset + 2, "cmap.numTables");
         int chosenFmt = -1, chosenOff = 0; int win = 99;
         for (int i = 0; i < num; i++)
         {
             int rec = cmap.Offset + 4 + i * 8; // version(2) + numTables(2), then records
-            int plat = BinaryPrimitives.ReadUInt16BigEndian(s.Slice(rec));
-            int enc = BinaryPrimitives.ReadUInt16BigEndian(s.Slice(rec + 2));
-            int off = cmap.Offset + BinaryPrimitives.ReadInt32BigEndian(s.Slice(rec + 4));
-            int fmt = BinaryPrimitives.ReadUInt16BigEndian(s.Slice(off));
+            int plat = ReadU16(s, rec, $"cmap record #{i} platform");
+            int enc = ReadU16(s, rec + 2, $"cmap record #{i} encoding");
+            int off = cmap.Offset + (int)ReadU32(s, rec + 4, $"cmap record #{i} offset");
+            int fmt = ReadU16(s, off, $"cmap subtable #{i} format");
             int rank = (plat, enc, fmt) switch
             {
                 (3, 10, 12) => 0, // Windows Unicode Full
@@ -217,16 +273,20 @@ internal sealed class Ttf
 
     private void ReadCmap4(ReadOnlySpan<byte> s, int off)
     {
-        int segCountX2 = BinaryPrimitives.ReadUInt16BigEndian(s.Slice(off + 6));
+        int segCountX2 = ReadU16(s, off + 6, "cmap4.segCountX2");
         int seg = segCountX2 / 2;
+        // 畸形防御（v0.2 第二笔）：一段记录名义上要 8 字节（end/start/delta/rangeOffset 四颗 u16），
+        // 段数以"文件里还剩多少字节"收口——伪造的 segCount 让内层循环空转到赔不起。
+        int room = (s.Length - off) / 8;
+        if (seg > room) seg = room;
         int endCode = off + 14, startCode = endCode + segCountX2 + 2, delta = startCode + segCountX2, range = delta + segCountX2;
         for (int i = 0; i < seg; i++)
         {
-            int end = BinaryPrimitives.ReadUInt16BigEndian(s.Slice(endCode + i * 2));
-            int start = BinaryPrimitives.ReadUInt16BigEndian(s.Slice(startCode + i * 2));
-            if (start == 0xFFFF) continue;
-            short d = BinaryPrimitives.ReadInt16BigEndian(s.Slice(delta + i * 2));
-            ushort ro = BinaryPrimitives.ReadUInt16BigEndian(s.Slice(range + i * 2));
+            int end = ReadU16(s, endCode + i * 2, $"cmap4 endCode #{i}");
+            int start = ReadU16(s, startCode + i * 2, $"cmap4 startCode #{i}");
+            if (start == 0xFFFF || end < start) continue;
+            short d = (short)ReadU16(s, delta + i * 2, $"cmap4 idDelta #{i}");
+            ushort ro = ReadU16(s, range + i * 2, $"cmap4 idRangeOffset #{i}");
             for (int c = start; c <= end; c++)
             {
                 int gid;
@@ -234,6 +294,7 @@ internal sealed class Ttf
                 else
                 {
                     int gi = range + i * 2 + ro + (c - start) * 2;
+                    if ((uint)gi > (uint)(s.Length - 2)) break; // 指针飞出文件的段照到为止，别把越界当成功
                     ushort raw = BinaryPrimitives.ReadUInt16BigEndian(s.Slice(gi));
                     gid = raw == 0 ? 0 : (raw + d) & 0xFFFF;
                 }
@@ -244,17 +305,29 @@ internal sealed class Ttf
 
     private void ReadCmap12(ReadOnlySpan<byte> s, int off)
     {
-        int groups = BinaryPrimitives.ReadInt32BigEndian(s.Slice(off + 12));
-        for (int i = 0; i < groups; i++)
+        // 畸形防御（v0.2 第二笔）三半：① groups 以"文件在表头之后还剩多少字节"收口（每组建义上占 12 字节），
+        // 伪造大数转不出物料经济；② start/end 以 Unicode 全宇宙收口（0x10FFFF），start 出界的组与
+        // end < start 的组直接跳过——单组数据造不出几十亿次循环；③ gidStart + 步长按 16 位字形号口径裁断，
+        // 溢出（负数或 > 0xFFFF）的那一步不写表，写进 PDF 的 gid 永远站得住。
+        int groups = (int)ReadU32(s, off + 12, "cmap12.numGroups");
+        int room = (int)Math.Min((long)(s.Length - off - 16) / 12, groups);
+        for (int i = 0; i < room; i++)
         {
             int g = off + 16 + i * 12;
-            int start = BinaryPrimitives.ReadInt32BigEndian(s.Slice(g));
-            int end = BinaryPrimitives.ReadInt32BigEndian(s.Slice(g + 4));
-            int gidStart = BinaryPrimitives.ReadInt32BigEndian(s.Slice(g + 8));
-            for (int c = start; c <= end; c++)
-                if (!_cmap.ContainsKey(c)) _cmap[c] = gidStart + (c - start);
+            uint start = ReadU32(s, g, $"cmap12 group #{i} start");
+            uint end = ReadU32(s, g + 4, $"cmap12 group #{i} end");
+            uint gidStart = ReadU32(s, g + 8, $"cmap12 group #{i} gidStart");
+            if (start > EndOfUnicode || end > EndOfUnicode || end < start) continue;
+            for (uint c = start; c <= end; c++)
+            {
+                uint gid = gidStart + (c - start);
+                if (gid > 0xFFFF) break; // 字形号溢出：组的尾巴已经在字形宇宙之外
+                if (!_cmap.ContainsKey((int)c)) _cmap[(int)c] = (int)gid;
+            }
         }
     }
+
+    private const uint EndOfUnicode = 0x10FFFF;
 
     /// <summary>Advance width in PDF units (thousandths of an em), matching the /DW=1000 coordinate scale.</summary>
     public int WidthThousand(int glyphId)

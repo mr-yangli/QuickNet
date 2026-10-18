@@ -60,8 +60,10 @@ internal static class FontResolver
             if (File.Exists(direct)) yield return direct;
         }
         List<string> files;
+        // 空 catch 收窄（v0.2 第二笔）：这里豁免的只有"目录走不通"那一族——IO 与权限。
+        // OOM 与逻辑 bug 不再被伪装成"目录里没有字体"（那正是畸形字体长期没被告发的原因之一）。
         try { files = Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories).ToList(); }
-        catch { yield break; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { yield break; }
         foreach (var f in files)
         {
             var name = Path.GetFileName(f);
@@ -77,8 +79,13 @@ internal static class FontResolver
 
     private static Ttf? TryLoad(string path)
     {
+        // 空 catch 收窄（v0.2 第二笔）：候选探测豁免的仍是"这一份读不下去"的形状——读失败/权限/坏 sfnt。
+        // 其它异常（含 OOM）照抛：装不进 InvalidDataException 的错不是"换下一个候选"能吸收的。
         try { return Ttf.Load(File.ReadAllBytes(path)); }
-        catch { return null; } // unreadable / collection index / no glyf / no cmap -> next candidate
+        catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
+        {
+            return null; // unreadable / collection index / no glyf / no cmap -> next candidate
+        }
     }
 
     private static Ttf LoadOrThrow(string path)
