@@ -1,3 +1,5 @@
+using System.ComponentModel;
+using System.ComponentModel.DataAnnotations.Schema;
 using QuickSql.Metadata;
 
 namespace QuickSql.Sample;
@@ -5,21 +7,23 @@ namespace QuickSql.Sample;
 // ── 实体定义 ────────────────────────────────────────────────────────────
 
 /// <summary>客户：主表。</summary>
-[Table("Customers", Comment = "客户主表")]
+[Table("Customers")]
+[Description("客户主表")]
 public class Customer
 {
     public int Id { get; set; }
 
-    [Column(Length = 64, Comment = "客户姓名")]
+    [QuickColumn(Length = 64)]
+    [Description("客户姓名")]
     public string? Name { get; set; }
 
-    [Column(Length = 32)]
+    [QuickColumn(Length = 32)]
     public string? City { get; set; }
 }
 
 /// <summary>订单：主表，同时是 OrderItem 的父表。</summary>
 [Table("Orders")]
-[Index("IX_Orders_CustomerId", nameof(CustomerId))]
+[Index(nameof(CustomerId))]
 public class Order
 {
     public int Id { get; set; }
@@ -33,7 +37,7 @@ public class Order
 
     public DateTime CreatedAt { get; set; }
 
-    [Column(Length = 256)]
+    [QuickColumn(Length = 256)]
     public string? Note { get; set; }
 
     /// <summary>集合导航：今天不是关系边（§8.2），但形态上表达"一个订单有多行明细"。</summary>
@@ -51,7 +55,7 @@ public class OrderItem
     /// <summary>引用导航：建立 OrderItem → Order 的外键边。</summary>
     public Order? Order { get; set; }
 
-    [Column(Length = 32)]
+    [QuickColumn(Length = 32)]
     public string? Sku { get; set; }
 
     public int Quantity { get; set; }
@@ -79,7 +83,7 @@ public class Parcel
     /// <summary>引用导航：Parcel → OrderItem 的外键边。§16 用它演示集合链旁边再接一根引用边。</summary>
     public OrderItem? OrderItem { get; set; }
 
-    [Column(Length = 32)]
+    [QuickColumn(Length = 32)]
     public string? TrackingNo { get; set; }
 }
 
@@ -124,12 +128,12 @@ public record CustomerTop(int CustomerId, decimal Total);
 /// <summary>访问日志：按<em>月</em>分片的靶子，分片键是 <see cref="OccurredAt"/>。</summary>
 [Table("AccessLog_{year}{month}")]
 [SplitTable(SplitKind.Month, nameof(OccurredAt))]
-[Index("IX_AccessLog_Status", nameof(Status))]
+[Index(nameof(Status))]
 public class AccessLog
 {
     public Guid Id { get; set; }
 
-    [Column(Length = 128)]
+    [QuickColumn(Length = 128)]
     public string? Path { get; set; }
 
     public int Status { get; set; }
@@ -148,7 +152,7 @@ public class TicketRow
     /// <summary>分片键。整数直接取模，不经 <c>GetHashCode()</c>（那个随进程变，会把同一行在两次运行里送到两张表）。</summary>
     public int TenantId { get; set; }
 
-    [Column(Length = 64)]
+    [QuickColumn(Length = 64)]
     public string? Title { get; set; }
 }
 
@@ -165,7 +169,7 @@ public class SalesTotal
 {
     public int Id { get; set; }
 
-    [Column(Length = 64)]
+    [QuickColumn(Length = 64)]
     public string? Metric { get; set; }
 
     public decimal Value { get; set; }
@@ -178,16 +182,19 @@ public class SalesTotal
 /// 的整数位少、两句注释都还没有，而旧表上多一条契约不认识的索引。
 /// 旧表还多一列 <c>Legacy</c>，这里故意<em>不</em>写它 —— 契约上不认识的列属于"要人工"，同步不删它，
 /// 而那也正是"删索引为什么另开一颗开关"的邻居：多出来的东西一律不默认动手。</summary>
-[Table("QuickSqlSampleProbe", Comment = "结构同步探针表")]
-[Index("IX_QuickSqlSampleProbe_Tag", nameof(Tag))]
+[Table("QuickSqlSampleProbe")]
+[Description("结构同步探针表")]
+[Index(nameof(Tag))]
 public class SyncProbe
 {
     public int Id { get; set; }
 
-    [Column(Length = 32, Comment = "标签")]
+    [QuickColumn(Length = 32)]
+    [Description("标签")]
     public string? Tag { get; set; }
 
-    [Column(Precision = 18, Scale = 2, Comment = "金额")]
+    [QuickColumn(Precision = 18, Scale = 2)]
+    [Description("金额")]
     public decimal Amount { get; set; }
 }
 
@@ -201,7 +208,7 @@ public class SampleTicket
 {
     public int Id { get; set; }
 
-    [Column(Length = 32)]
+    [QuickColumn(Length = 32)]
     public string? Seat { get; set; }
 
     public bool Deleted { get; set; }

@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations.Schema;
 using QuickSql.Metadata;
 
 namespace QuickSql.Benchmarks;
@@ -7,7 +8,7 @@ namespace QuickSql.Benchmarks;
 /// 代价是实体形状两边各写一份 —— 这里钉的是<b>性能形状</b>（列数、类型分布），不是解析规则，
 /// 解析规则的等价性有 §13.11 的 19 条用例守着，不靠本文件。</summary>
 [Table("BenchOrder")]
-[Index("IX_BenchOrder_Created", nameof(CreatedAt))]
+[Index(nameof(CreatedAt))]
 public class BenchOrder
 {
     public int Id { get; set; }
