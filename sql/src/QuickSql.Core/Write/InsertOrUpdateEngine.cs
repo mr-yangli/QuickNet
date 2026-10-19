@@ -147,7 +147,12 @@ sealed class InsertOrUpdateEngine<T> : IInsertOrUpdate<T> where T : class
         }
 
         // 判据是语句数而不是命令数（与 UpdateBulkEngine 那一句同源）：一句 upsert 本身就原子，包它只多付两次往返。
-        if (BulkAtomicity.ShouldWrap(_atomic, plan.Commands.Count) && QuickSqlTransaction.For(_orm.Ado) is null)
+        // 第三格（【本笔（ClickHouse 重开·笔一）新增】）：provider 得声明了 DbCapabilities.Transactions 才包——
+        // 没声明的那一家（无 DbTransaction 可开，或者驱动根子上不接）走逐句 autocommit 直发，
+        // 这一批因此在库里不原子（中途失败已发的语句不回滚；行为诚实条款全文在位注释与用法册）。
+        if (BulkAtomicity.ShouldWrap(_atomic, plan.Commands.Count)
+            && TransactionCapability.Declared(_orm.Provider)
+            && QuickSqlTransaction.For(_orm.Ado) is null)
         {
             using var tran = _orm.BeginTransaction(DataSourceRouting.ClusterOf(_contract.Table));
 

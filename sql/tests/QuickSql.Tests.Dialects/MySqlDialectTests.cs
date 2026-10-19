@@ -769,7 +769,7 @@ public sealed class MySqlDialectTests
     // ── 槽位本身：这一档声明了什么、没声明什么 ────────────────────────
 
     [Fact]
-    public void The_family_declares_six_bits_and_the_sixth_one_is_a_channel_not_a_text()
+    public void The_family_declares_seven_bits_and_the_sixth_is_a_channel_the_seventh_is_the_wiring_bit()
     {
         var declared = Enum.GetValues<DbCapabilities>()
             .Where(static bit => bit != DbCapabilities.None && Provider.Capabilities.HasFlag(bit))
@@ -777,17 +777,20 @@ public sealed class MySqlDialectTests
 
         // 原文（v0.35 起这本账的形状）："5 位、全部有离线文本，是四档里最少的一份掩码，也是第二家『仅厂商文档』
         // 那位数为 0 的档（第一家是达梦那一档 6 = 6 + 0）"。两格今天一起改判，判据一个字没动：位数涨到 6
-        // （本笔在血统基类挂上 <c>Bulk_Copy</c>，tidb／oceanbase 同源继承而一位不改写），于是"全部有离线文本"
+        // （那笔在血统基类挂上 <c>Bulk_Copy</c>，tidb／oceanbase 同源继承而一位不改写），于是"全部有离线文本"
         // 那半句作废——第 6 颗不是一段 SQL 而是一条装载通道，它在 §13.5 里落"仅厂商文档"那一档（驱动 API 有
         // 对照量具的真库读数、provider 那条反射装配还没跑过集成册），本家因此从零那一侧走到 sqlite 那本旁边（各 1 位）；
         // "最少"那一格也不再是本家，它由 gbase8s 那本 4 位独占。<b>那不是能力强，是敢声明的少</b>——
         // 逐位判据写在 MySqlProviderBase 的类注释里，出处记在 §13.5。
-        Assert.Equal(6, declared.Length);
+        // 【本笔（ClickHouse 重开·笔一）】第 7 颗 Transactions 同样不是库种事实：内核写路径按位分岔的接线位，
+        // 族档领位、三叶同领；"仅厂商文档"档对它也不适用（它的账在 TransactionCapabilityTests）。
+        Assert.Equal(7, declared.Length);
         Assert.Contains(DbCapabilities.Paging_LimitOffset, declared);
         Assert.Contains(DbCapabilities.Guid_Char36, declared);
         Assert.Contains(DbCapabilities.Schemas, declared);
         Assert.Contains(DbCapabilities.Comment_On_Column, declared);
         Assert.Contains(DbCapabilities.Alter_Column_Precision, declared);
+        Assert.Contains(DbCapabilities.Transactions, declared);
 
         // 第 6 颗与另五颗不同档的那一格在这里可指：另五颗每一位都有一段被黄金样本或本套件钉住的文本，
         // 这一颗可指的是 <c>MySqlBulk.ResolveCopyChannel</c> 那颗反射口——它在离线册上返回 null

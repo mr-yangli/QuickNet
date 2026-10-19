@@ -200,7 +200,7 @@ public sealed class SqliteProvider : IDbProvider
     /// 已经立过四次。</summary>
     public DbCapabilities Capabilities =>
         DbCapabilities.Paging_LimitOffset | DbCapabilities.Returning | DbCapabilities.Identity_ExplicitInsert |
-        DbCapabilities.Schemas | DbCapabilities.MultiStatement;
+        DbCapabilities.Schemas | DbCapabilities.MultiStatement | DbCapabilities.Transactions;
 
     public IConnectorFactory Connectors { get; }
 

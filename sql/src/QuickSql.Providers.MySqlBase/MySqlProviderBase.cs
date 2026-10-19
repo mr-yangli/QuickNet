@@ -153,7 +153,8 @@ public abstract class MySqlProviderBase : IDbProvider
     /// 另两家的 <c>LOAD DATA LOCAL</c> 是否等价于本家的实现【未实测】，缺口与 OceanBase 双模那一格并排记 §14。</summary>
     protected static DbCapabilities FamilyCapabilities =>
         DbCapabilities.Paging_LimitOffset | DbCapabilities.Schemas | DbCapabilities.Guid_Char36 |
-        DbCapabilities.Comment_On_Column | DbCapabilities.Alter_Column_Precision | DbCapabilities.Bulk_Copy;
+        DbCapabilities.Comment_On_Column | DbCapabilities.Alter_Column_Precision | DbCapabilities.Bulk_Copy |
+        DbCapabilities.Transactions;
 
     public IConnectorFactory Connectors { get; }
 

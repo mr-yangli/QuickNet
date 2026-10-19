@@ -410,6 +410,22 @@ public sealed partial class AdoExecutor
     {
         ArgumentNullException.ThrowIfNull(cluster);
 
+        // 事务可选那道口（【本笔（ClickHouse 重开·笔一）新增】：公开的 BeginTransaction 第一次要认
+        // DbCapabilities.Transactions 那颗位 —— provider 没声明它，这一格当场抛，照
+        // EnsureDatabaseExistsAsync 那颗 CanCreateDatabase=false 先例的形状与纪律：NotSupportedException
+        // 带明话。严禁静默假事务：没有位的 provider 上"开一条事务再照常发语句"会把 autocommit 引擎
+        // （ClickHouse）读成"每句各自递交"，一次提交的承诺一句都对不上 —— 与其开着一条自己撤不掉的
+        // 空壳（驱动 BeginDbTransaction 会抛、或者撤早撤晚都有人替它圆谎），不如把"没有事务"说成
+        // "没有事务"。写路径不经过这一格：SaveChanges / InsertOrUpdate / DeleteRange 三处先判位再定
+        // 包不包，没有位的那三家走逐句 autocommit 直发（不抛、不开），判据同一颗位分两半读。
+        // 保存点那一支也不用另设铁闸：环境事务只能由这一格开出来，本格先抛之后它在本家不可达——
+        // 也就是说"Requires + 环境事务在场"的嵌套形状在这一家根本到不了保存点那一步。
+        if (!TransactionCapability.Declared(Provider))
+            throw new NotSupportedException(
+                $"Provider {GetType().Name} 不支持事务（{nameof(DbCapabilities.Transactions)} 位未声明）。" +
+                "这一家的事务要么驱动不理解、要么服务端默认不开（如 ClickHouse 的多语句事务是实验档且驱动 BeginDbTransaction 本地抛）：" +
+                "不要在这里开事务——内核写路径已经按这一位改走逐句 autocommit 直发；要一次整批落库，请在库侧用单条语句表达（§6）。");
+
         var ambient = QuickSqlTransaction.Ambient;
 
         // Requires：外层事务在位时，创建保存点而不是新开事务。

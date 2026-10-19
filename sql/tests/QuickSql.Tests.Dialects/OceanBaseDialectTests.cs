@@ -94,7 +94,7 @@ public sealed class OceanBaseDialectTests
 
         Assert.Equal(
             DbCapabilities.Paging_LimitOffset | DbCapabilities.Schemas | DbCapabilities.Guid_Char36 |
-            DbCapabilities.Comment_On_Column | DbCapabilities.Alter_Column_Precision | DbCapabilities.Bulk_Copy,
+            DbCapabilities.Comment_On_Column | DbCapabilities.Alter_Column_Precision | DbCapabilities.Bulk_Copy | DbCapabilities.Transactions,
             Provider.Capabilities);
 
         // 第六颗同样是本笔随血统基类继承的 Bulk_Copy，而它在本家多压一层这一家独有的前件（"先问模式"）：

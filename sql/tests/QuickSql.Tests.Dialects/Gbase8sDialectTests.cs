@@ -817,20 +817,23 @@ public sealed class Gbase8sDialectTests
     // ── 槽位本身：这一档声明了什么、没声明什么 ────────────────────────
 
     [Fact]
-    public void The_family_declares_four_bits_and_the_fewest_of_the_six()
+    public void The_family_declares_five_bits_with_the_new_one_being_the_wiring_bit()
     {
         var declared = Enum.GetValues<DbCapabilities>()
             .Where(static bit => bit != DbCapabilities.None && Provider.Capabilities.HasFlag(bit))
             .ToArray();
 
-        // 4 位是六家里最少的一档（对 5 / 6 / 7 / 14 各家），而这条读法要修正一次：
-        // 它少的那两颗里有一颗是"发了文本而枚举没位"（第四种分页形状），所以这颗 4 不是"这一族只会四件事"，
+        // 原 4 位依旧是六家（现八本）里"库种事实"最少的一档（对 5 / 6 / 7 / 15 各家），而这条读法要修正一次：
+        // 它少的那两颗里有一颗是"发了文本而枚举没位"（第四种分页形状），所以那颗 4 不是"这一族只会四件事"，
         // 是"这一族有四件事我们能拿代码指认"。§14 那一格由此立起来：位掩码从今天起不能读成"这家的分页能力的完整读数"。
-        Assert.Equal(4, declared.Length);
+        // 【本笔（ClickHouse 重开·笔一）】第 5 位是 Transactions：内检索引位（内核按位分岔），不进
+        // "库种事实比多少"那一串 —— 4＋1 两颗一起数完这一格的账。
+        Assert.Equal(5, declared.Length);
         Assert.Contains(DbCapabilities.Schemas, declared);
         Assert.Contains(DbCapabilities.Alter_Column_Precision, declared);
         Assert.Contains(DbCapabilities.CaseSensitive_Identifiers, declared);
         Assert.Contains(DbCapabilities.Guid_Char36, declared);
+        Assert.Contains(DbCapabilities.Transactions, declared);
 
         // 三分页位一位都不报：本家的形状不在那三颗里，而枚举里没有第四颗。
         Assert.DoesNotContain(DbCapabilities.Paging_LimitOffset, declared);

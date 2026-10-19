@@ -84,7 +84,8 @@ public abstract class PostgreSqlProviderBase : IDbProvider
         DbCapabilities.Cte | DbCapabilities.WindowFunctions | DbCapabilities.Count_Over_Window |
         DbCapabilities.Boolean_Type | DbCapabilities.Guid_Raw16 | DbCapabilities.Schemas | DbCapabilities.Json_Type |
         DbCapabilities.CaseSensitive_Identifiers | DbCapabilities.Comment_On_Column |
-        DbCapabilities.Alter_Column_Precision | DbCapabilities.TempTable | DbCapabilities.Bulk_Copy;
+        DbCapabilities.Alter_Column_Precision | DbCapabilities.TempTable | DbCapabilities.Bulk_Copy |
+        DbCapabilities.Transactions;
 
     public IConnectorFactory Connectors { get; }
 

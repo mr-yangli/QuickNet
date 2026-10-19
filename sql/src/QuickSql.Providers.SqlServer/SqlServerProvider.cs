@@ -48,7 +48,7 @@ public sealed class SqlServerProvider : IDbProvider
         DbCapabilities.Schemas | DbCapabilities.Cte | DbCapabilities.WindowFunctions | DbCapabilities.Json_Type |
         DbCapabilities.Bulk_Copy | DbCapabilities.MultiStatement | DbCapabilities.MultiResultSets |
         DbCapabilities.Count_Over_Window | DbCapabilities.Comment_On_Column | DbCapabilities.Alter_Column_Precision |
-        DbCapabilities.TempTable;
+        DbCapabilities.TempTable | DbCapabilities.Transactions;
 
     public IConnectorFactory Connectors { get; }
 

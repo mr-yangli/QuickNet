@@ -166,9 +166,14 @@ sealed class UpdateBulkEngine<T> : IUpdateBulk<T> where T : class
         // 6386 ms ∶ 263 ms，差距全部来自提交次数【实测·obj/logs/fscompare-C.txt S3 的四支诊断档】。
         // UpdateRange 的语句数：并档一行一句、逐条档一行一句，两档在这一点上同形；而 upsert 档<em>一句命令
         // 就是一句</em>（多值 VALUES 是一句），所以那一档的语句数是命令数。判错了就是该包的没包、不必包的白包。
+        // 第四格（【本笔（ClickHouse 重开·笔一）新增】）：provider 声明了 DbCapabilities.Transactions 才包——
+        // 没有位的那一家走逐句 autocommit 直发，整批在库里不原子（中途失败已发的语句不回滚，行为诚实条款
+        // 全文在位注释与用法册）；`UsedTransaction=false` 之类没有谎要圆。
         var statements = method == BulkWriteMethod.Upsert ? plan.Commands.Count : _rows.Length;
 
-        if (BulkAtomicity.ShouldWrap(_atomic, statements) && QuickSqlTransaction.For(_orm.Ado) is null)
+        if (BulkAtomicity.ShouldWrap(_atomic, statements)
+            && TransactionCapability.Declared(_orm.Provider)
+            && QuickSqlTransaction.For(_orm.Ado) is null)
         {
             using var tran = _orm.BeginTransaction(DataSourceRouting.ClusterOf(_contract.Table));
 
@@ -712,7 +717,12 @@ sealed class DeleteBulkEngine<T> : IDeleteBulk<T> where T : class
         // 这条链上的语句数就是命令数：Merged 档一条命令一句 IN 清单，SingleRow 档一条命令一句等值。
         // 所以"包不包"在这里几乎永远是假——一句 IN 删两万颗键本身就原子，包它只多付两次往返。
         // 真会包的只有键数超出一句的预算、这批被切成两句以上那一种（SQL Server 2100 颗那句的宽度最小）。
-        if (BulkAtomicity.ShouldWrap(_atomic, plan.Commands.Count) && QuickSqlTransaction.For(_orm.Ado) is null)
+        // 这一档的第四格与 UpdateBulk 那一处同一条（【本笔（ClickHouse 重开·笔一）新增】）：provider 声明了
+        // DbCapabilities.Transactions 才包，没有位的那一家逐句 autocommit 直发（包不包的诚实那一半，
+        // 在位注释与用法册）。
+        if (BulkAtomicity.ShouldWrap(_atomic, plan.Commands.Count)
+            && TransactionCapability.Declared(_orm.Provider)
+            && QuickSqlTransaction.For(_orm.Ado) is null)
         {
             using var tran = _orm.BeginTransaction(DataSourceRouting.ClusterOf(_contract.Table));
 

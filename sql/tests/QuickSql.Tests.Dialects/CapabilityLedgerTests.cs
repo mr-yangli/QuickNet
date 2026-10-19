@@ -1,4 +1,4 @@
-using QuickSql.Metadata;
+﻿using QuickSql.Metadata;
 using QuickSql.Providers;
 using QuickSql.TestInfra;
 using Xunit;
@@ -191,7 +191,7 @@ public sealed class CapabilityLedgerTests
 
     static readonly Ledger[] Ledgers =
     [
-        new("kingbase", static () => Kingbase.Provider(SqlServer.NoDriverFactory.Instance), 15, 7, 0,
+        new("kingbase", static () => Kingbase.Provider(SqlServer.NoDriverFactory.Instance), 16, 7, 0,
         [
             new(DbCapabilities.Paging_LimitOffset, Provenance.OfflineText, "golden/kingbase/paging-order-skip-take.sql"),
             new(DbCapabilities.Returning, Provenance.OfflineText, "golden/kingbase/insert-with-keys.sql"),
@@ -223,6 +223,12 @@ public sealed class CapabilityLedgerTests
             // 而它这一位本笔已翻 <c>Live</c>。金仓自己那半句照旧成立——本家一台活库都没有，所以它翻不了档；
             // 能与它并排的是 opengauss／gaussdb／highgo／gbase8c 那四本。这句的数量词按本笔改读，判据一字不动。</b>
             new(DbCapabilities.Bulk_Copy, Provenance.VendorDoc, "无活库：装载通道已接线（血统那颗反射口），COPY … FROM STDIN 那一句一次都没发出去过"),
+            // 【本笔（ClickHouse 重开·笔一）把一颗位挂到这一本上】 Transactions：它不是库种分岔，是内检索引位——
+            // 内核写路径（SaveChanges/InsertOrUpdate/批量）从此先判这一位再定包不包事务，公开的 BeginTransaction
+            // 没有位就抛 NotSupportedException。每一本在这里各记各的账：这一位由本家自己领名声明，而"库里接不接受
+            // 多语句事务"仍然是各家的活库账——本家今天的活库见证是 0，所以落 VendorDoc；行为诚实条款全文住在
+            // 位注释与用法册 §2.4，三处同源，改判必须三处一起动。
+            new(DbCapabilities.Transactions, Provenance.VendorDoc, "内检索引位（内核写路径按位分岔的那份账）：多语句事务在库里成不成立由各血统的文档口径与活库见证记账，本家今天仍在『未实测』那半本上"),
         ]),
 
         // PG 血统的第二本台账（v0.36 第二笔，openGauss 叶子到场）。"一本 provider 一份"的第三次复用，
@@ -235,7 +241,7 @@ public sealed class CapabilityLedgerTests
         // 本家比 tidb 那本多一颗<em>点名过的</em>【推断】前件：血统发的 IDENTITY 那一形在 PG 9.2 内核上
         // 可能整个不认（PostgreSqlCodeFirst 类注释自陈），所以 DDL 段那三位的 OfflineText 在本家读作
         // "若这一家认得血统今天发的形状则文本同形"——真库到场第一问记 §14 与本家类注释。
-        new("opengauss", static () => OpenGauss.Provider(SqlServer.NoDriverFactory.Instance), 15, 7, 0,
+        new("opengauss", static () => OpenGauss.Provider(SqlServer.NoDriverFactory.Instance), 16, 7, 0,
         [
             new(DbCapabilities.Paging_LimitOffset, Provenance.OfflineText, "OpenGaussDialectTests 那条 LIMIT/OFFSET 尾巴与只写 OFFSET 不补哨兵、与金仓家逐字相等的断言（同形交对拍，故无基线）"),
             new(DbCapabilities.Returning, Provenance.OfflineText, "OpenGaussDialectTests 键回读那条句尾 RETURNING 与金仓家逐字相等的断言（与 tidb/oceanbase 的\"语句后另发一句\"正对面）"),
@@ -259,6 +265,12 @@ public sealed class CapabilityLedgerTests
             // "代码接了而装载语句一次没发过"）。它与本家那颗 9.2 内核代数的【推断】前件同一档：两问都要真实例
             // 才答得出，而这一问的来路是反射口、不是厂商行。
             new(DbCapabilities.Bulk_Copy, Provenance.VendorDoc, "无活库：装载通道已接线（血统那颗反射口），COPY … FROM STDIN 那一句一次都没发出去过"),
+            // 【本笔（ClickHouse 重开·笔一）把一颗位挂到这一本上】 Transactions：它不是库种分岔，是内检索引位——
+            // 内核写路径（SaveChanges/InsertOrUpdate/批量）从此先判这一位再定包不包事务，公开的 BeginTransaction
+            // 没有位就抛 NotSupportedException。每一本在这里各记各的账：这一位由本家自己领名声明，而"库里接不接受
+            // 多语句事务"仍然是各家的活库账——本家今天的活库见证是 0，所以落 VendorDoc；行为诚实条款全文住在
+            // 位注释与用法册 §2.4，三处同源，改判必须三处一起动。
+            new(DbCapabilities.Transactions, Provenance.VendorDoc, "内检索引位（内核写路径按位分岔的那份账）：多语句事务在库里成不成立由各血统的文档口径与活库见证记账，本家今天仍在『未实测』那半本上"),
         ]),
 
         // PG 血统的第三本台账（v0.36 第三笔，GaussDB 叶子到场 —— 行 904「到场即照本行再挂」裁决的落地）。
@@ -272,7 +284,7 @@ public sealed class CapabilityLedgerTests
         // GaussDB 自己分发的托管驱动连名字都没有入账读数，DDL 段那三位的 OfflineText 在本册读作
         // "若这一家认得血统今天发的形状则文本同形"，而"认不认"那一问前面还压着"这台库与 openGauss
         // 是不是同一套文本假设"——两问都记 §14 与本家类注释。
-        new("gaussdb", static () => GaussDb.Provider(SqlServer.NoDriverFactory.Instance), 15, 7, 0,
+        new("gaussdb", static () => GaussDb.Provider(SqlServer.NoDriverFactory.Instance), 16, 7, 0,
         [
             new(DbCapabilities.Paging_LimitOffset, Provenance.OfflineText, "GaussDbDialectTests 那条 LIMIT/OFFSET 尾巴与只写 OFFSET 不补哨兵、与金仓家逐字相等的断言（同形交对拍，故无基线）"),
             new(DbCapabilities.Returning, Provenance.OfflineText, "GaussDbDialectTests 键回读那条句尾 RETURNING 与金仓家逐字相等的断言（两颗分叉叶互读的成功侧另有一格）"),
@@ -296,6 +308,12 @@ public sealed class CapabilityLedgerTests
             // "代码接了而装载语句一次没发过"）。它在本家比 openGauss 本在这一位上多压一层：那一家至少有一条
             // "厂商分发的是 Npgsql 的 fork"的行级说法，GaussDB 连自家托管驱动的名字都没有入账读数。
             new(DbCapabilities.Bulk_Copy, Provenance.VendorDoc, "无活库：装载通道已接线（血统那颗反射口），COPY … FROM STDIN 那一句一次都没发出去过（本家连驱动名字都没有读数）"),
+            // 【本笔（ClickHouse 重开·笔一）把一颗位挂到这一本上】 Transactions：它不是库种分岔，是内检索引位——
+            // 内核写路径（SaveChanges/InsertOrUpdate/批量）从此先判这一位再定包不包事务，公开的 BeginTransaction
+            // 没有位就抛 NotSupportedException。每一本在这里各记各的账：这一位由本家自己领名声明，而"库里接不接受
+            // 多语句事务"仍然是各家的活库账——本家今天的活库见证是 0，所以落 VendorDoc；行为诚实条款全文住在
+            // 位注释与用法册 §2.4，三处同源，改判必须三处一起动。
+            new(DbCapabilities.Transactions, Provenance.VendorDoc, "内检索引位（内核写路径按位分岔的那份账）：多语句事务在库里成不成立由各血统的文档口径与活库见证记账，本家今天仍在『未实测』那半本上"),
         ]),
 
         // PG 血统的第四本台账（v0.36 第四笔，瀚高 HighGo 叶子到场）。"一本 provider 一份"的第五次复用，
@@ -305,7 +323,7 @@ public sealed class CapabilityLedgerTests
         // 形状则文本同形"，而"认不认"连行级前件都没有，真实例第一问是"兼容的是哪一代 PG"（§14 行 2044
         // 本笔换主语处）。七颗 OfflineText 全部落在 HighgoDialectTests 的逐字相等断言上，其中两两互读
         // 补满格让血统四叶的 C(4,2)=6 条边至此每条至少一颗见证。
-        new("highgo", static () => Highgo.Provider(SqlServer.NoDriverFactory.Instance), 15, 7, 0,
+        new("highgo", static () => Highgo.Provider(SqlServer.NoDriverFactory.Instance), 16, 7, 0,
         [
             new(DbCapabilities.Paging_LimitOffset, Provenance.OfflineText, "HighgoDialectTests 那条 LIMIT/OFFSET 尾巴与只写 OFFSET 不补哨兵、与金仓家逐字相等的断言（同形交对拍，故无基线）"),
             new(DbCapabilities.Returning, Provenance.OfflineText, "HighgoDialectTests 键回读那条句尾 RETURNING 与金仓家逐字相等的断言（血统两两互读补满的六条边各含此形）"),
@@ -329,6 +347,12 @@ public sealed class CapabilityLedgerTests
             // "代码接了而装载语句一次没发过"）。本家那句"整本没有行级前件"由它<em>不被推翻</em>：那一格量的是
             // 厂商行点没点名，而这一位的前件住在反射口里，行 907 对它一个字都没有说过。
             new(DbCapabilities.Bulk_Copy, Provenance.VendorDoc, "无活库：装载通道已接线（血统那颗反射口），COPY … FROM STDIN 那一句一次都没发出去过"),
+            // 【本笔（ClickHouse 重开·笔一）把一颗位挂到这一本上】 Transactions：它不是库种分岔，是内检索引位——
+            // 内核写路径（SaveChanges/InsertOrUpdate/批量）从此先判这一位再定包不包事务，公开的 BeginTransaction
+            // 没有位就抛 NotSupportedException。每一本在这里各记各的账：这一位由本家自己领名声明，而"库里接不接受
+            // 多语句事务"仍然是各家的活库账——本家今天的活库见证是 0，所以落 VendorDoc；行为诚实条款全文住在
+            // 位注释与用法册 §2.4，三处同源，改判必须三处一起动。
+            new(DbCapabilities.Transactions, Provenance.VendorDoc, "内检索引位（内核写路径按位分岔的那份账）：多语句事务在库里成不成立由各血统的文档口径与活库见证记账，本家今天仍在『未实测』那半本上"),
         ]),
 
         // 第十一本台账（v0.36 第六笔，GBase 8c 叶子到场）。PG 血统的第五本，"一本 provider 一份"的第七次复用，
@@ -338,7 +362,7 @@ public sealed class CapabilityLedgerTests
         // "与 openGauss 高度相似"，所以那一问要两跳才落到本家头上（本行→邻家行→内核代数）。同一句
         // "若这一家认得血统今天发的形状则文本同形"，第一次是替邻家问的。七颗 OfflineText 全部落在
         // Gbase8cDialectTests 的逐字相等断言上，其中两两互读那一格把血统五叶的 C(5,2)=10 条边补满（一册四条）。
-        new("gbase8c", static () => Gbase8c.Provider(SqlServer.NoDriverFactory.Instance), 15, 7, 0,
+        new("gbase8c", static () => Gbase8c.Provider(SqlServer.NoDriverFactory.Instance), 16, 7, 0,
         [
             new(DbCapabilities.Paging_LimitOffset, Provenance.OfflineText, "Gbase8cDialectTests 那条 LIMIT/OFFSET 尾巴与只写 OFFSET 不补哨兵、与金仓家逐字相等的断言（同形交对拍，故无基线）"),
             new(DbCapabilities.Returning, Provenance.OfflineText, "Gbase8cDialectTests 键回读那条句尾 RETURNING 与金仓家逐字相等的断言（血统两两互读补满的十条边各含此形）"),
@@ -362,6 +386,12 @@ public sealed class CapabilityLedgerTests
             // "代码接了而装载语句一次没发过"）。本家那颗"前件是转引来的"在这一位上第二次兑现：行 905 对驱动
             // 只说了"与 openGauss 高度相似"，所以"这台驱动里有没有导入器"要两跳才落到本家，而两跳之后没有活库替它答。
             new(DbCapabilities.Bulk_Copy, Provenance.VendorDoc, "无活库：装载通道已接线（血统那颗反射口），COPY … FROM STDIN 那一句一次都没发出去过（本家那一问要经邻家那一行才问得出）"),
+            // 【本笔（ClickHouse 重开·笔一）把一颗位挂到这一本上】 Transactions：它不是库种分岔，是内检索引位——
+            // 内核写路径（SaveChanges/InsertOrUpdate/批量）从此先判这一位再定包不包事务，公开的 BeginTransaction
+            // 没有位就抛 NotSupportedException。每一本在这里各记各的账：这一位由本家自己领名声明，而"库里接不接受
+            // 多语句事务"仍然是各家的活库账——本家今天的活库见证是 0，所以落 VendorDoc；行为诚实条款全文住在
+            // 位注释与用法册 §2.4，三处同源，改判必须三处一起动。
+            new(DbCapabilities.Transactions, Provenance.VendorDoc, "内检索引位（内核写路径按位分岔的那份账）：多语句事务在库里成不成立由各血统的文档口径与活库见证记账，本家今天仍在『未实测』那半本上"),
         ]),
 
         // 第十三本台账（v0.37 第二笔，PostgreSQL 本尊叶到场）。PG 血统的第六本、"一本 provider 一份"的第八次复用，
@@ -379,7 +409,7 @@ public sealed class CapabilityLedgerTests
         // 它是本仓库自己算的【推断】，而那一层下面 <c>PostgreSqlProvider</c> 类注释第三段与方言测试的版本格各钉一份。
         // 所以"零覆写的正典叶"在本家第一次带<em>代价</em>：正典叶对齐的是最老那一侧，而 MySQL 本尊对齐的是最新
         // 那一侧（8.0 的 <c>VALUES()</c> 读法），两颗本尊同为零覆写而选型方向相反。
-        new("postgresql", static () => PostgreSql.Provider(SqlServer.NoDriverFactory.Instance), 15, 7, 1,
+        new("postgresql", static () => PostgreSql.Provider(SqlServer.NoDriverFactory.Instance), 16, 7, 1,
         [
             new(DbCapabilities.Paging_LimitOffset, Provenance.OfflineText, "PostgreSqlDialectTests 那条 LIMIT/OFFSET 尾巴与只写 OFFSET 不补哨兵、与金仓家逐字相等的断言（同形交对拍，故无基线）"),
             new(DbCapabilities.Returning, Provenance.OfflineText, "PostgreSqlDialectTests 键回读那条句尾 RETURNING 与金仓家逐字相等的断言（血统两两互读补满的十五条边各含此形）"),
@@ -420,12 +450,18 @@ public sealed class CapabilityLedgerTests
             // 独立 AssemblyLoadContext → 工厂 → 反射装配那条链，厂商包 Npgsql 在本家是真解析成功的一支。
             // 五本里其余四本（opengauss／gaussdb／highgo／gbase8c）的理由一字不动——它们一台活库都没有。
             new(DbCapabilities.Bulk_Copy, Provenance.Live, "装载语句在本家真库发出去了：集成册 BulkPathTests 整本全绿，钉的是点名 CopyChannel 那一条交回 L1（另有通道与文本层同批行、行序两颗钉）【obj/logs/v40-postgresql-integration-fix1.log】；2 000 行 copy 32ms ∶ l3 106ms 只记账"),
+            // 【本笔（ClickHouse 重开·笔一）把一颗位挂到这一本上】 Transactions：它不是库种分岔，是内检索引位——
+            // 内核写路径（SaveChanges/InsertOrUpdate/批量）从此先判这一位再定包不包事务，公开的 BeginTransaction
+            // 没有位就抛 NotSupportedException。每一本在这里各记各的账：这一位由本家自己领名声明，而"库里接不接受
+            // 多语句事务"仍然是各家的活库账——本家今天的活库见证是 0，所以落 VendorDoc；行为诚实条款全文住在
+            // 位注释与用法册 §2.4，三处同源，改判必须三处一起动。
+            new(DbCapabilities.Transactions, Provenance.VendorDoc, "内检索引位（内核写路径按位分岔的那份账）：多语句事务在库里成不成立由各血统的文档口径与活库见证记账，本家今天仍在『未实测』那半本上"),
         ]),
 
         // 第三族：这一家<em>只声明今天真的产得出文本的那几位</em>（§4 那份"能力位是声明，
         // 但没消费者就不许顺手加"的口径在这里被执行得比金仓那一档更严）。差异本身记在 §4 与
         // OracleProviderBase 的类注释里，那两处的说法是"待与金仓档一起收敛"，不是"这一家少了"。
-        new("dameng", static () => Dameng.Provider(SqlServer.NoDriverFactory.Instance), 6, 6, 0,
+        new("dameng", static () => Dameng.Provider(SqlServer.NoDriverFactory.Instance), 7, 6, 0,
         [
             new(DbCapabilities.Paging_RowNum, Provenance.OfflineText, "golden/dameng/paging-order-skip-take.sql"),
             new(DbCapabilities.CaseSensitive_Identifiers, Provenance.OfflineText, "golden/dameng/select-entity.sql"),
@@ -441,6 +477,12 @@ public sealed class CapabilityLedgerTests
             // 这一家<em>没有</em> VendorDoc 那一档的位（6 位全部有离线见证），而这不是运气：
             // OracleProviderBase 那份掩码是按"今天真产得出文本的位"逐个攒出来的，不是照 §4 那张表抄的。
             // 与金仓那 7 位的对照记在下面的交集用例与 §4 —— 那一档里躺着七位"文档说有、代码没接"的声明。
+            // 【本笔（ClickHouse 重开·笔一）把一颗位挂到这一本上】 Transactions：它不是库种分岔，是内检索引位——
+            // 内核写路径（SaveChanges/InsertOrUpdate/批量）从此先判这一位再定包不包事务，公开的 BeginTransaction
+            // 没有位就抛 NotSupportedException。每一本在这里各记各的账：这一位由本家自己领名声明，而"库里接不接受
+            // 多语句事务"仍然是各家的活库账——本家今天的活库见证是 0，所以落 VendorDoc；行为诚实条款全文住在
+            // 位注释与用法册 §2.4，三处同源，改判必须三处一起动。
+            new(DbCapabilities.Transactions, Provenance.VendorDoc, "内检索引位（内核写路径按位分岔的那份账）：多语句事务在库里成不成立由各血统的文档口径与活库见证记账，本家今天仍在『未实测』那半本上"),
         ]),
 
         // Oracle 血统的第二本台账（v0.36 第五笔，神通叶子到场）。它是这一族第一次"同掩码的两本"，
@@ -449,7 +491,7 @@ public sealed class CapabilityLedgerTests
         // 六位的攒法与达梦本同一句原话（掩码是按"今天真产得出文本的位"攒的，不是照 §4 抄），VendorDoc 照旧 0 位；
         // 本册见证全部指 ShenTongDialectTests 的断言而不是文件名——这一族没有 golden/shentong/，同形交对拍
         // （leaf == 血统），跨叶那格异形由点名的替换用例量，不进恒等式对拍表。
-        new("shentong", static () => ShenTong.Provider(SqlServer.NoDriverFactory.Instance), 6, 6, 0,
+        new("shentong", static () => ShenTong.Provider(SqlServer.NoDriverFactory.Instance), 7, 6, 0,
         [
             new(DbCapabilities.Paging_RowNum, Provenance.OfflineText, "ShenTongDialectTests 那条两层 ROWNUM 伪列的断言（同形交对拍，故无基线）"),
             new(DbCapabilities.CaseSensitive_Identifiers, Provenance.OfflineText, "ShenTongDialectTests 那条双引号折大写 select 的断言"),
@@ -464,6 +506,12 @@ public sealed class CapabilityLedgerTests
             // 与达梦同一型（CHAR(36)）、同一句判据（这一族没有原生 uuid），而本家是这条主张的第二颗叶子见证：
             // "Oracle 侧落 CHAR(36)"从一家一句变成两家一句，存得省不省那一半照旧两家一起欠。
             new(DbCapabilities.Guid_Char36, Provenance.OfflineText, "ShenTongDialectTests 那条 CHAR(36) 断言"),
+            // 【本笔（ClickHouse 重开·笔一）把一颗位挂到这一本上】 Transactions：它不是库种分岔，是内检索引位——
+            // 内核写路径（SaveChanges/InsertOrUpdate/批量）从此先判这一位再定包不包事务，公开的 BeginTransaction
+            // 没有位就抛 NotSupportedException。每一本在这里各记各的账：这一位由本家自己领名声明，而"库里接不接受
+            // 多语句事务"仍然是各家的活库账——本家今天的活库见证是 0，所以落 VendorDoc；行为诚实条款全文住在
+            // 位注释与用法册 §2.4，三处同源，改判必须三处一起动。
+            new(DbCapabilities.Transactions, Provenance.VendorDoc, "内检索引位（内核写路径按位分岔的那份账）：多语句事务在库里成不成立由各血统的文档口径与活库见证记账，本家今天仍在『未实测』那半本上"),
         ]),
 
         // Oracle 血统的第三本台账（v0.37 第三笔，本尊叶到场）。它是这一族第一颗"本尊比它的派生更接近
@@ -476,7 +524,7 @@ public sealed class CapabilityLedgerTests
         // 本册没有 golden/oracle/：这一族的黄金基线是 golden/dameng/ 那 18 份，被派生叶占着——"哪一族的第一份
         // 产物是谁"这一格今天有第二个答案（PG 族是金仓，Oracle 族是达梦），而同形交给逐字对读这条处置不改。
         // 掩码 6 位、VendorDoc 0 位，与前两本同源于一颗 FamilyCapabilities；本笔一位不翻案、不添。
-        new("oracle", static () => Oracle.Provider(SqlServer.NoDriverFactory.Instance), 6, 6, 0,
+        new("oracle", static () => Oracle.Provider(SqlServer.NoDriverFactory.Instance), 7, 6, 0,
         [
             new(DbCapabilities.Paging_RowNum, Provenance.OfflineText, "OracleDialectTests 那条两层 ROWNUM 伪列与血统探针逐字相等的断言（同形交逐字对读，故无基线）"),
             new(DbCapabilities.CaseSensitive_Identifiers, Provenance.OfflineText, "OracleDialectTests 那条双引号折大写 select 与血统探针逐字相等的断言（本尊与血统读的是同一颗 IdentifierPolicy.OracleFamily）"),
@@ -492,6 +540,12 @@ public sealed class CapabilityLedgerTests
             // 前两本说的是"复述血统的那一家没有"，本本说的是"那一族自己"没有——"16 字节存储往返"那一半照旧欠着，
             // 而本家连"库里有 BINARY(16) 那一档"都没有读数可借。
             new(DbCapabilities.Guid_Char36, Provenance.OfflineText, "OracleDialectTests 那条 CHAR(36) 断言（同族第三本同一格主张）"),
+            // 【本笔（ClickHouse 重开·笔一）把一颗位挂到这一本上】 Transactions：它不是库种分岔，是内检索引位——
+            // 内核写路径（SaveChanges/InsertOrUpdate/批量）从此先判这一位再定包不包事务，公开的 BeginTransaction
+            // 没有位就抛 NotSupportedException。每一本在这里各记各的账：这一位由本家自己领名声明，而"库里接不接受
+            // 多语句事务"仍然是各家的活库账——本家今天的活库见证是 0，所以落 VendorDoc；行为诚实条款全文住在
+            // 位注释与用法册 §2.4，三处同源，改判必须三处一起动。
+            new(DbCapabilities.Transactions, Provenance.VendorDoc, "内检索引位（内核写路径按位分岔的那份账）：多语句事务在库里成不成立由各血统的文档口径与活库见证记账，本家今天仍在『未实测』那半本上"),
         ]),
 
         // 第四族：掩码最少的一档（5 位），而 VendorDoc 那一档同样是 0 位 —— 与第三家同一判据攒出来的，
@@ -511,7 +565,7 @@ public sealed class CapabilityLedgerTests
         // 【同段的 sqlite 那一半照旧】sqlite 那本带的 1 位是 <c>MultiStatement</c>，它本来就是 Live 档的 DDL 见证，
         // 不随本笔动。"各带 1 位、同数而异因"这句的两侧数字从今天起不再相等：1 ∶ 0。
         // </b>
-        new("mysql", static () => MySql.Provider(SqlServer.NoDriverFactory.Instance), 6, 5, 1,
+        new("mysql", static () => MySql.Provider(SqlServer.NoDriverFactory.Instance), 7, 5, 1,
         [
             // 这一位没有本家基线：它的产出与金仓那一族只差引号字形（同一套尾巴），按 §13.3 那句"同形交给对拍"。
             // 所以见证是 MySqlDialectTests 里那句 LIMIT/OFFSET 断言，而不是一个文件名 —— 台账接受这两种形状。
@@ -550,6 +604,12 @@ public sealed class CapabilityLedgerTests
             // 【实测·obj/logs/v40-mysql-integration-fix1.log】。上面那句"翻档的那天它带着日志名往上走一档"因此兑现，
             // 而它的"与虚谷那四位同一判据"这一半也一并兑现：本家这一位现在与那四位走的是同一格判据。
             new(DbCapabilities.Bulk_Copy, Provenance.Live, "集成册 BulkPathTests 在本家全绿（obj/logs/v40-mysql-integration-fix1.log）；钉的是那条 Never 档交回 CopyChannel ∶ 不降级 ∶ 无留痕 ∶ 库里有五行那一条，另有同一事务可见性一条与三趟复跑耗时【v40-my-bulk-repeat-{1,2,3}.log】"),
+            // 【本笔（ClickHouse 重开·笔一）把一颗位挂到这一本上】 Transactions：它不是库种分岔，是内检索引位——
+            // 内核写路径（SaveChanges/InsertOrUpdate/批量）从此先判这一位再定包不包事务，公开的 BeginTransaction
+            // 没有位就抛 NotSupportedException。每一本在这里各记各的账：这一位由本家自己领名声明，而"库里接不接受
+            // 多语句事务"仍然是各家的活库账——本家今天的活库见证是 0，所以落 VendorDoc；行为诚实条款全文住在
+            // 位注释与用法册 §2.4，三处同源，改判必须三处一起动。
+            new(DbCapabilities.Transactions, Provenance.VendorDoc, "内检索引位（内核写路径按位分岔的那份账）：多语句事务在库里成不成立由各血统的文档口径与活库见证记账，本家今天仍在『未实测』那半本上"),
         ]),
 
         // MySQL 血统的第二本台账（v0.35 第三笔，TiDB 叶子到场）。它是这本账的第一例<b>逐位同掩码的两份</b>：
@@ -559,7 +619,7 @@ public sealed class CapabilityLedgerTests
         // 这一本没有 golden/tidb/ 文件可指（同形交对拍走到极端：连引号字形都不差），
         // 五颗<em>文本</em>见证全部落在 TiDbDialectTests 的逐字相等断言上——台账接受这种形状，先例就是上面
         // mysql 自己那本的第一行（"同形交对拍，故无基线"）。
-        new("tidb", static () => TiDb.Provider(SqlServer.NoDriverFactory.Instance), 6, 5, 0,
+        new("tidb", static () => TiDb.Provider(SqlServer.NoDriverFactory.Instance), 7, 5, 0,
         [
             new(DbCapabilities.Paging_LimitOffset, Provenance.OfflineText, "TiDbDialectTests 那条尾巴两子句与 2^64−1 哨兵和 mysql 家逐字相等的断言（同形交对拍，故无基线）"),
             new(DbCapabilities.Schemas, Provenance.OfflineText, "TiDbDialectTests DDL 段那条带模式建表限定不折叠、与 mysql 家逐字相等的断言"),
@@ -572,6 +632,12 @@ public sealed class CapabilityLedgerTests
             // 连驱动解析都没跑过，比邻本少一档读数）。它因此与 tidb 那五颗同档而更虚：五颗是"文本钉住、库没证"，
             // 这一颗是"文本都没有、只有那段反射装配在场"。
             new(DbCapabilities.Bulk_Copy, Provenance.VendorDoc, "随血统继承同一颗反射口（MySqlBulk.ResolveCopyChannel），本家无驱动解析读数：装载那一路连一次都没跑过"),
+            // 【本笔（ClickHouse 重开·笔一）把一颗位挂到这一本上】 Transactions：它不是库种分岔，是内检索引位——
+            // 内核写路径（SaveChanges/InsertOrUpdate/批量）从此先判这一位再定包不包事务，公开的 BeginTransaction
+            // 没有位就抛 NotSupportedException。每一本在这里各记各的账：这一位由本家自己领名声明，而"库里接不接受
+            // 多语句事务"仍然是各家的活库账——本家今天的活库见证是 0，所以落 VendorDoc；行为诚实条款全文住在
+            // 位注释与用法册 §2.4，三处同源，改判必须三处一起动。
+            new(DbCapabilities.Transactions, Provenance.VendorDoc, "内检索引位（内核写路径按位分岔的那份账）：多语句事务在库里成不成立由各血统的文档口径与活库见证记账，本家今天仍在『未实测』那半本上"),
         ]),
 
         // MySQL 血统的第三本台账（v0.35 第四笔，OceanBase 的 MySQL 模叶子到场）。它是"一本 provider 一份"
@@ -581,7 +647,7 @@ public sealed class CapabilityLedgerTests
         // 这一家比 tidb 那本多一层<em>表达不出来</em>的前件："模式在连接上决定"（§9.1），本本的每一颗
         // OfflineText 都读作"若连接在 MySQL 模则文本同形"——SPI 没有那一格（§14 的参数名单，第二个实例），
         // 所以这一格前件只能记在注释里，这本账因此也是六本里唯一一本每一行都自带悬条件的。
-        new("oceanbase", static () => OceanBase.Provider(SqlServer.NoDriverFactory.Instance), 6, 5, 0,
+        new("oceanbase", static () => OceanBase.Provider(SqlServer.NoDriverFactory.Instance), 7, 5, 0,
         [
             new(DbCapabilities.Paging_LimitOffset, Provenance.OfflineText, "OceanBaseDialectTests 那条尾巴两子句与 2^64−1 哨兵和 mysql 家逐字相等的断言（同形交对拍，故无基线）"),
             new(DbCapabilities.Schemas, Provenance.OfflineText, "OceanBaseDialectTests DDL 段那条带模式建表限定不折叠、与 mysql 家逐字相等的断言"),
@@ -593,6 +659,12 @@ public sealed class CapabilityLedgerTests
             // 每一行都读作"若连接在 MySQL 模则…"，装载那一路因此要先过"模式在连接上决定"那道闸，
             // 而它今天连被问的资格都还没排到（本家一台实例都没有）。
             new(DbCapabilities.Bulk_Copy, Provenance.VendorDoc, "随血统继承同一颗反射口（MySqlBulk.ResolveCopyChannel），本家无驱动解析读数：装载那一路在 MySQL 模下成不成立没人证过"),
+            // 【本笔（ClickHouse 重开·笔一）把一颗位挂到这一本上】 Transactions：它不是库种分岔，是内检索引位——
+            // 内核写路径（SaveChanges/InsertOrUpdate/批量）从此先判这一位再定包不包事务，公开的 BeginTransaction
+            // 没有位就抛 NotSupportedException。每一本在这里各记各的账：这一位由本家自己领名声明，而"库里接不接受
+            // 多语句事务"仍然是各家的活库账——本家今天的活库见证是 0，所以落 VendorDoc；行为诚实条款全文住在
+            // 位注释与用法册 §2.4，三处同源，改判必须三处一起动。
+            new(DbCapabilities.Transactions, Provenance.VendorDoc, "内检索引位（内核写路径按位分岔的那份账）：多语句事务在库里成不成立由各血统的文档口径与活库见证记账，本家今天仍在『未实测』那半本上"),
         ]),
 
         // 第五族：7 位、VendorDoc 那一档仍然是 0，与前两家同一把尺（"代码今天真的走到那一条语句"）。
@@ -608,7 +680,7 @@ public sealed class CapabilityLedgerTests
         // <c>-utf8.log</c> 那两场的 G-10 逐句段，六份基线合 10 颗语句、8 通 2 红（红的两颗同属下面 <c>Schemas</c>
         // 那一位，所以它没翻）。<b>翻格时原文一句没删</b>：那四行的 <c>OfflineText</c> 措辞与它们各自的理由仍然成立，
         // 只是它们现在不再是这一位的最高档 —— 与 §13.5 那本活库见证账同一取向，一档一档往上走，不跳。
-        new("xugu", static () => Xugu.Provider(SqlServer.NoDriverFactory.Instance), 7, 3, 4,
+        new("xugu", static () => Xugu.Provider(SqlServer.NoDriverFactory.Instance), 8, 3, 4,
         [
             // 尾巴两子句，与金仓、MySQL 同边，而"只有 OFFSET"那一档它补的是<em>厂商写死的天花板</em>
             // （2147483647），不是 MySQL 那颗 2^64−1 —— 所以这一位有自己的一份基线，不是对拍代钉。
@@ -659,6 +731,12 @@ public sealed class CapabilityLedgerTests
             // （五颗候选读法逐颗发过，见 <c>XuguSchemaReader</c> 类注释那条【实测·不可问】），
             // 所以"建出来即大写"在这一台是实测，在另一台 POSTGRESQL 兼容档的实例上仍然是推断。
             new(DbCapabilities.CaseSensitive_Identifiers, Provenance.Live, "golden/xugu/ddl-order.sql"),
+            // 【本笔（ClickHouse 重开·笔一）把一颗位挂到这一本上】 Transactions：它不是库种分岔，是内检索引位——
+            // 内核写路径（SaveChanges/InsertOrUpdate/批量）从此先判这一位再定包不包事务，公开的 BeginTransaction
+            // 没有位就抛 NotSupportedException。每一本在这里各记各的账：这一位由本家自己领名声明，而"库里接不接受
+            // 多语句事务"仍然是各家的活库账——本家今天的活库见证是 0，所以落 VendorDoc；行为诚实条款全文住在
+            // 位注释与用法册 §2.4，三处同源，改判必须三处一起动。
+            new(DbCapabilities.Transactions, Provenance.VendorDoc, "内检索引位（内核写路径按位分岔的那份账）：多语句事务在库里成不成立由各血统的文档口径与活库见证记账，本家今天仍在『未实测』那半本上"),
         ]),
 
         // 第十二本台账（v0.37 第一笔，GBase 8s 叶子到场，Informix 血统的第一颗）。它是这本账第一次<b>变小</b>：
@@ -675,7 +753,7 @@ public sealed class CapabilityLedgerTests
         // 也是第一本"有分页产出而分页声明位为零"的（<c>SELECT FIRST n SKIP m</c> 每发一句都报不出，
         // 理由在 <c>Gbase8sProvider</c> 类注释第四段，不在这里重述）。4/4/0 三颗计数里那颗 0 是实况：
         // 没有驱动包也没有授权实例，本家的每一行读到今天都是"文本钉住了"，没有一行是"库里接得住"。
-        new("gbase8s", static () => Gbase8s.Provider(SqlServer.NoDriverFactory.Instance), 4, 4, 0,
+        new("gbase8s", static () => Gbase8s.Provider(SqlServer.NoDriverFactory.Instance), 5, 4, 0,
         [
             // 这一位在本家读作"所有者"而不是"模式"（<c>Gbase8sSchemaReader</c> 那道 <c>t.owner</c> 闸），
             // 而发射口是同一个，所以见证仍然是一份基线；限定名不折叠那半句写在本家方言测试的 DDL 段。
@@ -690,6 +768,12 @@ public sealed class CapabilityLedgerTests
             new(DbCapabilities.CaseSensitive_Identifiers, Provenance.OfflineText, "golden/gbase8s/select-entity.sql"),
 
             new(DbCapabilities.Guid_Char36, Provenance.OfflineText, "Gbase8sDialectTests 那条 CHAR(36) 断言（本家无原生 uuid 型也无取号函数，档位【文档·IBM】）"),
+            // 【本笔（ClickHouse 重开·笔一）把一颗位挂到这一本上】 Transactions：它不是库种分岔，是内检索引位——
+            // 内核写路径（SaveChanges/InsertOrUpdate/批量）从此先判这一位再定包不包事务，公开的 BeginTransaction
+            // 没有位就抛 NotSupportedException。每一本在这里各记各的账：这一位由本家自己领名声明，而"库里接不接受
+            // 多语句事务"仍然是各家的活库账——本家今天的活库见证是 0，所以落 VendorDoc；行为诚实条款全文住在
+            // 位注释与用法册 §2.4，三处同源，改判必须三处一起动。
+            new(DbCapabilities.Transactions, Provenance.VendorDoc, "内检索引位（内核写路径按位分岔的那份账）：多语句事务在库里成不成立由各血统的文档口径与活库见证记账，本家今天仍在『未实测』那半本上"),
         ]),
 
         // 第十五本台账（v0.37 第四笔，SQLite 叶子到场，第七家）。它是这本账第一次<b>两家连档</b>：
@@ -717,7 +801,7 @@ public sealed class CapabilityLedgerTests
         // <c>CREATE TABLE … ; CREATE INDEX …</c> 这一条命令文本（夹具那句 <c>Execute</c> 是一次
         // <c>ExecuteNonQuery</c>，全仓库没有任何别的路径建它）。上一版据此写下的"CodeFirst 的产物没有执行口"
         // 因此作废，四处同源措辞一起改口，判据不变：<b>发过就是发过，不管它是夹具发的还是用例发的</b>。
-        new("sqlite", static () => Sqlite.Provider(SqlServer.NoDriverFactory.Instance), 5, 1, 3,
+        new("sqlite", static () => Sqlite.Provider(SqlServer.NoDriverFactory.Instance), 6, 1, 3,
         [
             // 三派哨兵里的第三派（<c>LIMIT -1</c> 是"不设上限"的记号，不是厂商上限数），所以这一位在本家
             // 有两份基线而不是对拍代钉。两颗今天都在真库上被 ORM 发过：见 <c>ReadPathTests</c> 那条
@@ -759,6 +843,12 @@ public sealed class CapabilityLedgerTests
             // 按 <c>Ledger</c> 那条判据不构成 Live —— 本行翻档不靠它们。留下的判据是一句宽带：<b>发过就是发过，
             // 不管它是夹具发的还是用例发的</b>；上一版那句"产物没有执行口"由它作废，四处同源措辞一起改口。
             new(DbCapabilities.MultiStatement, Provenance.Live, "golden/sqlite/ddl-order.sql"),
+            // 【本笔（ClickHouse 重开·笔一）把一颗位挂到这一本上】 Transactions：它不是库种分岔，是内检索引位——
+            // 内核写路径（SaveChanges/InsertOrUpdate/批量）从此先判这一位再定包不包事务，公开的 BeginTransaction
+            // 没有位就抛 NotSupportedException。每一本在这里各记各的账：这一位由本家自己领名声明，而"库里接不接受
+            // 多语句事务"仍然是各家的活库账——本家今天的活库见证是 0，所以落 VendorDoc；行为诚实条款全文住在
+            // 位注释与用法册 §2.4，三处同源，改判必须三处一起动。
+            new(DbCapabilities.Transactions, Provenance.VendorDoc, "内检索引位（内核写路径按位分岔的那份账）：多语句事务在库里成不成立由各血统的文档口径与活库见证记账，本家今天仍在『未实测』那半本上"),
         ]),
 
         // PG 血统的第七本台账（v0.39 第一笔，DuckDB 叶子到场）。"一本 provider 一份"的第十次复用，
@@ -768,7 +858,7 @@ public sealed class CapabilityLedgerTests
         // golden/ 基线可指（类型表四格换名、身份列换形态、谓词与分页各有绝对形状），离线档因此比邻本厚一颗。
         // 血统那 15 位在本家一位不翻不删（CaseSensitive_Identifiers 与库行为的偏差记 §14 与
         // DuckDbCodeFirst 类注释，本表照旧声明），VendorDoc 七颗的判据与血统那几本同源。
-        new("duckdb", static () => DuckDb.Provider(SqlServer.NoDriverFactory.Instance), 15, 8, 0,
+        new("duckdb", static () => DuckDb.Provider(SqlServer.NoDriverFactory.Instance), 16, 8, 0,
         [
             // 八颗离线位各指一份自家基线。分页那一份钉的还多一格：skip-only 那颗"缺上限不补哨兵"
             // 由 golden/duckdb/paging-skip-only.sql 单独在场（能力位只有一颗，两形共用一行）。
@@ -800,6 +890,12 @@ public sealed class CapabilityLedgerTests
             // 第 15 位与邻本同一判据：装载通道已接线（血统那颗反射口 PostgreSqlBulk），而 DuckDB.NET
             // 那一装从未在任何机器上解析成功过，COPY … FROM STDIN 一句没发出去过——本家整行「未实测」。
             new(DbCapabilities.Bulk_Copy, Provenance.VendorDoc, "无活库：装载通道已接线（血统那颗反射口），COPY … FROM STDIN 那一句一次都没发出去过"),
+            // 【本笔（ClickHouse 重开·笔一）把一颗位挂到这一本上】 Transactions：它不是库种分岔，是内检索引位——
+            // 内核写路径（SaveChanges/InsertOrUpdate/批量）从此先判这一位再定包不包事务，公开的 BeginTransaction
+            // 没有位就抛 NotSupportedException。每一本在这里各记各的账：这一位由本家自己领名声明，而"库里接不接受
+            // 多语句事务"仍然是各家的活库账——本家今天的活库见证是 0，所以落 VendorDoc；行为诚实条款全文住在
+            // 位注释与用法册 §2.4，三处同源，改判必须三处一起动。
+            new(DbCapabilities.Transactions, Provenance.VendorDoc, "内检索引位（内核写路径按位分岔的那份账）：多语句事务在库里成不成立由各血统的文档口径与活库见证记账，本家今天仍在『未实测』那半本上"),
         ]),
     ];
 
@@ -985,6 +1081,17 @@ public sealed class CapabilityLedgerTests
         var expected = new[]
         {
             DbCapabilities.Schemas,
+
+            // 【本笔（ClickHouse 重开·笔一）】第二位不是又一颗"库种事实"进交集，而是<em>第一颗内检索引位</em>：
+            // Transactions 由内核写路径（SaveChanges ∶ InsertOrUpdate ∶ 三条批量链）与公开的 BeginTransaction
+            // 真读（判据取唯一写法 <c>TransactionCapability.Declared</c>），十六本在这里逐本声明回去 ——
+            // §4 那句"分派点必须落在被读的那一格，不是被声明的那一格"由此第一次在能力位上兑现，也结掉
+            // "掩码零读者"那条旧账的另一半。它进交集的方式与 <c>Schemas</c> 不同的那半要说白：
+            // <c>Schemas</c> 是十六本各自发得出限定名的库种事实，本位是"内核按这一位分岔"的接线事实——
+            // 位在每一家手里都是同一颗，家长的是同一份判词；它量不到任何一家的库收不收多语句事务
+            // （那半在各行的 VendorDoc 见证里，今天全是"未实测"）。行为诚实条款（没有位的那一家
+            // 逐句 autocommit 直发、多条语句不原子）写在位注释与用法册 §2.4。
+            DbCapabilities.Transactions,
         };
 
         // 判集合相等而不是判序列：交出来的顺序是 Enum.GetValues 的事，不是这一条的主张。

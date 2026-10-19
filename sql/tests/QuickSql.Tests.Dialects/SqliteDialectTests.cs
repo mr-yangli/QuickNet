@@ -1195,7 +1195,7 @@ public sealed class SqliteDialectTests
     // ── 槽位本身：这一档声明了什么、没声明什么 ────────────────────────
 
     [Fact]
-    public void The_family_declares_five_bits_and_every_one_of_them_has_a_live_reading_behind_it()
+    public void The_family_declares_six_bits_and_the_old_five_all_have_a_live_reading_behind_them()
     {
         var declared = DeclaredBits();
 
@@ -1206,12 +1206,15 @@ public sealed class SqliteDialectTests
         // 【v0.37 第四笔】原段落此处写的是"另六家每一位后面最多跟离线文本已钉"——那一句当时就不成立
         // （虚谷那四位已经翻了半版），而本笔之后它连反面都不成立：本家有两行现在也翻成了 <c>Live</c>，
         // 且这两行是这本账第一例完全由 ORM 产出的语句撑起来的。逐位对 §4 那句判据的读法记台账，不记这里。
-        Assert.Equal(5, declared.Length);
+        // 【本笔（ClickHouse 重开·笔一）】第 6 位是 Transactions —— 内检索引位（内核写路径按位分岔），
+        // 不在那串"活库读数"的账里；旧的 5 + 新的 1 一起数完这一格。
+        Assert.Equal(6, declared.Length);
         Assert.Contains(DbCapabilities.Paging_LimitOffset, declared);
         Assert.Contains(DbCapabilities.Returning, declared);
         Assert.Contains(DbCapabilities.Identity_ExplicitInsert, declared);
         Assert.Contains(DbCapabilities.Schemas, declared);
         Assert.Contains(DbCapabilities.MultiStatement, declared);
+        Assert.Contains(DbCapabilities.Transactions, declared);
 
         // 三格不声明而它们都是<em>问过才知道</em>的：
         // CaseSensitive_Identifiers——库里标识符不区分大小写【实测·12/19/18】，这一位在本家第一次是"问过而答否"；

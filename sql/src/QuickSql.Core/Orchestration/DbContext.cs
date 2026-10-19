@@ -161,6 +161,8 @@ public class DbContext(QuickSqlOrm orm) : IAsyncDisposable, IDisposable
     public SaveChangesReport SaveChanges() => SaveChangesAsync(default).GetAwaiter().GetResult();
 
     /// <summary>一次 <c>SaveChanges</c> = 一条事务里的「侦测 → Insert 档 → Update 档 → Delete 档 → 结算」。
+    /// <b>前提是 provider 声明了 <see cref="DbCapabilities.Transactions"/></b>（本笔起判源）：没有那一位的
+    /// 库上这一串走逐句 autocommit——多条语句不原子，中途失败已发的不回滚（行为诚实条款全文在位注释）。
     ///
     /// <b>没有任何一行欠着语句时，这里一条语句都不发、事务也不开</b>（交一份空报告）。
     /// 空会话上的 <c>SaveChanges</c> 是调用方常写的收尾，而事务一开就把这一批钉在一条连接上（§6）：
@@ -194,6 +196,14 @@ public class DbContext(QuickSqlOrm orm) : IAsyncDisposable, IDisposable
         EnsureSessionFactory();
 
         if (QuickSqlTransaction.For(Orm.Ado) is not null)
+            return await _tracker.FlushDueAsync(ct).ConfigureAwait(false);
+
+        // 事务可选那道口（【本笔（ClickHouse 重开·笔一）新增】的另一半）：provider 声明了
+        // DbCapabilities.Transactions 才按原样自开一条事务交收；没有这一位时走 autocommit 直发——
+        // 一批里多条语句不原子，中途失败已发的不回滚（行为诚实条款，全文在位注释与用法册）。
+        // 判据与写成文字的理由全部落在这颗位上；src/ 对这一位的读者从今天起有两处（另一处在执行层
+        // BeginTransaction 的闸门，§14 行那是上面那一句），"掩码零读者"那句旧账按它自己写的重开条件结账。
+        if (!TransactionCapability.Declared(Orm.Provider))
             return await _tracker.FlushDueAsync(ct).ConfigureAwait(false);
 
         using var tran = Orm.BeginTransaction(cluster ?? DataSourceRouting.DefaultCluster);

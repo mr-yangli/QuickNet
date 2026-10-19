@@ -91,7 +91,7 @@ public sealed class TiDbDialectTests
 
         Assert.Equal(
             DbCapabilities.Paging_LimitOffset | DbCapabilities.Schemas | DbCapabilities.Guid_Char36 |
-            DbCapabilities.Comment_On_Column | DbCapabilities.Alter_Column_Precision | DbCapabilities.Bulk_Copy,
+            DbCapabilities.Comment_On_Column | DbCapabilities.Alter_Column_Precision | DbCapabilities.Bulk_Copy | DbCapabilities.Transactions,
             Provider.Capabilities);
 
         // 六位里有五位有离线文本，第六位是本笔随血统基类一起继承下来的 Bulk_Copy——它到本家<em>不改写一个字</em>

@@ -136,7 +136,8 @@ public sealed class Gbase8sProvider : IDbProvider
     /// 是"这一族有四件事我们能拿代码指认"。</summary>
     public DbCapabilities Capabilities =>
         DbCapabilities.Schemas | DbCapabilities.Alter_Column_Precision |
-        DbCapabilities.CaseSensitive_Identifiers | DbCapabilities.Guid_Char36;
+        DbCapabilities.CaseSensitive_Identifiers | DbCapabilities.Guid_Char36 |
+        DbCapabilities.Transactions;
 
     public IConnectorFactory Connectors { get; }
 

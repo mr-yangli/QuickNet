@@ -328,24 +328,26 @@ DuckDb 没有新增预设：它是 PG 血统的第七颗叶子，沿用血统的
 
 ### 2.4 能力位：`DbCapabilities`
 
-31 颗具名位 + `None`（`src/QuickSql.Abstractions/DbCapabilities.cs`），每颗一个 `1<<n`：`Paging_LimitOffset`、`Paging_RowNum`、`Paging_OffsetFetch`、`Returning`、`Returning_OnlyExpression`、`Upsert_OnConflict`、`Upsert_MergeInto`、`Upsert_OnDuplicate`、`Boolean_Type`、`Guid_Raw16`、`Guid_Char36`、`Sequences`、`Identity_ExplicitInsert`、`Schemas`、`Cte`、`WindowFunctions`、`SkipLocked`、`Lock_NoWait`、`Json_Type`、`Array_Type`、`Bulk_Copy`、`Bulk_ArrayBind`、`RefCursor`、`MultiStatement`、`MultiResultSets`、`Count_Over_Window`、`CaseSensitive_Identifiers`、`Comment_On_Column`、`Alter_Column_Precision`、`Truncate_Cascade`、`TempTable`。
+32 颗具名位 + `None`（`src/QuickSql.Abstractions/DbCapabilities.cs`，`TempTable` 之后挂到 `1u<<31`，底层类型随本笔换 `uint`），每颗一个 `1<<n`：`Paging_LimitOffset`、`Paging_RowNum`、`Paging_OffsetFetch`、`Returning`、`Returning_OnlyExpression`、`Upsert_OnConflict`、`Upsert_MergeInto`、`Upsert_OnDuplicate`、`Boolean_Type`、`Guid_Raw16`、`Guid_Char36`、`Sequences`、`Identity_ExplicitInsert`、`Schemas`、`Cte`、`WindowFunctions`、`SkipLocked`、`Lock_NoWait`、`Json_Type`、`Array_Type`、`Bulk_Copy`、`Bulk_ArrayBind`、`RefCursor`、`MultiStatement`、`MultiResultSets`、`Count_Over_Window`、`CaseSensitive_Identifiers`、`Comment_On_Column`、`Alter_Column_Precision`、`Truncate_Cascade`、`TempTable`、`Transactions`。
+
+**`Transactions`（第 32 颗，本笔新添）是位表上第一颗被内核真当闸门读的位**：公开的 `BeginTransaction` 与内核三条写路径（`SaveChanges` ∶ `InsertOrUpdate` ∶ 批量链的执行段）都判它——声明了这一位才开真的 `DbTransaction`；**没声明就逐句按库的 autocommit 直发，而且一次批量 / 一次保存里的多条语句不原子——中途失败已发出去的语句不回滚**（单条语句自身的事务性按各家库文档记账）；没声明还想显式开事务，公开口照 `CanCreateDatabase=false` 那颗先例抛 `NotSupportedException` 带明话（严禁静默假事务）。今天在册的 16 家全部声明这一位；ClickHouse 是位表之外的"不带它落层"的第一家，见设计文档 §14。
 
 真实分布与证据档位（同一张表；掩码声明处就是那几行，16 份台账里 SQL Server 一族不入册，理由见 §4.2）：
 
 | 血统 | 声明处 | 位 | 离线钉 | 活库钉 | 仅厂商文档 | 谁继承 |
 | --- | --- | --- | --- | --- | --- | --- |
-| SQL Server | `src/QuickSql.Providers.SqlServer/SqlServerProvider.cs:46` | 17 | 不入册 | 集成层两台真库 | — | — |
-| PG 系 | `src/QuickSql.Providers.PostgreSqlBase/PostgreSqlProviderBase.cs:83` | 15 | 7 | 1 | 7 | 7 颗叶子，无一覆写 |
-| DuckDb（PG 血统第七颗） | 随血统掩码（`DuckDbProvider` 未覆写；`PostgreSqlProviderBase.cs:83`） | 15 | 8 | 0 | 7 | — |
-| Oracle 系 | `src/QuickSql.Providers.OracleBase/OracleProviderBase.cs:85` | 6 | 6 | 0 | 0 | Oracle / Dameng / ShenTong |
-| MySQL 系 | `src/QuickSql.Providers.MySqlBase/MySqlProviderBase.cs:155` | 6 | 5 | 1 | 0 | MySQL / TiDb / OceanBase |
-| 虚谷 | `src/QuickSql.Providers.Xugu/XuguProvider.cs:127` | 7 | 3 | **4** | 0 | — |
-| GBase 8s | `src/QuickSql.Providers.Gbase8s/Gbase8sProvider.cs:138` | 4 | 4 | 0 | 0 | — |
-| SQLite | `src/QuickSql.Providers.Sqlite/SqliteProvider.cs:202` | 5 | 1 | **3** | 1 | — |
+| SQL Server | `src/QuickSql.Providers.SqlServer/SqlServerProvider.cs:46` | 18 | 不入册 | 集成层两台真库 | — | — |
+| PG 系 | `src/QuickSql.Providers.PostgreSqlBase/PostgreSqlProviderBase.cs:83` | 16 | 7 | 1 | 8 | 7 颗叶子，无一覆写 |
+| DuckDb（PG 血统第七颗） | 随血统掩码（`DuckDbProvider` 未覆写；`PostgreSqlProviderBase.cs:83`） | 16 | 8 | 0 | 8 | — |
+| Oracle 系 | `src/QuickSql.Providers.OracleBase/OracleProviderBase.cs:85` | 7 | 6 | 0 | 1 | Oracle / Dameng / ShenTong |
+| MySQL 系 | `src/QuickSql.Providers.MySqlBase/MySqlProviderBase.cs:155` | 7 | 5 | 1 | 1 | MySQL / TiDb / OceanBase |
+| 虚谷 | `src/QuickSql.Providers.Xugu/XuguProvider.cs:127` | 8 | 3 | **4** | 1 | — |
+| GBase 8s | `src/QuickSql.Providers.Gbase8s/Gbase8sProvider.cs:138` | 5 | 4 | 0 | 1 | — |
+| SQLite | `src/QuickSql.Providers.Sqlite/SqliteProvider.cs:202` | 6 | 1 | **3** | 2 | — |
 
-三处读数的脚注：PG 系那 1 位 `Live` 是 PostgreSQL 本尊那本台账的 `Bulk_Copy`（批量写侧那一轮，集成册 `BulkPathTests` 在真 PG 上全绿）；MySQL 系那 1 位同理是 MySQL 本尊的 `Bulk_Copy`（同一轮，`TiDb`/`OceanBase` 两本该位仍是仅文档）；DuckDb 那一格比血统六本多 1 颗离线钉，是因为类型表四格换名与身份列换形态让它头一回有了自家的 `golden/duckdb/` 基线——其余位与血统同源，位上一位不翻（`CaseSensitive_Identifiers` 与本家实际行为的偏差记设计文档 §14）。
+三处读数的脚注：PG 系那 1 位 `Live` 是 PostgreSQL 本尊那本台账的 `Bulk_Copy`（批量写侧那一轮，集成册 `BulkPathTests` 在真 PG 上全绿）；MySQL 系那 1 位同理是 MySQL 本尊的 `Bulk_Copy`（同一轮，`TiDb`/`OceanBase` 两本该位仍是仅文档）；DuckDb 那一格比血统六本多 1 颗离线钉，是因为类型表四格换名与身份列换形态让它头一回有了自家的 `golden/duckdb/` 基线——其余位与血统同源，位上一位不翻（`CaseSensitive_Identifiers` 与本家实际行为的偏差记设计文档 §14）。**"仅厂商文档"普遍 +1 的那一颗就是 `Transactions`**：它是本笔（0.39.0-beta.23）挂上的内检索引位——各家多语句事务在库里到底怎么成立，仍然由各血统的文档口径与活库见证记账，今天都还在"未实测"那半本上；行为诚实条款见本格上文与位注释。
 
-**关键判据：能力位不是配置开关，而是一份已落地事实的账本。** 全仓库没有一处 `override DbCapabilities`（叶子只改 `DriverKey` 与构造参数，达梦额外改 `CreateCodeFirst` 与 `IdentityClause`，`src/QuickSql.Providers.Dameng/DamengProvider.cs:50`、`:62`）；而运行期的分派读的是方言上的成员（`ISqlDialect.SupportsJoinedWrites`、`WriteTargetAlias`），**不是这颗掩码**。
+**关键判据：能力位不是配置开关，而是一份已落地事实的账本。** 全仓库没有一处 `override DbCapabilities`（叶子只改 `DriverKey` 与构造参数，达梦额外改 `CreateCodeFirst` 与 `IdentityClause`，`src/QuickSql.Providers.Dameng/DamengProvider.cs:50`、`:62`）；而运行期的分派读的是方言上的成员（`ISqlDialect.SupportsJoinedWrites`、`WriteTargetAlias`），**不再是这颗掩码——例外只有一颗**：`Transactions` 那颗（本笔起，内核写路径与公开 `BeginTransaction` 都按它分岔，判据取唯一写法 `TransactionCapability.Declared`，`src/QuickSql.Core/Execution/TransactionCapability.cs`；判定册见 `tests/QuickSql.Tests.Dialects/TransactionCapabilityTests.cs`）。
 
 台账在 `tests/QuickSql.Tests.Dialects/CapabilityLedgerTests.cs`：一颗一家一行，出处分三档 —— `Provenance.Live`（本 provider 产出的那条语句被那台库执行过）、`Provenance.OfflineText`（文本被基线或断言钉住）、`Provenance.VendorDoc`（只有厂商文档；`Ledger.VendorDocOnly` 是算出来的那一格）。三颗计数常量（`Declared`/`PinnedOffline`/`PinnedLive`）是钉子，改一位就红。
 
@@ -451,6 +453,8 @@ if (!result.Success) Log(result.Exception);         // TransactionResult { Succe
 ```
 
 泛型重载 `ExecuteInTransactionAsync<T>(...)` 返回 `TransactionResult<T>`（多一颗 `Value`）。`DbContext` 会加入环境事务（会话里的语句走的正是那条被事务独占的连接，`AdoExecutor.cs` 的 `RentAsync` 那一支）。
+
+**事务是可选的，判源是能力位那一颗 `Transactions`（0.39.0-beta.23 起）**：provider 声明了它才走上面四个形态；没声明的库上四个公开口全部当场抛 `NotSupportedException`（照 `CanCreateDatabase=false` 那颗先例，消息指名，不静默开一条假事务），而内核写路径（`SaveChanges` ∶ `InsertOrUpdate` ∶ 批量链）自动退成**逐句 autocommit 直发**。这一退有一个要用实话记住的代价：**一次 `SaveChanges` / 一次 `InsertOrUpdate` / 一次批量里的多条语句不原子——中途失败时已经发出去的语句不回滚**，留在库里的是半批；单条语句自身的事务性按各家库的文档记账（例如 ClickHouse 的单块 INSERT 原子这一格）。要"一次整批落库"，在无事务的库上请用单条语句表达或自己分批排程——那是库给不给的事，不是 ORM 能补的。
 
 **形态 (1)(2)(3) 的归属是「开它的那一刻所在的执行流」**，而 `AsyncLocal` 那一笔只由**同步被调方**回到调用方的帧——异步被调方哪怕全程只 `await` 已完成的 Task，写进去的值父帧与兄弟帧都看不见（`IQuickSqlTransaction` 抬头 v0.12 那条实测；`CreateSharedContext` 那一格同一条纪律的另一面）。于是有一种写法必然踩空：**装配层在自己的 async 帧里开事务，语句却由调用方那一帧发**。ABP 的工作单元正是这一形——`IDbContextProvider` 解析上下文时 `Begin`，回到仓储那一帧槽位已经空了，后面的语句各拿各的池连接自动提交。症状不是报错，是「一场工作单元一次提交」静默退化：中途抛异常时前半段的写已经落库。
 

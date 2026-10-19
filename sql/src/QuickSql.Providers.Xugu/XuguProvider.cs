@@ -121,12 +121,15 @@ public sealed class XuguProvider : IDbProvider
 
     public DbKind Kind => DbKind.Xugu;
 
-    /// <summary>位掩码本体，与七位各自的产出文本都写在类注释第四段。它不是 <c>virtual</c> 而是一句直给：
+    /// <summary>位掩码本体，与七位各自的产出文本都写在类注释第四段（【本笔（ClickHouse 重开·笔一）】挂上
+    /// 第八颗 <c>Transactions</c>：虚谷的驱动侧原本就走的 DbTransaction 事务面，这一位是记账不是新事实）。
+    /// 它不是 <c>virtual</c> 而是一句直给：
     /// 这一族今天没有叶子，而"不留一颗没人覆写的虚函数"这条纪律已经立过三次。</summary>
     public DbCapabilities Capabilities =>
         DbCapabilities.Paging_LimitOffset | DbCapabilities.Returning | DbCapabilities.Schemas |
         DbCapabilities.Guid_Char36 | DbCapabilities.CaseSensitive_Identifiers |
-        DbCapabilities.Comment_On_Column | DbCapabilities.Alter_Column_Precision;
+        DbCapabilities.Comment_On_Column | DbCapabilities.Alter_Column_Precision |
+        DbCapabilities.Transactions;
 
     public IConnectorFactory Connectors { get; }
 

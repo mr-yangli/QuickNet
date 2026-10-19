@@ -106,10 +106,12 @@ public sealed class OracleDialectTests
     }
 
     [Fact]
-    public void The_capability_mask_is_inherited_verbatim_six_bits_not_one_less_not_one_more()
+    public void The_capability_mask_is_inherited_verbatim_with_the_wiring_bit_not_one_less_not_one_more()
     {
-        // 四段链的掩码半：leaf == 同族零覆写叶 == 同族分叉叶 == 血统。Oracle 血统这一档只有 6 位，
-        // 每一位都是"代码今天真的走到那条语句"攒出来的（基类注释那份逐位对账），本家今天一位不翻案也不添。
+        // 四段链的掩码半：leaf == 同族零覆写叶 == 同族分叉叶 == 血统。Oracle 血统这一档原 6 位，
+        // 每一位都是"代码今天真的走到那条语句"攒出来的（基类注释那份逐位对账），本家今天一位不翻案也不添；
+        // 【本笔（ClickHouse 重开·笔一）】挂上第七颗 Transactions —— 它不是库种事实而是内检索引位
+        // （内核写路径按位分岔），族档领位、三叶与血统一起领。
         Assert.Equal(ShenTongLeaf.Capabilities, Provider.Capabilities);
         Assert.Equal(DamengLeaf.Capabilities, Provider.Capabilities);
         Assert.Equal(Family.Capabilities, Provider.Capabilities);
@@ -117,7 +119,7 @@ public sealed class OracleDialectTests
         Assert.Equal(
             DbCapabilities.Paging_RowNum | DbCapabilities.Guid_Char36 | DbCapabilities.Schemas |
             DbCapabilities.CaseSensitive_Identifiers | DbCapabilities.Comment_On_Column |
-            DbCapabilities.Alter_Column_Precision,
+            DbCapabilities.Alter_Column_Precision | DbCapabilities.Transactions,
             Provider.Capabilities);
 
         // "刻意不声明"那几位在本家有了<em>第三种</em>不声明的理由：Returning 抛在 OracleKeys（本册第 7 格量它），

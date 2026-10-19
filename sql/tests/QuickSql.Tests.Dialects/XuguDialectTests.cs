@@ -946,16 +946,17 @@ public sealed class XuguDialectTests
     // ── 槽位本身：这一档声明了什么、没声明什么 ────────────────────────
 
     [Fact]
-    public void The_family_declares_seven_bits_and_every_one_of_them_has_offline_text_behind_it()
+    public void The_family_declares_eight_bits_and_every_channel_bit_has_offline_text_behind_it()
     {
         var declared = Enum.GetValues<DbCapabilities>()
             .Where(static bit => bit != DbCapabilities.None && Provider.Capabilities.HasFlag(bit))
             .ToArray();
 
-        // 7 = 7 离线文本 + 0 仅厂商文档，是<em>第三家</em>把"仅文档"那位数写成 0 的档
-        // （金仓那一份是 14 = 7 + 7）。三家里两份 0 不是巧合：同一把尺（"代码今天真的走到那一条语句"）
-        // 攒出来的掩码，自然同一颗零，而位数 7∶6∶5 的差全部是"敢不敢"而不是"有没有"。
-        Assert.Equal(7, declared.Length);
+        // 8 = 7 离线文本 + 1 内检索引位（【本笔（ClickHouse 重开·笔一）】挂到族档的 Transactions）。
+        // 7 离线那七颗"仅文档位是 0"的旧读数不动，只是 7 之后又涨了 1 —— 新的那颗不是
+        // "敢不敢声明乐观位"，是内核写路径真的按它分岔；"离线文本在后头"那一半对它不适用，
+        // 它的账在 TransactionCapabilityTests 那本判定册上。
+        Assert.Equal(8, declared.Length);
         Assert.Contains(DbCapabilities.Paging_LimitOffset, declared);
         Assert.Contains(DbCapabilities.Schemas, declared);
         Assert.Contains(DbCapabilities.Guid_Char36, declared);

@@ -84,7 +84,7 @@ public abstract class OracleProviderBase : IDbProvider
     protected static DbCapabilities FamilyCapabilities =>
         DbCapabilities.Paging_RowNum | DbCapabilities.Guid_Char36 | DbCapabilities.Schemas |
         DbCapabilities.CaseSensitive_Identifiers | DbCapabilities.Comment_On_Column |
-        DbCapabilities.Alter_Column_Precision;
+        DbCapabilities.Alter_Column_Precision | DbCapabilities.Transactions;
 
     public IConnectorFactory Connectors { get; }
 
