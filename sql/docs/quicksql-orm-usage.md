@@ -10,9 +10,9 @@
 
 真实状态（三句，句句可核）：
 
-1. **文本层落地的 provider 有 17 颗叶子**：`src/` 下 17 个 `QuickSql.Providers.<库种>` 工程各暴露一个 `public const string DriverKey`（各家取值见 §5）。另有 3 个血统基类工程（`PostgreSqlBase`/`OracleBase`/`MySqlBase`）不是可寻址的库种。`DbKind` 枚举今天有 17 个值（`src/QuickSql.Abstractions/DbKind.cs`），与 17 颗叶子一一对应、**没有"有值而无 provider"的空档**（`Sqlite` 于 v0.37 第四笔落地补齐当时那一代的最后一格；`DuckDb` 于 v0.39 第一笔落地，是 PG 血统的第七颗；原本占着的 `MariaDb` 值于 v0.37 第五笔从枚举撤下——本仓库裁"不立 MariaDB 这一档"，理由与重开条件见设计文档 §14）。
+1. **文本层落地的 provider 有 18 颗叶子**：`src/` 下 18 个 `QuickSql.Providers.<库种>` 工程各暴露一个 `public const string DriverKey`（各家取值见 §5）。另有 3 个血统基类工程（`PostgreSqlBase`/`OracleBase`/`MySqlBase`）不是可寻址的库种。`DbKind` 枚举今天有 18 个值（`src/QuickSql.Abstractions/DbKind.cs`），与 18 颗叶子一一对应、**没有"有值而无 provider"的空档**（`Sqlite` 于 v0.37 第四笔落地补齐当时那一代的最后一格；`DuckDb` 于 v0.39 第一笔落地，是 PG 血统的第七颗；`ClickHouse` 于 v0.39 第二笔落地——第一颗不挂任何血统基类、11 个文件从头自写的单层叶子（§5），`DbKind.ClickHouse = 17`；原本占着的 `MariaDb` 值于 v0.37 第五笔从枚举撤下——本仓库裁"不立 MariaDB 这一档"，理由与重开条件见设计文档 §14）。
 2. **十七家里，真库见证只挂在五颗叶子上，而且挂得都很窄。** SQL Server 一族的每一位能力都由集成层在两台实例上跑过（`CapabilityLedgerTests.cs` 类注释明写"T-SQL 那一族不进这份台账，不是漏记"）；虚谷有 7 位中的 4 位被钉为 `Live`，见证是把基线文本逐句敲进那台库；SQLite 有 5 位中的 3 位被钉为 `Live`（`Paging_LimitOffset`／`Returning`／`MultiStatement`），而这三颗走的是**另一条路**——集成册里 ORM 自己拼出来的语句真在临时文件库上跑过，没有一行手写文本参与，其中 `MultiStatement` 是这本账第一颗落在 DDL 侧的 `Live`（见证是事后翻库看到 `IX_QuickSqlOrder_CreatedAt` 在场）；PostgreSQL 与 MySQL 两颗本尊各自只有 1 位 `Live`（都是 `Bulk_Copy`，批量写侧那一轮钉的，读数与来路记在 §2.4 那张表）。其余十二家 `PinnedLive` 全是 0——其中十家的驱动从未在一台机器上解析成功过（金仓与 Oracle 两家例外：§1.9 那一趟冒烟里各呼应过一次的解析成功，也只是文本层读数；内建表 `BuiltinDrivers.cs` 各行注释逐行自陈）。§4.2 把这几处的口径差异原样列出。
-3. 离线证据是自产的：`tests/QuickSql.Tests.Dialects/golden/` 下八个目录共 146 份基线（sqlserver 57 / kingbase 18 / dameng 19 / mysql 11 / gbase8s 11 / xugu 7 / sqlite 12 / duckdb 11）。除 §4.2 点到的那几份之外，它们是"本仓库自己认为应该长这样"的锁，不是厂商确认——**SQLite 那一套 11 份也是自产基线：本家有活库，而活库跑的是 ORM 产出的语句（第 2 点那三颗 `Live`），不是把这 11 句原样重放**，所以"黄金样本 ↔ 真库执行"这一对在本家仍然没配上，配上的是另一条证据链（provider 产出 ↔ 真库执行）。其余九颗叶子（postgresql/opengauss/gaussdb/highgo/gbase8c/oracle/shentong/tidb/oceanbase）没有自己的 golden 目录，同形部分由 `DialectParityTests` 逐字对拍钉住。
+3. 离线证据是自产的：`tests/QuickSql.Tests.Dialects/golden/` 下九个目录共 156 份基线（sqlserver 57 / kingbase 18 / dameng 19 / mysql 11 / gbase8s 11 / xugu 7 / sqlite 12 / duckdb 11 / clickhouse 10）。除 §4.2 点到的那几份之外，它们是"本仓库自己认为应该长这样"的锁，不是厂商确认——**SQLite 那一套 11 份也是自产基线：本家有活库，而活库跑的是 ORM 产出的语句（第 2 点那三颗 `Live`），不是把这 11 句原样重放**，所以"黄金样本 ↔ 真库执行"这一对在本家仍然没配上，配上的是另一条证据链（provider 产出 ↔ 真库执行）。**clickhouse 那一套 10 份同 duckdb 一档、且比它少一份**：insert-with-keys 在本家没有可发的文本（`ClickHouseKeys.EmitReturning` 整格抛），基线改判"断言抛、不落盘"。其余九颗叶子（postgresql/opengauss/gaussdb/highgo/gbase8c/oracle/shentong/tidb/oceanbase）没有自己的 golden 目录，同形部分由 `DialectParityTests` 逐字对拍钉住（ClickHouse 与任何一族都无同形可对，整档走自家基线）。
 
 另有一句不在上面三句之内的：**与 SqlSugar 的对照曾另有一份册子，该稿已下线删除**（82d6525 那一笔「fastsql-vs-sqlsugar.md 对照稿下线」；全文可用 `git show 82d6525^:sql/docs/fastsql-vs-sqlsugar.md` 读回）。本文凡引到它的地方（§3.2 批量块宽那一格）一律按**历史读数**对待——引用指的是出处，不是说盘上有这份文件；那十四格实测与六面读码对照的结论本文不搬，本文的口径也不改。
 
@@ -33,7 +33,7 @@
 
 ### 1.2 程序集清单与职责
 
-`QuickSql.Abstractions`（命名空间 `QuickSql` 与 `QuickSql.*`）是公开契约：`DbKind`、`DbCapabilities`、`IDbProvider` 与它身上那 11 颗子 SPI（连 `Kind` 与 `Capabilities` 共 13 格）、元数据契约、查询/写/跟踪接口。`QuickSql.Core`（命名空间 `QuickSql`）是内核：`QuickSqlOrm`、`DbContext`、QueryModel→AST→文本、驱动加载、物化、事务。`QuickSql.Generators` 是 G1 那张 Roslyn 增量生成器，把带 `[Table]` 的实体在编译期翻成契约。17 个 `QuickSql.Providers.<库种>` 叶子工程各家一册（方言、类型映射、键策略、DDL 发射），另有 `QuickSql.Providers.{PostgreSql,Oracle,MySql}Base` 三个血统工程承载族内共享的那一层，叶子只补差异。
+`QuickSql.Abstractions`（命名空间 `QuickSql` 与 `QuickSql.*`）是公开契约：`DbKind`、`DbCapabilities`、`IDbProvider` 与它身上那 11 颗子 SPI（连 `Kind` 与 `Capabilities` 共 13 格）、元数据契约、查询/写/跟踪接口。`QuickSql.Core`（命名空间 `QuickSql`）是内核：`QuickSqlOrm`、`DbContext`、QueryModel→AST→文本、驱动加载、物化、事务。`QuickSql.Generators` 是 G1 那张 Roslyn 增量生成器，把带 `[Table]` 的实体在编译期翻成契约。18 个 `QuickSql.Providers.<库种>` 叶子工程各家一册（方言、类型映射、键策略、DDL 发射），另有 `QuickSql.Providers.{PostgreSql,Oracle,MySql}Base` 三个血统工程承载族内共享的那一层，叶子只补差异。
 
 引用链单向：provider → `QuickSql.Core` → `QuickSql.Abstractions`（`src/QuickSql.Providers.SqlServer/QuickSql.Providers.SqlServer.csproj` 只有对 Core 的一行 `ProjectReference`）。
 
@@ -72,7 +72,7 @@ dotnet add package QuickSql.Generators --prerelease
 三颗各管一件事，缺一颗的症状不同，装的时候心里有数：
 
 - **①`QuickSql.Core`**：装配根（`QuickSqlOrm`、`DbContext`）、QueryModel→AST→文本、驱动加载、物化、事务都在里面。严格说单装 provider 也会把它带进来（provider 的 nuspec 依赖 Core），显式写出来只是为了版本口径一眼可见、三颗同版本。
-- **② provider（`QuickSql.Providers.<库种>`）**：方言、类型映射、键策略、DDL 发射。装哪一家 = 你能 `Create` 到哪一家。**provider 是编译期登记的，引用图上多一家就多一颗可寻址库种，不碰运行期**，所以"要连哪几座就装哪几颗"。17 颗可寻址叶子对应 17 个 `DbKind`；另有`QuickSql.Providers.{PostgreSql,Oracle,MySql}Base` 三颗血统基类包也在源上，但它们是叶子包的编译期依赖，**应用侧不直接装**。
+- **② provider（`QuickSql.Providers.<库种>`）**：方言、类型映射、键策略、DDL 发射。装哪一家 = 你能 `Create` 到哪一家。**provider 是编译期登记的，引用图上多一家就多一颗可寻址库种，不碰运行期**，所以"要连哪几座就装哪几颗"。18 颗可寻址叶子对应 18 个 `DbKind`；另有`QuickSql.Providers.{PostgreSql,Oracle,MySql}Base` 三颗血统基类包也在源上，但它们是叶子包的编译期依赖，**应用侧不直接装**。
 - **③ `QuickSql.Generators`**：决定 G1 那张 Roslyn 源生成器在不在。装了它，带 `[Table]` 的实体在编译期生成契约、物化零反射（接线见 §2.2「G1 接线」），§1.8 那两行 `QuickSqlOrm.Create` 才有东西可分派；不装则实体全落 G2 反射兜底，且 `Create` 当场抛"生成器未挂进编译"。NuGet 装它就是一行——包内自带 `analyzers/dotnet/cs`，还原即挂进编译器，不必像源码引用时代那样手写 `OutputItemType="Analyzer"`。
 
 **驱动包 provider 不替你别装**（§1.2 原则 3）：23 颗 QuickSql 包编译期一律不引用任何 ADO.NET 驱动，各家的驱动由应用侧自己按上面④那样显式装。哪些驱动包对应哪些库种、装完之后驱动怎么被找到，全在 §1.4。
@@ -91,6 +91,7 @@ dotnet add package QuickSql.Generators --prerelease
 | `MySql` ∶ `TiDb` ∶ `OceanBase` | `MySqlConnector` | 同名 | 2.6.2 | 2.6.2 |
 | `PostgreSql` ∶ `OpenGauss` ∶ `GaussDb` ∶ `Highgo` ∶ `Gbase8c` | `Npgsql` | 同名 | 10.0.3 | 10.0.3 |
 | `DuckDb` | `DuckDB.NET.Data.Full`（官方驱动；NuGet 一般装的是含原生绑定的 Full 那颗【文档·DuckDB】） | `DuckDB.NET.Data` | — | 无测试档 |
+| `ClickHouse` | `ClickHouse.Client`（官方 ADO.NET 客户端【文档·ClickHouse，https://clickhouse.com/docs/integrations/language-clients/dotnet/ 】；NuGet 上有 DarkWanderer 原著与 ClickHouse/clickhouse-cs 改名后两代的同名包，没查过源上读数） | `ClickHouse.Client` | — | 无测试档 |
 | `Sqlite` | `Microsoft.Data.Sqlite` | 同名 | 9.0.x 稳定档 | 9.0.0 |
 | `Kingbase` | `Kdbndp`（金仓官方） | `Kdbndp` | 8.0.0 | 无测试档 |
 | `Oracle` | `Oracle.ManagedDataAccess.Core`（Oracle 官方） | `Oracle.ManagedDataAccess` | 23.26.301 | 无测试档 |
@@ -101,9 +102,9 @@ dotnet add package QuickSql.Generators --prerelease
 
 实查比"存在性"再深一层，两颗过了、一颗翻车（2026-10-14，包内容逐颗开验 + 消费侧冒烟）：`Kdbndp` 8.0.0 包内是 `lib/net6.0/Kdbndp.dll`、`Oracle.ManagedDataAccess.Core` 23.26.301 是 `lib/net8.0/Oracle.ManagedDataAccess.dll`——两家程序集名与内建表逐字相同，`Create` 实测解析成功（文本层，读数在 §1.9）。**反例是达梦**：`DmProvider` 2.0.0 的包里只有 `lib/Dm.dll`（没有 TFM 文件夹，net10.0 上按 .NET Framework 回退还原、报 NU1701），程序集名 `Dm` 与内建表的 `DmProvider` 对不上，`Assembly.Load` 实测抛 `FileNotFoundException`——达梦的 NuGet 路今天不通，正解是路 B：厂商 .NET 版驱动按内建表点的名 `DmProvider.dll` 丢进 `drivers/`，或用 `DriverRegistry.Register("dameng", factory)` 注入那颗 `Dm` 程序集里的工厂自己验（那颗 Framework 时代的 IL 在 net10.0 上能不能走，本仓不背书）。
 
-**路 B：`drivers/` 目录。** 信创现场换库不改代码、不改 csproj：把厂商那份 ADO.NET 程序集丢进**输出目录下的 `drivers/`**即可，文件名按内建表 `BuiltinDrivers` 点的那颗程序集名（探测位 `<root>/drivers/<assembly>.dll`，见 §1.5）。这是唯一那层"放对位置就认"的约定——内建表已经写死 17 颗 key 各自要找的程序集名，没有第二份配置文件要维护。
+**路 B：`drivers/` 目录。** 信创现场换库不改代码、不改 csproj：把厂商那份 ADO.NET 程序集丢进**输出目录下的 `drivers/`**即可，文件名按内建表 `BuiltinDrivers` 点的那颗程序集名（探测位 `<root>/drivers/<assembly>.dll`，见 §1.5）。这是唯一那层"放对位置就认"的约定——内建表已经写死 18 颗 key 各自要找的程序集名，没有第二份配置文件要维护。
 
-零配置就是「`DbKind` + 连接串」装配起来（§1.8）：`DriverRegistry.Factory(key)` 先问内建表 `BuiltinDrivers.Find(key)`（17 颗 key 全在表上），拿到程序集名后按 §1.6 那条探测链找 DLL。**内建表是写死在代码里的默认，不是可编辑的配置**——要覆盖程序集名或工厂类型，只有一条 AOT 干净的路：`DriverRegistry.Register(key, factory)` 把已在进程里的工厂交进去（§1.6 末尾那一条）。
+零配置就是「`DbKind` + 连接串」装配起来（§1.8）：（`DriverRegistry.Factory(key)` 先问内建表 `BuiltinDrivers.Find(key)`（18 颗 key 全在表上），拿到程序集名后按 §1.6 那条探测链找 DLL。**内建表是写死在代码里的默认，不是可编辑的配置**——要覆盖程序集名或工厂类型，只有一条 AOT 干净的路：`DriverRegistry.Register(key, factory)` 把已在进程里的工厂交进去（§1.6 末尾那一条）。
 
 `drivers/` 只解决"托管程序集在哪"。虚谷那一族还要一份**原生同伴**（`xugusql.dll` / `libxugusql.so`），必须和托管那份一起放：只放托管时装载照样成功，要到 `Open` 才抛 `DllNotFoundException`（内建表 `BuiltinDrivers.cs` 的 xugu 行注释，v0.32 实测）。
 
@@ -330,7 +331,7 @@ DuckDb 没有新增预设：它是 PG 血统的第七颗叶子，沿用血统的
 
 32 颗具名位 + `None`（`src/QuickSql.Abstractions/DbCapabilities.cs`，`TempTable` 之后挂到 `1u<<31`，底层类型随本笔换 `uint`），每颗一个 `1<<n`：`Paging_LimitOffset`、`Paging_RowNum`、`Paging_OffsetFetch`、`Returning`、`Returning_OnlyExpression`、`Upsert_OnConflict`、`Upsert_MergeInto`、`Upsert_OnDuplicate`、`Boolean_Type`、`Guid_Raw16`、`Guid_Char36`、`Sequences`、`Identity_ExplicitInsert`、`Schemas`、`Cte`、`WindowFunctions`、`SkipLocked`、`Lock_NoWait`、`Json_Type`、`Array_Type`、`Bulk_Copy`、`Bulk_ArrayBind`、`RefCursor`、`MultiStatement`、`MultiResultSets`、`Count_Over_Window`、`CaseSensitive_Identifiers`、`Comment_On_Column`、`Alter_Column_Precision`、`Truncate_Cascade`、`TempTable`、`Transactions`。
 
-**`Transactions`（第 32 颗，本笔新添）是位表上第一颗被内核真当闸门读的位**：公开的 `BeginTransaction` 与内核三条写路径（`SaveChanges` ∶ `InsertOrUpdate` ∶ 批量链的执行段）都判它——声明了这一位才开真的 `DbTransaction`；**没声明就逐句按库的 autocommit 直发，而且一次批量 / 一次保存里的多条语句不原子——中途失败已发出去的语句不回滚**（单条语句自身的事务性按各家库文档记账）；没声明还想显式开事务，公开口照 `CanCreateDatabase=false` 那颗先例抛 `NotSupportedException` 带明话（严禁静默假事务）。今天在册的 16 家全部声明这一位；ClickHouse 是位表之外的"不带它落层"的第一家，见设计文档 §14。
+**`Transactions`（第 32 颗，本笔新添）是位表上第一颗被内核真当闸门读的位**：公开的 `BeginTransaction` 与内核三条写路径（`SaveChanges` ∶ `InsertOrUpdate` ∶ 批量链的执行段）都判它——声明了这一位才开真的 `DbTransaction`；**没声明就逐句按库的 autocommit 直发，而且一次批量 / 一次保存里的多条语句不原子——中途失败已发出去的语句不回滚**（单条语句自身的事务性按各家库文档记账）；没声明还想显式开事务，公开口照 `CanCreateDatabase=false` 那颗先例抛 `NotSupportedException` 带明话（严禁静默假事务）。今天在册的 16 家（ClickHouse 于 0.39.0-beta.24 落地之前那一代）全部声明这一位；ClickHouse 是位表之外的"不带它落层"的第一家，见设计文档 §14。
 
 真实分布与证据档位（同一张表；掩码声明处就是那几行，16 份台账里 SQL Server 一族不入册，理由见 §4.2）：
 
@@ -454,7 +455,7 @@ if (!result.Success) Log(result.Exception);         // TransactionResult { Succe
 
 泛型重载 `ExecuteInTransactionAsync<T>(...)` 返回 `TransactionResult<T>`（多一颗 `Value`）。`DbContext` 会加入环境事务（会话里的语句走的正是那条被事务独占的连接，`AdoExecutor.cs` 的 `RentAsync` 那一支）。
 
-**事务是可选的，判源是能力位那一颗 `Transactions`（0.39.0-beta.23 起）**：provider 声明了它才走上面四个形态；没声明的库上四个公开口全部当场抛 `NotSupportedException`（照 `CanCreateDatabase=false` 那颗先例，消息指名，不静默开一条假事务），而内核写路径（`SaveChanges` ∶ `InsertOrUpdate` ∶ 批量链）自动退成**逐句 autocommit 直发**。这一退有一个要用实话记住的代价：**一次 `SaveChanges` / 一次 `InsertOrUpdate` / 一次批量里的多条语句不原子——中途失败时已经发出去的语句不回滚**，留在库里的是半批；单条语句自身的事务性按各家库的文档记账（例如 ClickHouse 的单块 INSERT 原子这一格）。要"一次整批落库"，在无事务的库上请用单条语句表达或自己分批排程——那是库给不给的事，不是 ORM 能补的。
+**事务是可选的，判源是能力位那一颗 `Transactions`（0.39.0-beta.23 起）**：provider 声明了它才走上面四个形态；没声明的库上四个公开口全部当场抛 `NotSupportedException`（照 `CanCreateDatabase=false` 那颗先例，消息指名，不静默开一条假事务），而内核写路径（`SaveChanges` ∶ `InsertOrUpdate` ∶ 批量链）自动退成**逐句 autocommit 直发**。这一退有一个要用实话记住的代价：**一次 `SaveChanges` / 一次 `InsertOrUpdate` / 一次批量里的多条语句不原子——中途失败时已经发出去的语句不回滚**，留在库里的是半批；单条语句自身的事务性按各家库的文档记账（例如 ClickHouse 的单块 INSERT 原子这一格【文档·ClickHouse：https://clickhouse.com/docs/concepts/features/operations/insert/transactions ——其多语句事务是实验档且默认关，照位注释的诚实条款不声明、不假装原子】）。要"一次整批落库"，在无事务的库上请用单条语句表达或自己分批排程——那是库给不给的事，不是 ORM 能补的。0.39.0-beta.24 起，位表之外的"没位逐句 autocommit 直发"档有了第一家在册的住户：ClickHouse（§2.5 那句点名那一家的落层详情在设计文档 §14 行 2335 与 §13.5 第十七本台账）。
 
 **形态 (1)(2)(3) 的归属是「开它的那一刻所在的执行流」**，而 `AsyncLocal` 那一笔只由**同步被调方**回到调用方的帧——异步被调方哪怕全程只 `await` 已完成的 Task，写进去的值父帧与兄弟帧都看不见（`IQuickSqlTransaction` 抬头 v0.12 那条实测；`CreateSharedContext` 那一格同一条纪律的另一面）。于是有一种写法必然踩空：**装配层在自己的 async 帧里开事务，语句却由调用方那一帧发**。ABP 的工作单元正是这一形——`IDbContextProvider` 解析上下文时 `Begin`，回到仓储那一帧槽位已经空了，后面的语句各拿各的池连接自动提交。症状不是报错，是「一场工作单元一次提交」静默退化：中途抛异常时前半段的写已经落库。
 

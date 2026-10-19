@@ -31,4 +31,11 @@ public enum DbKind
     //   + DEFAULT nextval('…')）、"建库"整格不存在（内嵌单文件引擎，与 SQLite 同档）—— 逐格出处见
     //   src/QuickSql.Providers.DuckDb 各类注释与设计文档 §9.1/§13.5；整层【文档·DuckDB】口径、未实测。
     DuckDb = 16,
+
+    // 第 18 颗（本笔：ClickHouse 落笔）。追加在末位、前 17 颗稳定值一颗不动（上面那句"顺序与名字都是契约"
+    //   不被触碰；分派走字符串 DriverKey、provider 与测试按名字取常量，仓库里没有一处读这颗整数）。
+    //   它是单层 provider（与 Sqlite/DuckDb 同档，无血统基类、无叶子），整层【文档·ClickHouse】（clickhouse.com/docs）
+    //   口径、未实测：能力 6 位、UPDATE/DELETE 整格拒、建表带索引整格拒 —— 逐格出处见
+    //   src/QuickSql.Providers.ClickHouse 各类注释与设计文档 §9.1/§13.5。
+    ClickHouse = 17,
 }

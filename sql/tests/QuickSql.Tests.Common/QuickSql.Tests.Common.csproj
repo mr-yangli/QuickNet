@@ -83,6 +83,12 @@
          它另有一格别家没有：本机不需要授权实例就能连上一台真库（一个文件就是一座库），所以这一层类注释里每格断言
          后面挂的是探针读数而不是文档口径，出处目录 <c>obj/sqlite-probe*/</c>（编号排到 44）。 -->
     <ProjectReference Include="..\..\src\QuickSql.Providers.Sqlite\QuickSql.Providers.Sqlite.csproj" />
+    <!-- 第八个方言族（ClickHouse 落笔）：同一格理由的第十八次重复，与 DuckDB 那行同档——只有一层，
+         只引一个项目；且同为【文档口径行】，classes 里没有运行时构造它的那一册（驱动从未解析成功）。
+         它多出的新形状在对拍之外：UPDATE/DELETE 两整格拒发（本仓库第一颗）、建表遇契约索引整格拒、
+         可空不写在 DDL 修饰那一格而在型包裹（Nullable(T)，没有第三形）——
+         所以方言册量的是这三格加 6 位能力掩码，代价是本册要能同时构造它与在线册那套离线探针。 -->
+    <ProjectReference Include="..\..\src\QuickSql.Providers.ClickHouse\QuickSql.Providers.ClickHouse.csproj" />
   </ItemGroup>
 
   <!-- G1 的接线本体在这里：测试实体带 [Table]，编译期就会生成 schema/validator/事实。

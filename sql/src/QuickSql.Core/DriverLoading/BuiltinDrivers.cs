@@ -128,6 +128,13 @@ public static class BuiltinDrivers
         // （DuckDB.NET.Data，官方 ADO.NET 驱动，NuGet 包按原生伴件分 Full 档），factoryType 刻意不写
         // 走兜底扫描。这个名字从未在任何机器上解析成功过，本机没有引擎，整行未实测（§13.5 台账逐位记）。
         new("duckdb", "DuckDB.NET.Data", null),
+
+        // ClickHouse（本笔：ClickHouse 落笔）：单层 provider（与 Sqlite/DuckDb 同档，无血统基类、无叶子），
+        // 也是内建表第一次收一个"客户端/服务器引擎"档的【文档口径行】（前面那颗从未解析成功的 gbase8s 同档，
+        // 但本颗有官方一手 ADO.NET 驱动页可引）。assembly 名按厂商文档口径写（ClickHouse.Client，
+        // https://clickhouse.com/docs/integrations/language-clients/dotnet/ ），factoryType 刻意不写走兜底扫描。
+        // 此名从未在任何机器上解析成功过，本机没有引擎，整行未实测（§13.5 第十七本台账逐位记）。
+        new("clickhouse", "ClickHouse.Client", null),
     ];
 
     public static IReadOnlyList<DriverRef> Drivers => _refs;

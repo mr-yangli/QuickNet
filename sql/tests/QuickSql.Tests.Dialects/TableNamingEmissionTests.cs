@@ -12,8 +12,10 @@ namespace QuickSql.Tests.Dialects;
 /// 一处绕过换算的拼接发出的是<code>INSERT INTO QuickSqlShardLog_{year}</code>，库里既没有这张表、
 /// 也不报错，只在某张别的表上少了行。
 ///
-/// <para><b>两半各钉一件事</b>。第一半是<em>行为</em>：十七家方言族逐家量一遍（第十七颗 DuckDb 是
-/// v0.39 第一笔落的；等号按 <see cref="DbKind"/> 全家数，一家一家从上面那个 switch 里点名），模板进发射口必须当场抛，
+/// <para><b>两半各钉一件事</b>。第一半是<em>行为</em>：十八家方言族逐家量一遍（第十七颗 DuckDb 是
+/// v0.39 第一笔落的；第十八颗 ClickHouse 是 v0.39 第二笔落的，那一家砍掉 写·UPDATE/写·DELETE/DDL·时间档
+/// 三格发射口、另立 <see cref="ClickHouse_refuses_mutation_and_indexed_ddl"/> 点名；
+/// 等号按 <see cref="DbKind"/> 全家数，一家一家从上面那个 switch 里点名），模板进发射口必须当场抛，
 /// 而换算好的名字家户都落得下同一条后缀（钉的是"没有一家把兜底覆写掉了"——<c>EmitTableName</c> 是
 /// virtual，任何一家重写它而忘了那一句守卫，只有逐家跑一遍才看得见）。第二半是<em>形状</em>：反射枚举
 /// Abstractions 里所有收 <see cref="TableInfo"/> 的接口成员，闭集就是那九颗，多一颗就要人来认账
@@ -62,6 +64,7 @@ public sealed class TableNamingEmissionTests
         "OceanBase" => OceanBase.Orm(),
         "Gbase8c" => Gbase8c.Orm(),
         "DuckDb" => DuckDb.Orm(),
+        "ClickHouse" => ClickHouse.Orm(),
         _ => throw new InvalidOperationException($"没有这一家方言：{family}"),
     };
 
@@ -106,7 +109,7 @@ public sealed class TableNamingEmissionTests
     {
         var orm = Orm(family);
 
-        foreach (var (label, sql, suffixes) in Surfaces(orm))
+        foreach (var (label, sql, suffixes) in Surfaces(orm, family))
         {
             foreach (var token in Tokens)
                 Assert.False(sql.Contains(token, StringComparison.Ordinal),
@@ -119,18 +122,37 @@ public sealed class TableNamingEmissionTests
     }
 
     /// <summary>一家方言能碰到的<em>全部</em>命名出口，各配它应当落下的片名后缀。
-    /// 读、三种写、DDL 两条档各占一格 —— 这一格少一条，那一面就没有被量过。</summary>
-    static (string Label, string Sql, string[] Suffixes)[] Surfaces(QuickSqlOrm orm) =>
-    [
-        ("读·单片", orm.Select<ShardLog>().SplitTables(January, January).ToSql(), ["202601"]),
-        ("读·两片", orm.Select<ShardLog>().SplitTables(January, February).ToSql(), ["202601", "202602"]),
-        ("读·桶", orm.Select<TenantRow>().SplitTables(0, 1).ToSql(), ["_00", "_01"]),
-        ("写·INSERT", orm.Insert(new ShardLog { Id = Guid.Empty, OccurredAt = January, Level = 1 }).Explain().Chunks[0].Sql.Text, ["202601"]),
-        ("写·UPDATE", orm.Update<ShardLog>().SplitTable(January).Set(o => o.Level, 9).Where(o => o.Id == Guid.Empty).ToSql(), ["202601"]),
-        ("写·DELETE", orm.Delete<ShardLog>().SplitTable(January).Where(o => o.Id == Guid.Empty).ToSql(), ["202601"]),
-        ("DDL·时间档", orm.SplitTablesScript<ShardLog>(January, February), ["202601", "202602"]),
-        ("DDL·哈希档", orm.SplitTablesScript<TenantRow>(0, 1), ["_00", "_01"]),
-    ];
+    /// 读、三种写、DDL 两条档各占一格 —— 这一格少一条，那一面就没有被量过。
+    /// <b>表是 family-aware 的</b>（v0.39 第二笔：第十八颗 ClickHouse 到场）：写·UPDATE/写·DELETE
+    /// 两格在那一家用的是"整格拒发"那一支
+    ///（<see href="https://clickhouse.com/docs/sql-reference/statements/delete"/>，变异档 不进写路径），
+    /// DDL·时间档那格在那一家用的是"建表遇契约索引整格拒"
+    ///（ShardLog 带 <c>[Index(nameof(Level))]</c>，ClickHouse 没有 CREATE INDEX 语句级格）——
+    /// 砍三格砍的是发射口的事，不是命名通路的事；发出去的那五格仍然逐家同量。
+    /// 另立有一颗 <see cref="ClickHouse_refuses_mutation_and_indexed_ddl"/> 把被砍的三格折成一册点名。</summary>
+    static (string Label, string Sql, string[] Suffixes)[] Surfaces(QuickSqlOrm orm, string family)
+    {
+        var readOnlySurfaces = new (string Label, string Sql, string[] Suffixes)[]
+        {
+            ("读·单片", orm.Select<ShardLog>().SplitTables(January, January).ToSql(), ["202601"]),
+            ("读·两片", orm.Select<ShardLog>().SplitTables(January, February).ToSql(), ["202601", "202602"]),
+            ("读·桶", orm.Select<TenantRow>().SplitTables(0, 1).ToSql(), ["_00", "_01"]),
+            ("写·INSERT", orm.Insert(new ShardLog { Id = Guid.Empty, OccurredAt = January, Level = 1 }).Explain().Chunks[0].Sql.Text, ["202601"]),
+            ("DDL·哈希档", orm.SplitTablesScript<TenantRow>(0, 1), ["_00", "_01"]),
+        };
+
+        if (family == "ClickHouse")
+            return readOnlySurfaces;
+
+        return
+        [
+            .. readOnlySurfaces[..4],
+            ("写·UPDATE", orm.Update<ShardLog>().SplitTable(January).Set(o => o.Level, 9).Where(o => o.Id == Guid.Empty).ToSql(), ["202601"]),
+            ("写·DELETE", orm.Delete<ShardLog>().SplitTable(January).Where(o => o.Id == Guid.Empty).ToSql(), ["202601"]),
+            ("DDL·时间档", orm.SplitTablesScript<ShardLog>(January, February), ["202601", "202602"]),
+            .. readOnlySurfaces[4..],
+        ];
+    }
 
     /// <summary>上面那两份逐家用例的前提：清单确实就是 <see cref="DbKind"/> 全家。少一家不是"少跑一家"，
     /// 是"这一档在那一家身上从来没被量过"，而消息里那一句 <c>没有这一家方言</c> 只防得住拼错、防不住漏写一整条。</summary>
@@ -140,7 +162,40 @@ public sealed class TableNamingEmissionTests
         var kinds = Enum.GetNames<DbKind>().Select(Orm).Select(static orm => orm.Provider.Kind.ToString()).ToArray();
 
         Assert.Equal(Enum.GetNames<DbKind>().Order(StringComparer.Ordinal).ToArray(), kinds.Order(StringComparer.Ordinal).ToArray());
-        Assert.Equal(17, kinds.Length);
+        Assert.Equal(18, kinds.Length);
+    }
+
+    /// <summary>被 <see cref="Surfaces"/> 砍掉的那三格，逐格点名：ClickHouse 的 UPDATE/DELETE 两整格
+    /// 拒发（官方形状都在变异档【文档·ClickHouse：alter 页与
+    /// https://clickhouse.com/docs/sql-reference/statements/delete 】），带契约索引的建表整格拒
+    ///（这一族没有 CREATE INDEX 语句级格，索引是建表语句里的数据骨架声明）。三格的共同点：
+    /// 拒的是<em>发射口</em>，"名字必须换算好再进"那条通路一格都没豁免 —— 所以砍命名出口量的是
+    /// 文本产不出那一格，不是这一条纪律少了一家。</summary>
+    [Fact]
+    public void ClickHouse_refuses_mutation_and_indexed_ddl()
+    {
+        var orm = ClickHouse.Orm();
+
+        var update = Checks.Raised<QuickSqlException>(() =>
+            orm.Update<ShardLog>().SplitTable(January).Set(o => o.Level, 9).Where(o => o.Id == Guid.Empty).ToSql());
+
+        Assert.Contains("UPDATE 不在写路径上", update.Message);
+
+        var deletion = Checks.Raised<QuickSqlException>(() =>
+            orm.Delete<ShardLog>().SplitTable(January).Where(o => o.Id == Guid.Empty).ToSql());
+
+        Assert.Contains("lightweight DELETE", deletion.Message);
+
+        var indexed = Checks.Raised<QuickSqlException>(() =>
+        {
+            var writer = new SqlWriter(new StringBuilder(), [], orm.Provider.Dialect.ParameterPrefix);
+
+            orm.Provider.CodeFirst.EmitCreateTable(writer, orm.Schemas.Contract<Order>());
+
+            return null;
+        });
+
+        Assert.Contains("拒收契约索引", indexed.Message);
     }
 
     /// <summary>收 <see cref="TableInfo"/> 的接口成员是一个<em>闭集</em>，十二颗各有角色：DML 侧只有

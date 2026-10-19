@@ -129,6 +129,20 @@ namespace QuickSql.Tests.Dialects;
 /// 也交不出别人缺的一位）。<b>PinnedLive 0 是本册最立得住的一格</b>：本机没有任何一台引擎、
 /// 驱动从未解析成功，§13.5 那一行整行「未实测」，逐格口径与出处 URL 都挂在那本台账上。</para>
 ///
+/// <para><b>v0.39 第二笔把册数带到十七本</b>：第十七份（clickhouse）是单层 provider 的第二颗
+///【文档口径行】（继 duckdb 之后的又一次"整层文档、零实测"，本机没有引擎、<c>ClickHouse.Client</c>
+/// 从未解析成功），也是这本账里<b>第一颗"写语句两格全空"的台账</b>：UPDATE/DELETE 在本家整格拒发
+/// （官方形状都在变异档【文档·ClickHouse：alter 页与 lightweight DELETE 页】），写路径那三位
+///（<c>Returning</c>/<c>Upsert_*</c>/<c>Transactions</c>）因此一位都不声明 ——
+/// <b>它还是交集链上第一颗把"内检索引位"扣出交集的家</b>：<c>Transactions</c> 十六本逐本声明，
+/// 本家取"没有"那一格（内核写路径逐句 autocommit 直发、多语句不原子，公开 <c>BeginTransaction</c>
+/// 无位即抛），于是交集从"十六本 ∶ 两位"变"十七本 ∶ 一位"——
+/// 第十四次变小，而这一次削的是一笔内检索引位，不是一句库种事实。声明位只有 6 颗
+///（<c>Paging_LimitOffset</c>/<c>Boolean_Type</c>/<c>Guid_Raw16</c>/<c>Schemas</c>/
+/// <c>Alter_Column_Precision</c>/<c>CaseSensitive_Identifiers</c>），PinnedOffline 6 = PinnedLive 0，
+/// 五份自家 golden/ 基线加一条 UUID 断言（<c>insert-with-keys</c> 那份基线在本家不落盘：
+/// <c>EmitReturning</c> 整格抛，黄金样本改判为"断言抛"）。</para>
+///
 /// <para>第四份（虚谷）带来的不是"又多一位乐观声明"，而是<b>交集没变</b>这一件反常事：它声明的 7 位全部落在
 /// 前四家已经出现过的位上，于是"每接一族交集就小一格"那句隐含预期第一次有了反例。那一格不是运气，是判据
 /// 被执行的结果 —— 掩码按"代码今天真的走到那一条语句"攒，不按"这一族文档里有什么"抄，所以新增一族能带来的
@@ -858,6 +872,10 @@ public sealed class CapabilityLedgerTests
         // golden/ 基线可指（类型表四格换名、身份列换形态、谓词与分页各有绝对形状），离线档因此比邻本厚一颗。
         // 血统那 15 位在本家一位不翻不删（CaseSensitive_Identifiers 与库行为的偏差记 §14 与
         // DuckDbCodeFirst 类注释，本表照旧声明），VendorDoc 七颗的判据与血统那几本同源。
+        // <b>【v0.39 第二笔补一句】下一本（第十七本，clickhouse）与它同档不同果</b>：同是"整层文档口径、
+        // 零实测"的单层【文档口径行】，但本家不再是复点册 —— 声明位降到 6 颗，Transactions 从这一本起
+        // 第一次被"内核写路径不开事务"那一格表态退回（交集就此削去那颗内检索引位，见下面的链），
+        // 而插入那一份基线头一回代替"断言抛"出场（EmitReturning 整格抛，insert-with-keys 不落盘）。
         new("duckdb", static () => DuckDb.Provider(SqlServer.NoDriverFactory.Instance), 16, 8, 0,
         [
             // 八颗离线位各指一份自家基线。分页那一份钉的还多一格：skip-only 那颗"缺上限不补哨兵"
@@ -896,6 +914,30 @@ public sealed class CapabilityLedgerTests
             // 多语句事务"仍然是各家的活库账——本家今天的活库见证是 0，所以落 VendorDoc；行为诚实条款全文住在
             // 位注释与用法册 §2.4，三处同源，改判必须三处一起动。
             new(DbCapabilities.Transactions, Provenance.VendorDoc, "内检索引位（内核写路径按位分岔的那份账）：多语句事务在库里成不成立由各血统的文档口径与活库见证记账，本家今天仍在『未实测』那半本上"),
+        ]),
+
+        // 第十七本台账（v0.39 第二笔，ClickHouse 落笔）。前面的复点/复用计数到这里换形状：本家是单层
+        // provider 的第二颗【文档口径行】（与 duckdb 那本同档：本机没有引擎、驱动从未解析，整层
+        //【文档·ClickHouse】口径），但它不是复点册的三处差异逐条记：① 声明位只有 6 颗 —— 写路径那组
+        // 位的空档不是漏记，是整格拒：UPDATE/DELETE 的官方形状都在变异档（ALTER TABLE … UPDATE …
+        //【文档·ClickHouse：alter 页】 ∶ lightweight DELETE
+        //【文档·ClickHouse，https://clickhouse.com/docs/sql-reference/statements/delete 】），
+        // RETURNING/OUTPUT 任何一支都不在官方写语句清单里【文档没逐页回读，本笔如写成"有"】，
+        // Upsert_* 亦然（MERGE/ON CONFLICT/ON DUPLICATE 都没有【文档没逐页回读】）；
+        // ② <c>Transactions</c> 是本家第一次把这位说"没有"：它不是库种缺欠，是内核那颗表态位在本家
+        // 的落位 = 逐句 autocommit 直发、多条语句不原子，公开 BeginTransaction 无位即抛 ——
+        // 行为诚实条款全文住在位注释与用法册 §2.4，三处同源；③ PinnedOffline 6 = PinnedLive 0，
+        // 五份 golden/clickhouse/ 基线加一条 UUID 断言 —— insert-with-keys 在本家不落盘（EmitReturning
+        // 抛，golden 改判为"断言抛"，与 Gbase8s 那本同档）。整行未实测：哪一台引擎到手，第一件事
+        // 就是把六个 OfflineText 逐位换版本再问一次。
+        new("clickhouse", static () => ClickHouse.Provider(SqlServer.NoDriverFactory.Instance), 6, 6, 0,
+        [
+            new(DbCapabilities.Paging_LimitOffset, Provenance.OfflineText, "golden/clickhouse/paging-order-skip-take.sql"),
+            new(DbCapabilities.Boolean_Type, Provenance.OfflineText, "golden/clickhouse/where-boolean-flag.sql"),
+            new(DbCapabilities.Guid_Raw16, Provenance.OfflineText, "ClickHouseDialectTests 那条 UUID 断言（类型表 Guid→UUID 的原生 16 字节档；\"16 字节存储\"那一半与邻本一起欠着）"),
+            new(DbCapabilities.CaseSensitive_Identifiers, Provenance.OfflineText, "golden/clickhouse/select-entity.sql"),
+            new(DbCapabilities.Schemas, Provenance.OfflineText, "golden/clickhouse/ddl-order.sql"),
+            new(DbCapabilities.Alter_Column_Precision, Provenance.OfflineText, "golden/clickhouse/ddl-alter-and-comment.sql"),
         ]),
     ];
 
@@ -1010,6 +1052,7 @@ public sealed class CapabilityLedgerTests
         var oracle = Flags("oracle");
         var sqlite = Flags("sqlite");
         var duckDb = Flags("duckdb");
+        var clickHouse = Flags("clickhouse");
 
         // tidb 进交集链是白给的一票（掩码逐位同 mysql），而它进链本身就是要钉的事：
         // "接第二颗叶子没有把交集改小"与 v0.31 那句"接第五族没改小"是同一格判据的第二次兑现。
@@ -1076,23 +1119,36 @@ public sealed class CapabilityLedgerTests
         // 这一格值得记的另一半在改产出的那一侧：本家是 PG 血统头一颗<b>真的改了血统文本</b>的叶子，
         // 而交集对此照旧钝感——交集量的是声明位的覆盖面，量的不是"文本是谁发的"。
         // "同掩码 ≠ 同形"（v0.36 第五笔立的那一格）到本笔从 Oracle 血统跨到了 PG 血统。
-        var shared = kingbase.Intersect(dameng).Intersect(mysql).Intersect(xugu).Intersect(tidb).Intersect(oceanbase).Intersect(openGauss).Intersect(gaussDb).Intersect(highgo).Intersect(shenTong).Intersect(gbase8c).Intersect(gbase8s).Intersect(postgreSql).Intersect(oracle).Intersect(sqlite).Intersect(duckDb).ToArray();
+        //
+        // <b>v0.39 第二笔：这条链第十四次触链，而这一次被扣掉的是内检索引位。</b>第十七本（clickhouse，
+        // 单层第二颗【文档口径行】）交的 6 位一颗不少都在别人见过的位上，但它把 <c>Transactions</c> 整格
+        // 退回：UPDATE/DELETE 与"多语句原子"在那一族官方形状全在变异档【文档·ClickHouse：alter 页 ∶
+        // lightweight DELETE 页】，内核写路径在那一族是逐句 autocommit 直发、多条语句不原子，
+        // 公开 BeginTransaction 无位即抛 —— 于是交集从"十六本 ∶ 两位"缩到"十七本 ∶ 一位"，
+        // <b>三位地基里的最后一颗库种位（<c>Schemas</c>）与那颗内检索引位分开算账从这里起生效</b>：
+        // 交集里剩下的 <c>Schemas</c> 量的是"每一家都有限定名发射口"这一格，而 <c>Transactions</c>
+        // 从"逐本声明"变成"十六本里有本缺"——它与 <c>Comment_On_Column</c> 那两颗相同格：掉出交集
+        // 不等于"谁没人护着"，那一半的账仍在各行辖内。
+        var shared = kingbase.Intersect(dameng).Intersect(mysql).Intersect(xugu).Intersect(tidb).Intersect(oceanbase).Intersect(openGauss).Intersect(gaussDb).Intersect(highgo).Intersect(shenTong).Intersect(gbase8c).Intersect(gbase8s).Intersect(postgreSql).Intersect(oracle).Intersect(sqlite).Intersect(duckDb).Intersect(clickHouse).ToArray();
 
         var expected = new[]
         {
             DbCapabilities.Schemas,
-
-            // 【本笔（ClickHouse 重开·笔一）】第二位不是又一颗"库种事实"进交集，而是<em>第一颗内检索引位</em>：
-            // Transactions 由内核写路径（SaveChanges ∶ InsertOrUpdate ∶ 三条批量链）与公开的 BeginTransaction
-            // 真读（判据取唯一写法 <c>TransactionCapability.Declared</c>），十六本在这里逐本声明回去 ——
-            // §4 那句"分派点必须落在被读的那一格，不是被声明的那一格"由此第一次在能力位上兑现，也结掉
-            // "掩码零读者"那条旧账的另一半。它进交集的方式与 <c>Schemas</c> 不同的那半要说白：
-            // <c>Schemas</c> 是十六本各自发得出限定名的库种事实，本位是"内核按这一位分岔"的接线事实——
-            // 位在每一家手里都是同一颗，家长的是同一份判词；它量不到任何一家的库收不收多语句事务
-            // （那半在各行的 VendorDoc 见证里，今天全是"未实测"）。行为诚实条款（没有位的那一家
-            // 逐句 autocommit 直发、多条语句不原子）写在位注释与用法册 §2.4。
-            DbCapabilities.Transactions,
         };
+
+        // <b>【v0.39 第二笔续写】</b>第二位（<c>Transactions</c>）从本笔起不在交集里，而它退出的方式与
+        // 到场的分岔都要说白：点明本位在内核写路径（SaveChanges ∶ InsertOrUpdate ∶ 三条批量链）
+        // 与公开的 BeginTransaction 真读（判据取唯一写法 <c>TransactionCapability.Declared</c>），
+        // 十六本在这里逐本声明回去；第十七本（clickhouse）取"没有"那一格 ——内核在那一族
+        // 逐句 autocommit 直发、多条语句不原子，公开路径无位即抛（严禁静默假事务，与
+        // <see cref="IDbProvider.CanCreateDatabase"/> 那颗 false 先例同一形状）。行为诚实条款全文住在
+        // 位注释与用法册 §2.4。它进交集的方式与 <c>Schemas</c> 不同的那半要说白：
+        // <c>Schemas</c> 是十六本各自发得出限定名的库种事实，本位是"内核按这一位分岔"的接线事实 ——
+        // 位在每一家手里都是同一颗，家长的是同一份判词；它量不到任何一家的库收不收多语句事务
+        //（那半在 clickhouse 行里落 VendorDoc，其余行是文档口径与活库见证记账）。
+        Assert.DoesNotContain(DbCapabilities.Transactions, shared);
+        Assert.Contains(DbCapabilities.Transactions, duckDb);
+        Assert.DoesNotContain(DbCapabilities.Transactions, clickHouse);
 
         // 判集合相等而不是判序列：交出来的顺序是 Enum.GetValues 的事，不是这一条的主张。
         Assert.Equal(expected.Length, shared.Length);
@@ -1273,6 +1329,9 @@ public sealed class CapabilityLedgerTests
         // 大小写不敏感而保留原样【文档·DuckDB】，位照血统一字不翻，偏差全文记 §14：台账量的是
         // "声明面动没动"，不量"库收不收这一位讨来的区分"。
         Assert.Contains(DbCapabilities.CaseSensitive_Identifiers, duckDb);
+        // v0.39 第二笔：这一位的第十户，来路与另九户同向：官方 identifiers 页写明区分大小写且取
+        // SQL 标准引号那一副【文档·ClickHouse】，判法照旧（不进交集只是因为 SQLite 那一票不声明它）。
+        Assert.Contains(DbCapabilities.CaseSensitive_Identifiers, clickHouse);
 
         // Returning 是这一版新添的那一分岔：它在四家里只占两位（金仓与虚谷），而这两位的<em>来路</em>不同 ——
         // 那两家的产物/文档各给了一个句尾 RETURNING，另两家（Oracle 血统与 MySQL 血统）连批量那一形都给不出。

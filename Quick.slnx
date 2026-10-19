@@ -38,6 +38,9 @@
     <Project Path="sql/src/QuickSql.Providers.Gbase8s/QuickSql.Providers.Gbase8s.csproj" />
     <!-- 第七家（本笔）：第四颗单层整层，而它是这一串里第一颗断言逐格向活库问过的——本机一个文件就是一座库。 -->
     <Project Path="sql/src/QuickSql.Providers.Sqlite/QuickSql.Providers.Sqlite.csproj" />
+    <!-- 第十家（本笔：ClickHouse 落笔）：单层族里的第二颗【文档口径行】——本机没有引擎、
+         驱动包也从未被解析过，整层与 DuckDB 同档：文档一步到位、实测等第一台。 -->
+    <Project Path="sql/src/QuickSql.Providers.ClickHouse/QuickSql.Providers.ClickHouse.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="excel/tests/QuickExcel.Tests/QuickExcel.Tests.csproj" />

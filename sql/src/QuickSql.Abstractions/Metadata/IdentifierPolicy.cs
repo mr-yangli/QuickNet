@@ -100,6 +100,17 @@ public sealed record IdentifierPolicy(
     /// "折小写"那一支今天有两位住户，PG 血统与这一族，而前一位一直靠加引号躲着它）。</summary>
     public static IdentifierPolicy Gbase8s { get; } = new('"', '"', CaseSensitive: true, FoldToUpperCase: false, QuoteWhenMixedCase: true);
 
+    /// <summary>ClickHouse 的预设：<b>双引号、区分大小写、不折名</b> —— 四颗取值与 <see cref="Gbase8s"/>
+    /// <em>逐字同形</em>，而来路句句另立：官方 identifiers 页写明标识符<em>区分大小写</em>且用
+    ///<c>"</c>、<c>`</c>、<c>[</c> 三副引号之任一【文档·ClickHouse：identifiers 页，本笔取
+    /// SQL 标准那一副与另九族同向】。区分大小写取 true 的后果与另几族同一条：<see cref="NeedsQuote"/>
+    /// 对每个标识符都返回真，所以发射层恒加引号、<see cref="FoldToUpperCase"/> 是
+    /// <b>一颗永远不被走到的取值</b>（与 <see cref="Gbase8s"/> 那一条同一个处境：库里不折小写
+    /// —— 本家标识符里连折叠那条默认路都没有【文档没逐页回读】，这一格的真状态要等第一台引擎来问）。
+    /// <see cref="QuoteAlways"/> 取默认 false 与 <see cref="Gbase8s"/> 同格：恒加引号那半由
+    /// <see cref="CaseSensitive"/> 达成，不需要再开一颗（两支出口的分布是"只有前一支"）。</summary>
+    public static IdentifierPolicy ClickHouse { get; } = new('"', '"', CaseSensitive: true, FoldToUpperCase: false, QuoteWhenMixedCase: true);
+
     /// <summary>SQLite 的预设：<b>双引号、一律加引号、<em>不</em>区分大小写</b>。它是这一份表里第一颗
     /// 「双引号 ∶ 恒加引号 ∶ 不敏感」三者同堂的组合（<see cref="PostgreSQL"/> 那一系双引号而敏感、
     /// <see cref="SqlServer"/> 与 <see cref="MySql"/> 恒加引号而不敏感却各用一副自己的引号字形），
