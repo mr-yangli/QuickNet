@@ -120,6 +120,14 @@ public static class BuiltinDrivers
         // 跑出去的是 QueryEngine 与 InsertEngine 自己拼的语句；CodeFirst 的产物在本仓库没有执行路径，
         // 所以不写「每一格都实测过」，逐位档位记台账不记在这里。
         new("sqlite", "Microsoft.Data.Sqlite", "Microsoft.Data.Sqlite.SqliteFactory"),
+
+        // DuckDB（本笔：DuckDB 落笔）：PG 血统的第七颗叶子，也是内嵌单文件引擎这一档的第二颗键 ——
+        // "库"就是连接串里那颗文件，不要凭据、也没有"建库"这条路（provider 那侧 CanCreateDatabase=false，
+        // 血统的 EnsureDatabaseExistsAsync 在本家整格无害可走）。与 sqlite 行同判而方向相反：sqlite 那颗
+        // factoryType 是从活机器上读回来的，本颗与金仓/达梦同档 —— assembly 名按厂商文档口径写
+        // （DuckDB.NET.Data，官方 ADO.NET 驱动，NuGet 包按原生伴件分 Full 档），factoryType 刻意不写
+        // 走兜底扫描。这个名字从未在任何机器上解析成功过，本机没有引擎，整行未实测（§13.5 台账逐位记）。
+        new("duckdb", "DuckDB.NET.Data", null),
     ];
 
     public static IReadOnlyList<DriverRef> Drivers => _refs;

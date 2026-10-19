@@ -24,4 +24,11 @@ public enum DbKind
     TiDb = 13,
     OceanBase = 14,
     Sqlite = 15,
+    // 第 17 颗（本笔：DuckDB 落笔）。追加在末位、前 16 颗稳定值一颗不动（上面那句"顺序与名字都是契约"
+    //   不被触碰；分派走字符串 DriverKey、provider 与测试按名字取常量，仓库里没有一处读这颗整数）。
+    //   它是 PG 血统的第七颗叶子（挂 PostgreSqlBase），而这一族文本层第一次真的改了血统的产出：
+    //   类型表四格换名（DOUBLE/TIMESTAMP/TIMESTAMPTZ/TIME）、身份列换形态（句外 CREATE SEQUENCE '…'
+    //   + DEFAULT nextval('…')）、"建库"整格不存在（内嵌单文件引擎，与 SQLite 同档）—— 逐格出处见
+    //   src/QuickSql.Providers.DuckDb 各类注释与设计文档 §9.1/§13.5；整层【文档·DuckDB】口径、未实测。
+    DuckDb = 16,
 }

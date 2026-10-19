@@ -17,6 +17,11 @@
     <Project Path="sql/src/QuickSql.Providers.Gbase8c/QuickSql.Providers.Gbase8c.csproj" />
     <!-- PG 血统的正典叶（v0.37 第二笔）：这一族第一颗"本尊"，而 §9.1 那张表里 PG 与 MySQL 两个本尊都没有行。 -->
     <Project Path="sql/src/QuickSql.Providers.PostgreSql/QuickSql.Providers.PostgreSql.csproj" />
+    <!-- PG 血统的第七颗叶子（DuckDB 落笔）：前六颗叶子在文本层全部零覆写、产出逐字同形，本家是这一族
+         第一颗真的改了血统产出的叶子（类型表四格换名、身份列换句外 CREATE SEQUENCE + nextval 形态、
+         "建库"整格不存在）。它同时开了血统基类的两道缝（CreateCodeFirst/CreateDialect）—— 与 Oracle
+         那一族同一条先例。 -->
+    <Project Path="sql/src/QuickSql.Providers.DuckDb/QuickSql.Providers.DuckDb.csproj" />
     <!-- 方言族：Oracle（血统 + 两叶 + 本尊） -->
     <Project Path="sql/src/QuickSql.Providers.OracleBase/QuickSql.Providers.OracleBase.csproj" />
     <Project Path="sql/src/QuickSql.Providers.Dameng/QuickSql.Providers.Dameng.csproj" />

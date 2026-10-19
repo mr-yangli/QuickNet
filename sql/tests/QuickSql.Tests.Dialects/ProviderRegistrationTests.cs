@@ -5,16 +5,18 @@ using Xunit;
 namespace QuickSql.Tests.Dialects;
 
 /// <summary>§4 一行注册的登记面。这一册不测方言文本，测的是"生成器有没有跑起来 + 表能不能读"：
-/// <see cref="ProviderRegistry"/> 里应当有 16 颗 <see cref="DbKind"/>，与 §5 那张 provider 总表
+/// <see cref="ProviderRegistry"/> 里应当有 17 颗 <see cref="DbKind"/>，与 §5 那张 provider 总表
 /// 一颗不差；<see cref="QuickSqlOrm.Create(DbKind,string,System.Data.Common.DbProviderFactory)"/>
 /// 出来的 <see cref="QuickSqlOrm"/> 应当带对的 <see cref="IDbProvider.Kind"/>。</summary>
 /// <remarks>触发链是 <c>QuickSql.Tests.Common.csproj</c> 把 <c>QuickSql.Generators</c> 以
-/// <c>OutputItemType="Analyzer"</c> 挂进去、并引用了 15 颗 provider 工程，所以本册拿到的登记表
+/// <c>OutputItemType="Analyzer"</c> 挂进去、并引用全部叶 provider 工程，所以本册拿到的登记表
 /// 由 <c>QuickSql.Tests.Common</c> 那一份 <c>[ModuleInitializer]</c> 一次性铺好。测试代码里
 /// 必须先摸一次 <c>QuickSql.TestInfra.SqlServer</c>（同汇编类型），module initializer 才会跑。
-/// 第十六颗 <see cref="DbKind.Sqlite"/> 走同一份触发链，只是 provider 工程 <c>QuickSql.Providers.Sqlite</c>
-/// 在 <c>Common.csproj</c> 里是普通引用；<b>这一句在本册里不是可省的字</b>——若哪天 <c>Sqlite</c>
-/// 从 <c>Common</c> 里被摘出去，本册第一次跑就会红在"Registered 少一颗"这一格而不是悄悄少测一家。</remarks>
+/// 原句"15 颗 provider 工程"记的是 Sqlite 落笔之前的那一份引用面；<b>"第十六颗走同一份触发链、
+/// provider 工程是普通引用"这一句在本册里不是可省的字</b>——若哪天 <c>Sqlite</c> 从 <c>Common</c>
+/// 里被摘出去，本册第一次跑就会红在"Registered 少一颗"这一格而不是悄悄少测一家。第十七颗
+/// <see cref="DbKind.DuckDb"/> 与 Sqlite 同档（v0.39 第一笔）：<c>QuickSql.Providers.DuckDb</c>
+/// 亦是普通引用，登记由同一份构造链铺好。</remarks>
 public class ProviderRegistrationTests
 {
     /// <summary>把 <c>QuickSql.Tests.Common</c> 那一份程序集摸热：读同汇编的一颗静态属性即可，
@@ -25,7 +27,7 @@ public class ProviderRegistrationTests
     static void TouchCommonAssemblyModuleInitializer() => _ = SqlServer.NoDriverFactory.Instance;
 
     [Fact]
-    public void Registry_HasAllSixteenKinds()
+    public void Registry_HasAllSeventeenKinds()
     {
         TouchCommonAssemblyModuleInitializer();
 
@@ -35,13 +37,14 @@ public class ProviderRegistrationTests
             DbKind.Kingbase, DbKind.OpenGauss, DbKind.GaussDb, DbKind.Highgo,
             DbKind.Dameng, DbKind.ShenTong, DbKind.Xugu, DbKind.Gbase8s,
             DbKind.Gbase8c, DbKind.TiDb, DbKind.OceanBase, DbKind.Sqlite,
+            DbKind.DuckDb,
         };
 
         foreach (var kind in expected)
             Assert.True(ProviderRegistry.Contains(kind), $"DbKind.{kind} 未登记（生成器没跑或 provider 没引用）");
 
-        Assert.Equal(16, expected.Length);
-        Assert.Equal(16, ProviderRegistry.Registered.Distinct().Count());
+        Assert.Equal(17, expected.Length);
+        Assert.Equal(17, ProviderRegistry.Registered.Distinct().Count());
     }
 
     [Fact]
@@ -61,7 +64,7 @@ public class ProviderRegistrationTests
     {
         TouchCommonAssemblyModuleInitializer();
 
-        // 用一颗不存在的整数当 DbKind 走"未登记"那一支——今天值域是 0..15（第六笔压平后连续），
+        // 用一颗不存在的整数当 DbKind 走"未登记"那一支——今天值域是 0..16（连续枚举），
         // 99 落在这个范围之外，等价于"注册表里没这颗"，抛的是 InvalidOperationException 而不是 DriverNotAvailable。
         var unregistered = (DbKind) 99;
         var ex = Assert.Throws<InvalidOperationException>(() =>

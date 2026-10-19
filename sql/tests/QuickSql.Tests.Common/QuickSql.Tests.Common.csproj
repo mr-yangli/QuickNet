@@ -35,6 +35,13 @@
          它是这一族第一颗本尊，所以"要量得动同形就得借邻家叶子当链的中间那颗"这条前提在本家第一次不需要——
          链的两端现在都是本族自己的库种（本尊 ∶ 血统），而"借来的那一段"仍在原地（openGauss 行那句自纠记着）。 -->
     <ProjectReference Include="..\..\src\QuickSql.Providers.PostgreSql\QuickSql.Providers.PostgreSql.csproj" />
+    <!-- PG 血统的第七颗叶子（DuckDB 落笔）：同一格理由的第十七次重复，而它多出的新形状不是"又多一方"：
+         它是这一族第一颗与血统<b>不同形</b>的叶子（前六颗的逐字同形链，到这里第一次由磁盘基线取代对拍），
+         所以它进不了那串"leaf == 邻叶 == 血统"的链，方言册走 golden/duckdb/ 的磁盘基线（它也照单层那几行的
+         判据不进 <c>DialectParityTests</c>：它对血统不是"另两家共差几格"，是"同一份血统代码在两格上换读法"，
+         分岔的格点写在 <c>DuckDbTypes</c>/<c>DuckDbCodeFirst</c> 的类注释里）
+         —— 要同时量得动"血统与叶子这一格分岔"，本册要能同时构造叶子与那颗血统探针。 -->
+    <ProjectReference Include="..\..\src\QuickSql.Providers.DuckDb\QuickSql.Providers.DuckDb.csproj" />
     <!-- 第三个方言族：对拍要三家同链各跑一遍，所以血统基类与达梦那层壳都要能构造。 -->
     <ProjectReference Include="..\..\src\QuickSql.Providers.OracleBase\QuickSql.Providers.OracleBase.csproj" />
     <ProjectReference Include="..\..\src\QuickSql.Providers.Dameng\QuickSql.Providers.Dameng.csproj" />

@@ -118,6 +118,17 @@ namespace QuickSql.Tests.Dialects;
 /// 已经不是同一颗。Guid 那一格也换了形状：本家是立项以来第一本<b>两颗 Guid 位都不声明</b>的账，
 /// 上面那段"1∶4∶…两边都是库种事实"的比值从此要加第三种读法（不是"落哪一边"，是"两边都不落"）。</para>
 ///
+/// <para><b>v0.39 第一笔把册数带到十六本</b>：第十六份（duckdb）是 PG 血统的第七本，也是这一族第一颗
+/// <b>真的改了血统产出的叶子</b>——此前六本在文本层全部逐字同形、对拍代钉，本家类型表四格换名
+/// （<c>DOUBLE</c>/<c>TIMESTAMP</c>/<c>TIMESTAMPTZ</c>/<c>TIME</c>）、身份列换形态（句外
+/// <c>CREATE SEQUENCE</c> + <c>DEFAULT nextval</c>）、"建库"整格不存在，OfflineText 那八位于是头一回
+/// <em>在这个族里有了自家的 golden/ 基线可指</em>（PinnedOffline 8 是这一族的最高读数，此前六本各 7）。
+/// 掩码照抄血统那 15 位一位不翻——其中 <c>CaseSensitive_Identifiers</c> 与本家的实际行为有偏差
+/// （标识符大小写不敏感而保留原样【文档·DuckDB】），偏差全文记 §14，位不删、血统文本不改。
+/// 交集链第十三次触链仍是那一位（十六本 ∶ <c>Schemas</c>，缩过两次之后本家既有那两位被扣掉的位、
+/// 也交不出别人缺的一位）。<b>PinnedLive 0 是本册最立得住的一格</b>：本机没有任何一台引擎、
+/// 驱动从未解析成功，§13.5 那一行整行「未实测」，逐格口径与出处 URL 都挂在那本台账上。</para>
+///
 /// <para>第四份（虚谷）带来的不是"又多一位乐观声明"，而是<b>交集没变</b>这一件反常事：它声明的 7 位全部落在
 /// 前四家已经出现过的位上，于是"每接一族交集就小一格"那句隐含预期第一次有了反例。那一格不是运气，是判据
 /// 被执行的结果 —— 掩码按"代码今天真的走到那一条语句"攒，不按"这一族文档里有什么"抄，所以新增一族能带来的
@@ -749,6 +760,47 @@ public sealed class CapabilityLedgerTests
             // 不管它是夹具发的还是用例发的</b>；上一版那句"产物没有执行口"由它作废，四处同源措辞一起改口。
             new(DbCapabilities.MultiStatement, Provenance.Live, "golden/sqlite/ddl-order.sql"),
         ]),
+
+        // PG 血统的第七本台账（v0.39 第一笔，DuckDB 叶子到场）。"一本 provider 一份"的第十次复用，
+        // 而这一本在两格上都不是复点册：① 它是 PG 血统第一颗<b>真的改了血统产出</b>的叶子——此前六本
+        // （金仓/openGauss/GaussDB/瀚高/8c/PG 本尊）产出与血统逐字同形，七颗 OfflineText 全靠"同形交对拍"代钉、
+        // 自己没有一份基线；② 掩码同 15 位而 PinnedOffline 是 8 不是 7：本家在这个族里头一回有自家的
+        // golden/ 基线可指（类型表四格换名、身份列换形态、谓词与分页各有绝对形状），离线档因此比邻本厚一颗。
+        // 血统那 15 位在本家一位不翻不删（CaseSensitive_Identifiers 与库行为的偏差记 §14 与
+        // DuckDbCodeFirst 类注释，本表照旧声明），VendorDoc 七颗的判据与血统那几本同源。
+        new("duckdb", static () => DuckDb.Provider(SqlServer.NoDriverFactory.Instance), 15, 8, 0,
+        [
+            // 八颗离线位各指一份自家基线。分页那一份钉的还多一格：skip-only 那颗"缺上限不补哨兵"
+            // 由 golden/duckdb/paging-skip-only.sql 单独在场（能力位只有一颗，两形共用一行）。
+            new(DbCapabilities.Paging_LimitOffset, Provenance.OfflineText, "golden/duckdb/paging-order-skip-take.sql"),
+            new(DbCapabilities.Returning, Provenance.OfflineText, "golden/duckdb/insert-with-keys.sql"),
+            new(DbCapabilities.CaseSensitive_Identifiers, Provenance.OfflineText, "golden/duckdb/select-entity.sql"),
+            new(DbCapabilities.Schemas, Provenance.OfflineText, "golden/duckdb/ddl-order.sql"),
+            new(DbCapabilities.Comment_On_Column, Provenance.OfflineText, "golden/duckdb/ddl-alter-and-comment.sql"),
+            new(DbCapabilities.Alter_Column_Precision, Provenance.OfflineText, "golden/duckdb/ddl-alter-and-comment.sql"),
+
+            // 类型列本体那半问仍欠（邻本同句：类型表 bool→BOOLEAN 够不着它）；谓词侧 IS TRUE 那半张
+            // 在本家头一回有自家基线可指，不是血统对拍代钉的那一半。
+            new(DbCapabilities.Boolean_Type, Provenance.OfflineText, "golden/duckdb/where-boolean-flag.sql"),
+
+            // Guid 的 16 字节原生形态：文本侧够得到的是类型名（UUID），库里是不是真按 16 字节存要靠活库。
+            // 与金仓那四本的同一句同判：这一位算离线，而"16 字节"那一半仍是要在活库上补的（§14）。
+            new(DbCapabilities.Guid_Raw16, Provenance.OfflineText, "DuckDbDialectTests 那条 UUID 断言（金仓那两条的又一复件；\"16 字节存储\"那一半与邻本一起欠着）"),
+
+            // 下面七颗与血统那几本同判据、同批理由：这一档的掩码是 §9.1/§9.4 的乐观声明，DuckDB 继承同一份，
+            // 本家一位不翻案、不删减（收敛是 §4 的账）。读侧索引是血统那份 StoreToClr 的原样克隆
+            // （json/jsonb 两名照登，"血统认什么"的最大集保留），写侧没有 CLR→JSON 的映射，故无样本。
+            new(DbCapabilities.Upsert_OnConflict, Provenance.VendorDoc, "位无读者：写侧的一句 upsert 档按 IBulkStrategy.UpsertClause 那颗槽分派（槽在血统基类已接，本家一台活库都没有——位与槽是两面，见 MySqlProviderBase 类注释 MultiStatement 那一条），而这一位今天仍然没有消费者"),
+            new(DbCapabilities.Cte, Provenance.VendorDoc, "无消费方：共用层没有 WITH 的发射口"),
+            new(DbCapabilities.WindowFunctions, Provenance.VendorDoc, "无消费方：窗口函数没有链式入口"),
+            new(DbCapabilities.Count_Over_Window, Provenance.VendorDoc, "无消费方：同上"),
+            new(DbCapabilities.Json_Type, Provenance.VendorDoc, "读侧索引认 json/jsonb（→string，照血统那份原样克隆），写侧没有 CLR→JSON 的映射，故无样本"),
+            new(DbCapabilities.TempTable, Provenance.VendorDoc, "无消费方：Tp 临时主键走的是真实表而不是临时表（§8.2）"),
+
+            // 第 15 位与邻本同一判据：装载通道已接线（血统那颗反射口 PostgreSqlBulk），而 DuckDB.NET
+            // 那一装从未在任何机器上解析成功过，COPY … FROM STDIN 一句没发出去过——本家整行「未实测」。
+            new(DbCapabilities.Bulk_Copy, Provenance.VendorDoc, "无活库：装载通道已接线（血统那颗反射口），COPY … FROM STDIN 那一句一次都没发出去过"),
+        ]),
     ];
 
     /// <summary>按名字取台账。<b>本类的三条逐家用例都收 <c>string</c> 而不是 <see cref="Ledger"/></b>：
@@ -832,7 +884,7 @@ public sealed class CapabilityLedgerTests
         // 方法名从"four offline families"改成"offline ledgers"是 v0.35 第三笔逼的：台账有了第五份，
         // 而家族还是那四个 —— 名字若留住"四"，这一格改的是数；名字若留住"families"，改的就是口径。
         // 接下一家时该继承哪几位 —— 答案由这几份<em>已落地</em>的台账交出来，而不是由"某系大概有什么"给出。
-        // 今天这几本共有的是那一颗（v0.35 第四笔复点：六本 ∶ 三位，形状不变；v0.36 第二笔三度复点：七本 ∶ 三位，仍不变；v0.36 第三笔四度复点：八本 ∶ 三位，仍不变；v0.36 第四笔五度复点：九本 ∶ 三位，第五份反证；v0.36 第五笔六度复点：十本 ∶ 三位，第六份反证；v0.36 第六笔七度复点：十一本 ∶ 三位，第七份反证；<b>v0.37 第一笔八度复点：十二本 ∶ 两位，第一次不是复点而是缩小；v0.37 第二笔九度复点：十三本 ∶ 两位，第一次缩小之后的第一次不变；v0.37 第三笔十度复点：十四本 ∶ 两位，第二次不变，而本笔的新格在交集量不到的那一侧（见下面那一段）；<b>v0.37 第四笔第十一次触链：十五本 ∶ 一位，第二次变小，而两次变小都在"少"的那一侧</b>），
+        // 今天这几本共有的是那一颗（v0.35 第四笔复点：六本 ∶ 三位，形状不变；v0.36 第二笔三度复点：七本 ∶ 三位，仍不变；v0.36 第三笔四度复点：八本 ∶ 三位，仍不变；v0.36 第四笔五度复点：九本 ∶ 三位，第五份反证；v0.36 第五笔六度复点：十本 ∶ 三位，第六份反证；v0.36 第六笔七度复点：十一本 ∶ 三位，第七份反证；<b>v0.37 第一笔八度复点：十二本 ∶ 两位，第一次不是复点而是缩小；v0.37 第二笔九度复点：十三本 ∶ 两位，第一次缩小之后的第一次不变；v0.37 第三笔十度复点：十四本 ∶ 两位，第二次不变，而本笔的新格在交集量不到的那一侧（见下面那一段）；<b>v0.37 第四笔第十一次触链：十五本 ∶ 一位，第二次变小，而两次变小都在"少"的那一侧</b>；<b>v0.39 第一笔第十三次触链：十六本 ∶ 一位，第二次缩小之后的第一本——duckdb 那一本两头都不是它缩小的原因：它声明的 15 位里躺着那两位"中途被扣"的位（本家发得出 COMMENT 与改精度），所以它进链只可能拖进来位而不可能交回空白；而它又没有交出别人都缺的一位</b>），
         // 恰好把"分页怎么写"、"有没有原生 uuid"、"有没有布尔这一档"、"标识符判等分不分大小写"、
         // "回填要不要句尾那一形"五处分岔排除在外，而前三分岔正是 §4 与 §9.3 点名的那几处、第四处是 v0.30
         // 添的那一档、第五处是这一版带进来的；v0.37 第一笔添第六处：<b>列注释那一句发不发得出</b>，
@@ -861,6 +913,7 @@ public sealed class CapabilityLedgerTests
         var postgreSql = Flags("postgresql");
         var oracle = Flags("oracle");
         var sqlite = Flags("sqlite");
+        var duckDb = Flags("duckdb");
 
         // tidb 进交集链是白给的一票（掩码逐位同 mysql），而它进链本身就是要钉的事：
         // "接第二颗叶子没有把交集改小"与 v0.31 那句"接第五族没改小"是同一格判据的第二次兑现。
@@ -920,7 +973,14 @@ public sealed class CapabilityLedgerTests
         // "挂进来的另一个文件"（<c>CREATE SCHEMA</c> 发不出【实测·2824】，而 <c>main.</c> ∶ <c>side.</c>
         // 两侧确实都限得住【实测·3000/3001 ∶ 3005 ∶ 3006】）。于是"交集只剩一颗"这句读起来像收敛的终点，
         // 实际是这本账能力的<em>下界</em>：剩下那颗共的位，其语义已经不是一个东西。
-        var shared = kingbase.Intersect(dameng).Intersect(mysql).Intersect(xugu).Intersect(tidb).Intersect(oceanbase).Intersect(openGauss).Intersect(gaussDb).Intersect(highgo).Intersect(shenTong).Intersect(gbase8c).Intersect(gbase8s).Intersect(postgreSql).Intersect(oracle).Intersect(sqlite).ToArray();
+        //
+        // <b>v0.39 第一笔：这条链第十三次触链，而本票两头都不会动交集。</b>第十六本（duckdb，PG 血统的
+        // 第七本）交的是血统那 15 位，两位中途被扣的位（Comment_On_Column ∶ Alter_Column_Precision）它
+        // 都带着——交集已经只剩 <c>Schemas</c>，多进来的位拖不动它；而它也没有交出别人都缺的一位。
+        // 这一格值得记的另一半在改产出的那一侧：本家是 PG 血统头一颗<b>真的改了血统文本</b>的叶子，
+        // 而交集对此照旧钝感——交集量的是声明位的覆盖面，量的不是"文本是谁发的"。
+        // "同掩码 ≠ 同形"（v0.36 第五笔立的那一格）到本笔从 Oracle 血统跨到了 PG 血统。
+        var shared = kingbase.Intersect(dameng).Intersect(mysql).Intersect(xugu).Intersect(tidb).Intersect(oceanbase).Intersect(openGauss).Intersect(gaussDb).Intersect(highgo).Intersect(shenTong).Intersect(gbase8c).Intersect(gbase8s).Intersect(postgreSql).Intersect(oracle).Intersect(sqlite).Intersect(duckDb).ToArray();
 
         var expected = new[]
         {
@@ -1102,6 +1162,10 @@ public sealed class CapabilityLedgerTests
         // 不换来任何区分——<c>CaseSensitive_Identifiers</c> 这一位量的从来是后者，本家第一次让
         // "加了引号"这件事在台账里<em>一点都不得分</em>。
         Assert.DoesNotContain(DbCapabilities.CaseSensitive_Identifiers, sqlite);
+        // v0.39 第一笔：血统那七户照在"共有"那侧，而本票带着一格档案性的读法——本家库里实际是
+        // 大小写不敏感而保留原样【文档·DuckDB】，位照血统一字不翻，偏差全文记 §14：台账量的是
+        // "声明面动没动"，不量"库收不收这一位讨来的区分"。
+        Assert.Contains(DbCapabilities.CaseSensitive_Identifiers, duckDb);
 
         // Returning 是这一版新添的那一分岔：它在四家里只占两位（金仓与虚谷），而这两位的<em>来路</em>不同 ——
         // 那两家的产物/文档各给了一个句尾 RETURNING，另两家（Oracle 血统与 MySQL 血统）连批量那一形都给不出。

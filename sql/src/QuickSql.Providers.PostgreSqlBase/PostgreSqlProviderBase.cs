@@ -39,13 +39,33 @@ public abstract class PostgreSqlProviderBase : IDbProvider
     {
         Kind = kind;
         Connectors = new PostgreSqlConnectorFactory(driverFactory);
-        CodeFirst = new PostgreSqlCodeFirst(_types);
-        _dialect = new PostgreSqlDialect(kind, _types, _keys, _values, _expressions);
+        // 【本笔（DuckDB 落笔）开的缝】这两处从"直 new"改成虚口：PG 血统此前六颗叶子字节同形、
+        // 构造里从来没有覆写入口（§14 行 2044 那格"两种零覆写者"的另一半），今天第七颗叶子
+        // （DuckDB）与血统的分岔先到，缝先于第二份证据落地。虚口从基类构造里调，与 Oracle 那一族
+        // 同一条纪律：覆写里只许碰静态成员与基类已初始化的字段，共享的 keys/values/expressions
+        // 作为参数递过去，各槽位仍然共用同一批实例。
+        CodeFirst = CreateCodeFirst(_types);
+        _dialect = CreateDialect(kind, _types, _keys, _values, _expressions);
 
         // 与 SqlServerProvider / MySqlProviderBase 同一条接线：装载类（导入器）不在工厂的抽象面上，
         // 只能从同一支驱动程序集里按类型名与形状找；构造期仍然一次反射都没有（见 PostgreSqlBulk 的抬头）。
         Bulk = new PostgreSqlBulk(driverFactory);
     }
+
+    /// <summary>血统的第一道缝（【本笔（DuckDB 落笔）新增】，先例是 OracleProviderBase 那一颗）：
+    /// 血统的 DDL 缺省交给 <see cref="PostgreSqlCodeFirst"/>。叶子要换 DDL 文本在这一层覆写，
+    /// 而不是在构造里拼一颗新的。<paramref name="types"/> 缺省时就是血统自己那份类型表；
+    /// 参数可被覆写方忽略（DuckDB 的那一格就带的是自己的 <c>DuckDbTypes</c>，与 <see cref="PostgreSqlTypes"/>
+    /// 没有继承关系）。</summary>
+    protected virtual ICodeFirstDialect CreateCodeFirst(PostgreSqlTypes types) => new PostgreSqlCodeFirst(types);
+
+    /// <summary>血统的第二道缝（【本笔（DuckDB 落笔）新增】）：文本层缺省交给 <see cref="PostgreSqlDialect"/>。
+    /// 它存在的全部理由是方言构造的六个参数里有四个是本类私有的共享实例（keys / values / expressions），
+    /// 叶子没有别的入口能拿到它们 —— 与"各槽位共用同一批实例"那条纪律配套（见类抬头）。
+    /// 同样是虚口从基类构造里调：覆写里不碰任何虚属性、不替 <c>_dialect</c> 字段以外的谁做赋值。</summary>
+    protected virtual PostgreSqlDialect CreateDialect(
+        DbKind kind, PostgreSqlTypes types, PostgreSqlKeys keys, PostgreSqlValues values, PostgreSqlExpressions expressions)
+        => new(kind, types, keys, values, expressions);
 
     public DbKind Kind { get; }
 
@@ -70,7 +90,12 @@ public abstract class PostgreSqlProviderBase : IDbProvider
 
     public ISqlDialect Dialect => _dialect;
 
-    public ITypeMap Types => _types;
+    /// <summary><b>【本笔（DuckDB 落笔）开成虚口】</b>血统的类型表缺省是 <see cref="PostgreSqlTypes"/> 那一份。
+    /// 开虚口的理由写全：只换方言那一格不够 —— 表达式翻译里 CAST 走的是
+    /// <c>ExpressionTranslator.cs:1339</c> 那一句 <c>provider.Types.ApplyStorageDefaults(probe)</c>，
+    /// 那条路读的就是这颗属性，叶子只覆写方言的话 <c>TIMESTAMP(3)</c>/<c>DOUBLE PRECISION</c>
+    /// 这类血统类型名会从 CAST 一路漏进叶子产出的 SQL。</summary>
+    public virtual ITypeMap Types => _types;
 
     public IValueBinder Values => _values;
 
@@ -97,7 +122,11 @@ public abstract class PostgreSqlProviderBase : IDbProvider
     /// 那一格管的是退回文本层之后。</summary>
     public IBulkStrategy? Bulk { get; }
 
-    public bool CanCreateDatabase => true;
+    /// <summary><b>【本笔（DuckDB 落笔）开成虚口，血统的值原样保留 true】</b>：现有六颗 PG 血统叶与
+    /// 血统探针不走这一格，缺省值一个字不动的先例是"只开缝、不改血统行为"那条边界。DuckDB 是
+    /// 内嵌单文件的库（"库"就是连接串里那颗文件，与 SQLite 同档），"建库"这一操作在本家没有对象，
+    /// 由叶子覆写成 false（<c>SchemaSyncer</c> 按这一格绕开 <see cref="EnsureDatabaseExistsAsync"/>）。</summary>
+    public virtual bool CanCreateDatabase => true;
 
     /// <summary>这一家认的库名键。按 Npgsql 文档列 <c>Database</c>/<c>dbname</c>/<c>db</c> 三颗
     /// （与 MySQL 血统那两处不同：那一家是实测钉下来的两颗，这一家<em>没有</em>驱动可测，
@@ -107,8 +136,10 @@ public abstract class PostgreSqlProviderBase : IDbProvider
     /// <summary>PG 系没有 <c>CREATE DATABASE IF NOT EXISTS</c>，先查 <c>pg_database</c> 再建。
     /// 连到 <c>postgres</c> 库（每台 PG 服务器都有的默认库）执行检查与建库语句。
     /// 目标库名从连接串按同义词读（<see cref="Catalog"/>），与 MySQL 血统那一格同一个坑：
-    /// 读不到就走「没库名、不建库」那一岔是静默的，所以候选键要一颗颗列全。</summary>
-    public async Task EnsureDatabaseExistsAsync(string connectionString, CancellationToken ct = default)
+    /// 读不到就走「没库名、不建库」那一岔是静默的，所以候选键要一颗颗列全。
+    /// <b>【本笔（DuckDB 落笔）开成虚口】</b>：血统的建库逻辑一句不改；叶子哪天要改"建库"
+    /// 的表现（DuckDB 那一格是整格不存在——内嵌单文件无服务端），覆写点在这里。</summary>
+    public virtual async Task EnsureDatabaseExistsAsync(string connectionString, CancellationToken ct = default)
     {
         var builder = new DbConnectionStringBuilder { ConnectionString = connectionString };
 

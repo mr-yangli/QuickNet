@@ -12,7 +12,8 @@ namespace QuickSql.Tests.Dialects;
 /// 一处绕过换算的拼接发出的是<code>INSERT INTO QuickSqlShardLog_{year}</code>，库里既没有这张表、
 /// 也不报错，只在某张别的表上少了行。
 ///
-/// <para><b>两半各钉一件事</b>。第一半是<em>行为</em>：十六家方言族逐家量一遍，模板进发射口必须当场抛，
+/// <para><b>两半各钉一件事</b>。第一半是<em>行为</em>：十七家方言族逐家量一遍（第十七颗 DuckDb 是
+/// v0.39 第一笔落的；等号按 <see cref="DbKind"/> 全家数，一家一家从上面那个 switch 里点名），模板进发射口必须当场抛，
 /// 而换算好的名字家户都落得下同一条后缀（钉的是"没有一家把兜底覆写掉了"——<c>EmitTableName</c> 是
 /// virtual，任何一家重写它而忘了那一句守卫，只有逐家跑一遍才看得见）。第二半是<em>形状</em>：反射枚举
 /// Abstractions 里所有收 <see cref="TableInfo"/> 的接口成员，闭集就是那九颗，多一颗就要人来认账
@@ -23,7 +24,8 @@ namespace QuickSql.Tests.Dialects;
 /// 异常消息、执行标签各占一行。清单一旦写下就替豁免的那几处说话，而它<em>恰恰量不到</em>新加的第六处。
 /// 行为那一半不需要清单：模板漏进任何一句可执行文本，后缀断言自己会红。</para>
 ///
-/// <para><b>两次拆探针：各咬得住一半，但两册都会红，区别在红的是哪 16 颗</b>。把 <c>DialectBase.EmitTableName</c>
+/// <para><b>两次拆探针：各咬得住一半，但两册都会红，区别在红的是哪 16 颗</b>（下段那些读数是 v0.38 第十笔
+/// 拆探针时的历史读数，那时在场的家数是十六；本笔落 DuckDb 之后逐家那一条各多一户，四位数的口径也随之多一）。把 <c>DialectBase.EmitTableName</c>
 /// 那句守卫注释掉 → 本册 <c>34 / 16</c>，红的全是 <see cref="Every_family_refuses_a_template_at_the_naming_hook"/>
 /// （逐家一条，后缀那颗与两条 Fact 一条不红），而换算链路那一册 <c>63 / 1</c> —— 唯一陪红的
 /// <c>A_template_reaching_the_emitter_is_refused_there</c> 就是这条守卫在别处的第二次断言
@@ -59,10 +61,11 @@ public sealed class TableNamingEmissionTests
         "TiDb" => TiDb.Orm(),
         "OceanBase" => OceanBase.Orm(),
         "Gbase8c" => Gbase8c.Orm(),
+        "DuckDb" => DuckDb.Orm(),
         _ => throw new InvalidOperationException($"没有这一家方言：{family}"),
     };
 
-    /// <summary>十六家 = <see cref="DbKind"/> 的成员数，一颗不多一颗不少：漏一家就是"这家没被量过"，
+    /// <summary>十七家 = <see cref="DbKind"/> 的成员数，一颗不多一颗不少：漏一家就是"这家没被量过"，
     /// 而台账上写的却是"这一档全族已接"。</summary>
     public static TheoryData<string> Families()
     {
@@ -137,7 +140,7 @@ public sealed class TableNamingEmissionTests
         var kinds = Enum.GetNames<DbKind>().Select(Orm).Select(static orm => orm.Provider.Kind.ToString()).ToArray();
 
         Assert.Equal(Enum.GetNames<DbKind>().Order(StringComparer.Ordinal).ToArray(), kinds.Order(StringComparer.Ordinal).ToArray());
-        Assert.Equal(16, kinds.Length);
+        Assert.Equal(17, kinds.Length);
     }
 
     /// <summary>收 <see cref="TableInfo"/> 的接口成员是一个<em>闭集</em>，十二颗各有角色：DML 侧只有
