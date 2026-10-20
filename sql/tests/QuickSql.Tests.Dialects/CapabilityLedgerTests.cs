@@ -143,6 +143,14 @@ namespace QuickSql.Tests.Dialects;
 /// 五份自家 golden/ 基线加一条 UUID 断言（<c>insert-with-keys</c> 那份基线在本家不落盘：
 /// <c>EmitReturning</c> 整格抛，黄金样本改判为"断言抛"）。</para>
 ///
+/// <para><b>v0.39 第三笔把这一本的 PinnedOffline 清了零</b>：2026-10-20 第一台引擎（server
+/// 26.9.21.9 ∶ 驱动 <c>ClickHouse.Client</c> 7.14.0，NuGet 即装即连、无 native 依赖）到场，六位逐颗
+/// 换 <c>Live</c>、颗颗带可点名的见证语句（golden 逐字回放为主，出处行内注明；探针与回放输出
+/// 存 <c>obj/logs/v39-ch-*.md</c>）。翻位的是"已声明的六位"，写路径位的"整格拒"与
+/// <c>Transactions</c> 的"没有"两档立场原样不动 —— 活库读数反而给它们添了正面证词：
+/// <c>BeginTransaction</c> 两颗重载均当场抛 <c>NotSupportedException</c>，lightweight DELETE
+/// 服务端认语法（变异档立场不改）。</para>
+///
 /// <para>第四份（虚谷）带来的不是"又多一位乐观声明"，而是<b>交集没变</b>这一件反常事：它声明的 7 位全部落在
 /// 前四家已经出现过的位上，于是"每接一族交集就小一格"那句隐含预期第一次有了反例。那一格不是运气，是判据
 /// 被执行的结果 —— 掩码按"代码今天真的走到那一条语句"攒，不按"这一族文档里有什么"抄，所以新增一族能带来的
@@ -926,18 +934,26 @@ public sealed class CapabilityLedgerTests
         // Upsert_* 亦然（MERGE/ON CONFLICT/ON DUPLICATE 都没有【文档没逐页回读】）；
         // ② <c>Transactions</c> 是本家第一次把这位说"没有"：它不是库种缺欠，是内核那颗表态位在本家
         // 的落位 = 逐句 autocommit 直发、多条语句不原子，公开 BeginTransaction 无位即抛 ——
-        // 行为诚实条款全文住在位注释与用法册 §2.4，三处同源；③ PinnedOffline 6 = PinnedLive 0，
-        // 五份 golden/clickhouse/ 基线加一条 UUID 断言 —— insert-with-keys 在本家不落盘（EmitReturning
-        // 抛，golden 改判为"断言抛"，与 Gbase8s 那本同档）。整行未实测：哪一台引擎到手，第一件事
-        // 就是把六个 OfflineText 逐位换版本再问一次。
-        new("clickhouse", static () => ClickHouse.Provider(SqlServer.NoDriverFactory.Instance), 6, 6, 0,
+        // 行为诚实条款全文住在位注释与用法册 §2.4，三处同源；③ PinnedOffline 6 = PinnedLive 0
+        //【此读数属第二笔，第三笔已按位逐颗翻 Live，见行内注明】。insert-with-keys 在本家不落盘
+        //（EmitReturning 抛，golden 改判为"断言抛"，与 Gbase8s 那本同档）。
+        //【v0.39 第三笔（2026-10-20）：第一台引擎（server 26.9.21.9 ∶ 驱动 7.14.0）到场的按位翻账】
+        // 六位逐颗换 Live，颗颗带可点名的见证语句（探针与回放输出存 obj/logs/v39-ch-*.md）：
+        // 分页三式golden 逐字、布尔三值语义 golden 逐字、Guid↔UUID 参数往返、
+        // "app" 限定库建表逐字、MODIFY COLUMN 逐句、判等区分大小写（引号名命中 ∶ 小写被拒带 hint）。
+        // 两条不在翻位里但当场记下的：③' 那份 alter golden 的 " ; " 拼接形一次发送被服务端当场拒
+        // （Multi-statements are not allowed；拼接是测试端为存档做的、运行期同步是两句分头发，见
+        // golden 测试自己那句注释）—— 与 Gbase8s 那本"一次发送多语句"那颗未问之问同格，本家第一次
+        // 有读数：不可行 §14；③'' Insert/ExecuteNonQuery 交回的受影响行数恒 0（驱动不数行），
+        // 依赖行数的路径别赖在这一家身上。
+        new("clickhouse", static () => ClickHouse.Provider(SqlServer.NoDriverFactory.Instance), 6, 0, 6,
         [
-            new(DbCapabilities.Paging_LimitOffset, Provenance.OfflineText, "golden/clickhouse/paging-order-skip-take.sql"),
-            new(DbCapabilities.Boolean_Type, Provenance.OfflineText, "golden/clickhouse/where-boolean-flag.sql"),
-            new(DbCapabilities.Guid_Raw16, Provenance.OfflineText, "ClickHouseDialectTests 那条 UUID 断言（类型表 Guid→UUID 的原生 16 字节档；\"16 字节存储\"那一半与邻本一起欠着）"),
-            new(DbCapabilities.CaseSensitive_Identifiers, Provenance.OfflineText, "golden/clickhouse/select-entity.sql"),
-            new(DbCapabilities.Schemas, Provenance.OfflineText, "golden/clickhouse/ddl-order.sql"),
-            new(DbCapabilities.Alter_Column_Precision, Provenance.OfflineText, "golden/clickhouse/ddl-alter-and-comment.sql"),
+            new(DbCapabilities.Paging_LimitOffset, Provenance.Live, "golden/clickhouse/paging-order-skip-take.sql"),
+            new(DbCapabilities.Boolean_Type, Provenance.Live, "golden/clickhouse/where-boolean-flag.sql"),
+            new(DbCapabilities.Guid_Raw16, Provenance.Live, "insert-plain 那一颗 @p0 = Guid 进 UUID 列、SELECT 读回 Guid 原样【实测·2026-10-20 活库】；列目录 system.columns 交回 type=UUID"),
+            new(DbCapabilities.CaseSensitive_Identifiers, Provenance.Live, "判等区分大小写【实测·2026-10-20 活库】：\"quicksql_probe\".\"QuickSqlT1\" 按引号名命中；按小写非引号问同表名被服务端拒并给出 \"Maybe you meant … QuickSqlT1\" 提示 —— 第二笔那颗【推断】就此结"),
+            new(DbCapabilities.Schemas, Provenance.Live, "golden/clickhouse/ddl-qualified.sql"),
+            new(DbCapabilities.Alter_Column_Precision, Provenance.Live, "golden/clickhouse/ddl-alter-and-comment.sql"),
         ]),
     ];
 

@@ -7,7 +7,9 @@ namespace QuickSql.Providers.ClickHouse;
 /// <summary>从 <c>system.tables</c> ∶ <c>system.columns</c> 两张系统表读结构
 /// （§4，本家档）。与各家的 read 侧同一纪律：这里只有 ADO.NET 抽象层的虚调用，本文件不认识任何驱动类型
 /// （§1.2 原则 3）。整层【文档·ClickHouse】（system.tables 与 system.columns 两页目录手册，
-/// clickhouse.com/docs），<b>本机没有任何一台引擎，一次都没有被走到</b>。
+/// clickhouse.com/docs），【实测·2026-10-20 活库 26.9.21.9 ∶ 驱动 7.14.0】`system.columns` 那一问
+/// 在探针里走通过（`name` ∶ `type` ∶ `position` 三格逐格与这里读的法子对上，0 行之策未走到——
+/// 那一问先不翻）。
 ///
 /// <para><b>读法与分岔逐条</b>：
 /// <list type="bullet">

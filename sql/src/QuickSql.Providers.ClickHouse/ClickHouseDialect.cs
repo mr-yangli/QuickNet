@@ -33,17 +33,20 @@ namespace QuickSql.Providers.ClickHouse;
 /// <see cref="EmitReturning"/> 转交 <see cref="ClickHouseKeys.EmitReturning"/>（那里抛），与
 /// GBase 8s 那一份同一形状。</para>
 ///
-/// <para><b>本类产出的每一条文本都没有在一台活库上跑过，而且本机没有任何一台可以跑</b>。
-/// 逐格分岔与限制记 §13.5 与 §14 —— 这一格在本笔是起点不是结论：它不等于"改判"，等的是第一台引擎。</para></summary>
+/// <para><b>第一台引擎到过场（2026-10-20，server 26.9.21.9 ∶ 驱动 ClickHouse.Client 7.14.0）</b>：
+/// golden 十份里九份逐字执行过（分页四式、UUID 主键、<c>"app"</c> 限定库、布尔三值、空集、insert-plain、
+/// select-entity），分岔与限制记 §13.5 与 §14 —— 这一格从"改判等着验"走到"验过而分岔逐格立住"
+///（改列那一份 golden 的 <c>" ; "</c> 拼接形是测试端为存档拼的、一句一执行才对，见台账那次回写的读法）。</para></summary>
 public sealed class ClickHouseDialect(ClickHouseTypes types, ClickHouseKeys keys, ClickHouseValues values, ClickHouseExpressions expressions)
     : DialectBase(IdentifierPolicy.ClickHouse, values, expressions)
 {
     public override DbKind Kind { get; } = DbKind.ClickHouse;
 
-    /// <summary>@，本笔读到的唯一一支【文档·ClickHouse：ADO.NET 客户端页的参数示例用 @&lt;name&gt; 那一形，
-    /// :/&lt;name&gt; 没有"非法"的反面读数也没有"合法"的正读数，先只落 @ 那一支】。占位符三派的分布
-    /// 由这一格续为：@ 五份（T-SQL、PG 血统、MySQL 血统、DuckDB 与本家）∶ : 两份（Oracle 血统、虚谷）∶
-    /// ? 一份（GBase 8s）。前缀错误在带名字的那几派红在"名字对不上"，那类错可以靠测试在文本层抓住。</summary>
+    /// <summary>@：【实测·2026-10-20 活库】SQL 文本里的 <c>@x</c> 被 7.14.0 驱动按名替换收走（参数驱动侧
+    /// 正确名字是"不带前缀"—— 与 <c>AdoExecutor.Bind</c> 那颗摘前缀纪律逐格对上；反证也在场：
+    /// <c>ParameterName="@x"</c> 时文本里的 <c>@x</c> 原样过网被服务端当语法错报）。
+    /// 占位符三派的分布由这一格续为：@ 五份（T-SQL、PG 血统、MySQL 血统、DuckDB 与本家）∶ : 两份
+    /// （Oracle 血统、虚谷）∶ ? 一份（GBase 8s）。</summary>
     public override char ParameterPrefix => '@';
 
     public override string GetStoreType(ColumnContract column) => types.GetStoreType(column);
@@ -67,7 +70,9 @@ public sealed class ClickHouseDialect(ClickHouseTypes types, ClickHouseKeys keys
     protected override void EmitBooleanEquality(SqlWriter writer, bool value)
         => writer.Append(value ? " = true" : " = false");
 
-    /// <summary>本家没有句首限定词那一档：SELECT 页的 LIMIT/OFFSET 都在句尾。</summary>
+    /// <summary>本家没有句首限定词那一档：SELECT 页的 LIMIT/OFFSET 都在句尾【实测·2026-10-20 活库】
+    ///（golden 三式体会句逐字执行过：LIMIT 单独、OFFSET 单独、两颗都带；"只写 OFFSET"那条语法上收
+    /// 的【文档】读数也就此补上服务端读数）。</summary>
     protected override void EmitPaging(SqlWriter writer, SelectStatement select)
     {
         if (select.Limit is { } limit)

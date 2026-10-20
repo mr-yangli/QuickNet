@@ -26,10 +26,10 @@ namespace QuickSql.Tests.Dialects;
 /// 同一批（<c>select-entity</c>、<c>paging-order-skip-take</c>、<c>ddl-order</c>…），
 /// 第一次生成时没带它就等于把 <c>golden/duckdb/</c> 那批基线改写成了本家的文本。</para>
 ///
-/// <para><b>这些样本证明的是回归，不是"ClickHouse 接受这条 SQL"</b>。本机没有任何一台引擎、
-/// <c>ClickHouse.Client</c> 从未解析成功过（§13.5 第十七本整行「未实测」），所以这一批 <c>.sql</c>
-/// 是自产基线：它们抓住方言层的每一次意外改动，而一句都没有在真正的解析器上跑过。
-/// 正式记账在 §13.5 的第十七本台账。与 DuckDB 那册的份数差一格：insert-with-keys 在本家
+/// <para><b>这些样本证明的是回归，而不是孤零零的"自产基线"</b>：2026-10-20 第一台引擎（server
+/// 26.9.21.9 ∶ 驱动 <c>ClickHouse.Client</c> 7.14.0）到场，golden 十份里九份被逐字执行过（见
+/// §13.5 第十七本台账的本笔回写与 <c>obj/logs/v39-ch-*.md</c>），仍留在本册的只是"别再漂"那一半职能。
+/// insert-with-keys 在本家
 /// <em>不落盘</em> —— <see cref="ClickHouseKeys.EmitReturning"/> 整格抛，基线改判为"断言抛"，
 /// 所以本家 10 份。主键样本用 <see cref="SessionToken"/>（Guid 主键、无索引）代替
 /// <see cref="Order"/>：<c>Order</c> 带 <c>[Index(nameof(CreatedAt))]</c>，而本家的建表
@@ -469,6 +469,25 @@ public sealed class ClickHouseDialectTests
         Assert.Equal('\\', Provider.Expressions.LikeEscapeCharacter);
         Assert.Equal("||", Provider.Expressions.ConcatOperator);
         Assert.False(Provider.Expressions.SupportsRegex);
+    }
+
+    [Fact]
+    public void A_datetime_parameter_goes_across_as_the_millis_preserving_string()
+    {
+        // 【实测·2026-10-20 活库 26.9.21.9 ∶ 驱动 7.14.0】DateTime 参数（DbType.DateTime / DateTime2 /
+        // DateTimeOffset 三种声明都试过）在驱动的序列化里一律不带小数秒，毫秒只在字符串形里保真
+        //（.222/.555 两手都按原样落库、读回也原样）—— 所以 Normalize 把 DateTime 化成那一串，与内联
+        // 那一支同一形状。这颗钉住两半：参数侧（DbType.String + .fff 不变式 + 尺寸取该串字符数）
+        // 与内联侧（同一串的单引号字面量）。
+        var moment = new DateTime(2026, 10, 20, 9, 0, 0, 123);
+        var parameter = ClickHouseValues.Instance.CreateParameter("@p0", moment, null);
+
+        Assert.Equal(DbType.String, parameter.DbType);
+        Assert.Equal("2026-10-20 09:00:00.123", parameter.Value);
+        Assert.Equal(23, parameter.Size);
+
+        Assert.True(ClickHouseValues.Instance.TryInlineLiteral(moment, null, out var literal));
+        Assert.Equal("'2026-10-20 09:00:00.123'", literal);
     }
 
     static SqlWriter NewWriter() => new(new StringBuilder(), [], Provider.Dialect.ParameterPrefix);

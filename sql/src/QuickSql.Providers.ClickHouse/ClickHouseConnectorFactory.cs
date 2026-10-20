@@ -11,17 +11,18 @@ namespace QuickSql.Providers.ClickHouse;
 /// 就是同形拷贝的份数。
 ///
 /// <para>驱动实例由 Core 的 <c>DriverRegistry</c> 按 内建表 <c>BuiltinDrivers</c> 在运行期解析后注入
-/// （§1.2 原则 3），热路径上没有反射。本族的程序集名 <c>ClickHouse.Client</c> 只按厂商文档口径写
+/// （§1.2 原则 3），热路径上没有反射。本族的程序集名 <c>ClickHouse.Client</c> 按厂商文档口径写
 ///【文档·ClickHouse：官方 .NET 客户端页，https://clickhouse.com/docs/integrations/language-clients/dotnet/ ；
-/// 本笔没有逐字回读其发布清单，装配名那颗与 <see cref="ClickHouseProvider.DriverKey"/> 那一行同源写入
-/// <c>BuiltinDrivers</c>】，<b>从未在任何一台机器上解析成功过</b>（本机没有引擎，驱动包也没被拉过）。
-/// 内建表里刻意不写 <c>factoryType</c>（与 DuckDB 这一行同档、理由相同）：省略它走
-/// "扫导出类型里第一个 <c>DbProviderFactory</c> 子类"那条兜底，比猜一个全名更容易成。</para>
+/// 装配名那颗与 <see cref="ClickHouseProvider.DriverKey"/> 那一行同源写入 <c>BuiltinDrivers</c>】，
+/// <b>【实测·2026-10-20】这一行在本机第一次解析成功</b>：NuGet 拉包（当时一手 7.14.0）后由
+/// "扫导出类型里第一个 <c>DbProviderFactory</c> 子类"那条兜底收走
+/// <c>ClickHouse.Client.ADO.ClickHouseConnectionFactory</c>（7.x 把工厂从 5.x 时代的
+/// <c>ClickHouseClientFactory</c> 更了名，而导出类型里 DbProviderFactory 子类只有它一颗，兜底扫描
+/// 因此对改名不敏感 —— 内建表里不写 <c>factoryType</c> 的取舍当场兑现了一次）。</para>
 ///
-/// <para><b>本族没有原生同伴这一档已知事实，也没有确凿的反向已知</b>：官方文档把 <c>ClickHouse.Client</c>
-/// 描述为 .NET 的 managed 客户端（NuGet 包 + 纯 .NET 实现），按文档表面读是<b>没有原生依赖</b>的两家之一
-///【推断：文档表述按表面读，native 依赖有无的权威判定 = 第一台引擎到手时用 <see cref="TryEnsureLoaded"/>
-/// 那一问在现场验一次】。</para></summary>
+/// <para><b>本族没有原生同伴这一档已成实测</b>：那一包纯托管、装上即连，没有 native 依赖
+///【实测·2026-10-20，手工探针连 26.9.21.9 成功，无须任何拷 dll 的 csproj Target】—— 与官方
+/// managed 客户端的文档表述一致，那个【推断】就此结。</para></summary>
 public sealed class ClickHouseConnectorFactory(DbProviderFactory factory) : IConnectorFactory
 {
     /// <summary>探测用的连接不打开、只创建：驱动<em>托管</em>类型加载不了时会在 <c>CreateConnection</c>
