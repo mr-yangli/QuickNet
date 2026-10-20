@@ -84,6 +84,11 @@ static class QuickSqlDiagnostics
     public static readonly DiagnosticDescriptor NotGenerated = Define(
         "QuickSql003", "实体不走 G1，退回反射解析", DiagnosticSeverity.Info);
 
+    /// <summary>与 <c>QuickSql002</c> 同一形状：<see cref="EntityFactsBuilder"/> 现拼的消息与反射侧
+    /// <c>EntityContractFactory.MapSkipIndexes</c> 那两句逐字相同（缺表达式、引用了不是列的成员各一句）。</summary>
+    public static readonly DiagnosticDescriptor SkipIndexDeclarationInvalid = Define(
+        "QuickSql005", "跳过索引声明不完整", DiagnosticSeverity.Error);
+
     static DiagnosticDescriptor Define(string id, string title, DiagnosticSeverity severity)
         => new(id, title, "{0}", "QuickSql.Metadata", severity, isEnabledByDefault: true);
 }

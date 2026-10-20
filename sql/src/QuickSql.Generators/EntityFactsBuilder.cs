@@ -26,6 +26,8 @@ static class EntityFactsBuilder
 {
     const string QuickSqlColumn = "QuickSql.Metadata.QuickColumnAttribute";
     const string QuickSqlIndex = "QuickSql.Metadata.IndexAttribute";
+
+    const string QuickSqlClickHouseSkipIndex = "QuickSql.Metadata.ClickHouseSkipIndexAttribute";
     const string QuickSqlSplit = "QuickSql.Metadata.SplitTableAttribute";
     const string QuickSqlDataSource = "QuickSql.Metadata.DataSourceAttribute";
     const string QuickSqlConcurrency = "QuickSql.Metadata.ConcurrencyTokenAttribute";
@@ -138,6 +140,8 @@ static class EntityFactsBuilder
         RelationshipsOf(navigations, entity, model, outcome, at, conflicts);
 
         IndexesOf(entity, model, outcome, at, conflicts);
+
+        SkipIndexesOf(entity, model, outcome, at, conflicts);
 
         if (conflicts)
             // 报错时不产出模型，但诊断必须留着——丢掉它等于「编译不过却没人说为什么」。
@@ -507,6 +511,67 @@ static class EntityFactsBuilder
                 Descending = Bool(index, "Descending"),
             });
         }
+    }
+
+    /// <summary>跳过索引声明抄进模型：类挂在前、列挂按属性次序在后（与反射侧
+    /// <c>ContractResolver.ResolveSkipIndexes</c> 同一份次序，§13.11 的对拍顺序也算内容）。
+    /// 只抄声明：成员 → 列换算、约定名、撞名判定全在运行期 <see cref="EntityContractFactory.MapSkipIndexes"/>
+    /// 那一份实现里（§10.3）。两件事编译期就要红（与反射侧同一句话，<c>QuickSql005</c>）：
+    /// <b>类挂没写表达式</b>（那一档没有"缺省成员"可言）与<b>声明打在没进列清单的属性上</b>（漏映射：
+    /// 导航、[NotMapped] 都算）——反射侧这一条由收尾器当场抛，编译期红的是同一句换了个场。</summary>
+    static void SkipIndexesOf(INamedTypeSymbol entity, EntityModel model, BuildOutcome outcome, Location at, bool alreadyFailed)
+    {
+        if (alreadyFailed)
+            return;
+
+        foreach (var declared in entity.GetAttributes().Where(a => Name(a) == QuickSqlClickHouseSkipIndex))
+            if (Named(declared, "Expression")?.Value is not string { Length: > 0 } expression)
+            {
+                outcome.Diagnostics.Add(Diagnostic.Create(QuickSqlDiagnostics.SkipIndexDeclarationInvalid, at,
+                    $"实体 {entity.Name} 有一颗表级跳过索引声明但没有表达式："
+                    + "类挂的那一路没有\"缺省成员\"可言，请把表达式写进声明（属性挂那一档才默认用自己的列）"));
+            }
+            else
+            {
+                AddSkipIndex(declared, model, null, expression);
+            }
+
+        foreach (var property in entity.GetMembers().OfType<IPropertySymbol>())
+        foreach (var declared in property.GetAttributes().Where(a => Name(a) == QuickSqlClickHouseSkipIndex))
+        {
+            // G2 的成员枚举带可访问性/静态/索引器三把筛子（列侧同一链），编译期对齐那一半。
+            if (property.DeclaredAccessibility != Accessibility.Public || property.IsStatic || property.IsIndexer)
+                continue;
+
+            if (!model.Columns.Any(c => c.Member == property.Name))
+            {
+                outcome.Diagnostics.Add(Diagnostic.Create(QuickSqlDiagnostics.SkipIndexDeclarationInvalid, at,
+                    $"跳过索引引用了不是列的成员 {property.Name}（实体 {entity.Name}，可能被 [NotMapped] 排除）"));
+
+                continue;
+            }
+
+            AddSkipIndex(declared, model, property.Name, Named(declared, "Expression")?.Value as string);
+        }
+    }
+
+    static void AddSkipIndex(AttributeData declared, EntityModel model, string? member, string? expression)
+    {
+        model.SkipIndexes.Add(new SkipIndexModel
+        {
+            Member = member,
+            // 列挂且没写表达式 = 就是那颗列：写手不写 Expression 那一格，交缺省 null，
+            // 换算（成员 → 列名）留给运行期的同一份实现，两侧到收尾之前形状一致。
+            Expression = expression,
+            Name = Named(declared, "Name")?.Value as string,
+            Kind = EnumExpression(declared, 0),
+            Granularity = Number(declared, -1, "Granularity") ?? 0,
+            SetMaxRows = Number(declared, -1, "SetMaxRows") ?? 0,
+            NgramSize = Number(declared, -1, "NgramSize") ?? 0,
+            BucketSize = Number(declared, -1, "BucketSize") ?? 0,
+            HashFunctions = Number(declared, -1, "HashFunctions") ?? 0,
+            Seed = Number(declared, -1, "Seed") ?? 0,
+        });
     }
 
     /// <summary>Roslyn 4.14 的符号层面查不到 <c>init</c>，只能回到语法树。之所以要单独问一句：

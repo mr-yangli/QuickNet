@@ -16,19 +16,19 @@ namespace QuickSql.Providers.ClickHouse;
 /// <item><b>列清单走 <c>system.columns</c> 一张表就够</b>：本家的目录把"列"与"它的形状"放同一行
 ///（<c>name</c>、型 <c>type</c>、序 <c>position</c>），不需要 GBase 8s 那一家的三表 join。
 /// 表存在性由"0 行"给出：查不到列就当作表不在（与 T-SQL 那一档同读）。</item>
-/// <item><b>表备注走 <c>system.tables.comment</c></b>：建侧在 <see cref="ClickHouseCodeFirst.EmitCreateTable"/>
-/// 里顺手带出表 <c>COMMENT</c>，这一侧不读回它，那就是单向发射 ——
-/// "写进去的备注下一趟判不出差别"（§9.5 的读回义务）。列级备注<b>本侧不读</b>：建侧
-/// <see cref="ClickHouseCodeFirst.TryEmitColumnComment"/> 恒 false，这一家从不写列备注，
-/// 读回用户手工写在目录里的那一句只会给 doctor 添假红 —— 两面合在同一句里记账（§13.5 第十七本）。</item>
+/// <item><b>表备注走 <c>system.tables.comment</c>，列备注走 <c>system.columns.comment</c></b>：
+/// 建侧那一半（<see cref="ClickHouseCodeFirst.TryEmitTableComment"/> 的 <c>MODIFY COMMENT</c> 与
+/// <see cref="ClickHouseCodeFirst.TryEmitColumnComment"/> 的 <c>COMMENT COLUMN</c>）写进去的备注，
+/// 这一侧不读回就是单向发射（§9.5 的读回义务）—— beta.26 批起两半都读，空串口径同格：
+/// 本家 comment 默认 <c>''</c>，"有这概念而没写"折成空串而不是 null，与
+/// <see cref="SchemaTable.Comment"/> 那半同判。</item>
 /// <item><b><see cref="SchemaColumn.IsIdentity"/> 恒 false</b>：本家没有"由库递增的列"那一档
 ///（<see cref="ClickHouseTypes"/> 类注释同一条），所以"这一列是不是库给值"的 library 侧答案是<em>否</em>
 /// —— 显式 false 比交 null 好：那是读到事实而不是"读不出"。</item>
-/// <item><see cref="SchemaColumn.IsPrimaryKey"/>、<see cref="SchemaColumn.Scale"/>、
-/// <see cref="SchemaColumn.Comment"/> 三格<em>不填</em>：主键在本家在引擎的 <c>ORDER BY</c> 里
-///（<see cref="ClickHouseCodeFirst.EmitStorage"/> 那一段），<c>system.columns</c> 的行上没有那一格；
-/// <c>Decimal(P,S)</c> 的 S 与 <c>DateTime64(3)</c> 的 3 藏在 <c>type</c> 文本里，本笔不作文本解析
-/// —— 三格都是 null = "这一家读不出"，不是"没有"。</item>
+/// <item><see cref="SchemaColumn.IsPrimaryKey"/>、<see cref="SchemaColumn.Scale"/> 两格<em>不填</em>：
+/// 主键在本家在引擎的 <c>ORDER BY</c> 里（<see cref="ClickHouseCodeFirst.EmitStorage"/> 那一段），
+/// <c>system.columns</c> 的行上没有那一格；<c>Decimal(P,S)</c> 的 S 与 <c>DateTime64(3)</c> 的 3
+/// 藏在 <c>type</c> 文本里，本笔不作文本解析 —— 两格都是 null = "这一家读不出"，不是"没有"。</item>
 /// </list></para>
 ///
 /// <para><b>【本文件最重要的一条：可空性的形变在型名里不在位里】</b>另九家判可空要么读一颗布尔位
@@ -54,7 +54,7 @@ public sealed class ClickHouseSchemaReader : ISchemaReader
     /// <c>ORDER BY position</c>：<see cref="SchemaColumn.OrdinalPosition"/> 用目录给的序，
     /// 不折基（与另九家同一判据，"折成 1 基就是造假"）。</summary>
     const string ColumnsSql = """
-        SELECT name, type, position
+        SELECT name, type, position, comment
         FROM system.columns
         WHERE database = @db AND table = @table
         ORDER BY position
@@ -64,7 +64,7 @@ public sealed class ClickHouseSchemaReader : ISchemaReader
     /// 与 GBase 8s 的 <c>CURRENT USER</c> 那一手同族：参数可以吃 null，但本家对"连个名都没有"那格的
     /// 诚实写法是让目录函数自己答。</summary>
     const string ColumnsSqlForCurrentDatabase = """
-        SELECT name, type, position
+        SELECT name, type, position, comment
         FROM system.columns
         WHERE database = currentDatabase() AND table = @table
         ORDER BY position
@@ -114,6 +114,10 @@ public sealed class ClickHouseSchemaReader : ISchemaReader
                     reader.IsDBNull(2) ? null : reader.GetInt32(2))
                 {
                     IsIdentity = false,
+
+                    // 列备注与表备注同一空串口径：本家 comment 默认 ''，"有这概念而没写"折成空串，
+                    // 不是 null（后者是"读不出"那一格，§9.5 比差别时两形要分得开）。
+                    Comment = reader.IsDBNull(3) ? string.Empty : reader.GetString(3),
                 });
             }
             while (await reader.ReadAsync(ct).ConfigureAwait(false));

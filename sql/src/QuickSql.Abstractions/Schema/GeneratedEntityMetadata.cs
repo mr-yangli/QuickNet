@@ -14,6 +14,7 @@ public sealed record GeneratedEntityMetadata(
     TableInfo Table,
     IReadOnlyList<ColumnFacts> Columns,
     IReadOnlyList<IndexFacts> Indexes,
+    IReadOnlyList<SkipIndexFacts> SkipIndexes,
     IReadOnlyList<RelationshipFacts> Relationships,
     Func<EntityContract, object> CreateSchema,
     Func<EntityContract, object>? CreateValidator = null);

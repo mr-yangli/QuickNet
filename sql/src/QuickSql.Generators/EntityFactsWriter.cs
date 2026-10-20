@@ -224,6 +224,43 @@ static class EntityFactsWriter
         foreach (var index in m.Indexes)
             b.AppendLine("            new " + Metadata + "IndexFacts(null, [" + string.Join(", ", index.Members.Select(Lit)) + "], " + Bool(index.Unique) + ", " + Bool(index.Clustered) + ", " + Bool(index.Descending) + "),");
 
+        // 跳过索引声明单独立一格：与 IndexFacts 并排，进同一收尾器时它是另一份清单
+        //（IndexContract 与 SkipIndexContract 不换算，EntityContract 上也是两个槽）。
+        b.AppendLine("        ],")
+         .AppendLine("        [");
+
+        foreach (var skip in m.SkipIndexes)
+        {
+            b.Append("            new ").Append(Metadata).Append("SkipIndexFacts");
+
+            var parts = new List<string>
+            {
+                "Kind = " + skip.Kind,
+                "Granularity = " + Num(skip.Granularity),
+                "SetMaxRows = " + Num(skip.SetMaxRows),
+                "NgramSize = " + Num(skip.NgramSize),
+                "BucketSize = " + Num(skip.BucketSize),
+                "HashFunctions = " + Num(skip.HashFunctions),
+                "Seed = " + Num(skip.Seed),
+            };
+
+            // 缺省格不写：缺省写 null 与"压根没抄"是两个形状，反射侧交的是缺省值，
+            // 两侧到 EntityContractFactory 之前形状一致（§13.11 的逐字段相等才比得到）。
+            if (skip.Member is { } member)
+                parts.Insert(0, "MemberName = " + Lit(member));
+
+            if (skip.Expression is { } expression)
+                parts.Insert(1, "Expression = " + Lit(expression));
+
+            if (skip.Name is { } name)
+                parts.Insert(2, "Name = " + Lit(name));
+
+            b.AppendLine("            {");
+            foreach (var part in parts)
+                b.AppendLine("                " + part + ",");
+            b.AppendLine("            },");
+        }
+
         b.AppendLine("        ],")
          .AppendLine("        [");
 

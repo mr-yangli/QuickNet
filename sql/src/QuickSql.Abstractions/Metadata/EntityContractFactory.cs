@@ -154,8 +154,11 @@ public static class EntityContractFactory
     /// <param name="integralPrimaryKeyAutoIncrement">约定那一档给不给「整型主键 ⇒ 自增」。默认 true 与这一格
     /// 落地之前逐字同形；<b>false</b> 是给"主键由客户端生成"那一族库（雪花编号）留的装配声明，
     /// 它只挪约定 —— 注解与 Fluent 表过态的列照旧赢过它，与 §10.2 那条优先级链同形。</param>
+    /// <param name="skipIndexes">跳过索引声明（provider 专属层的注解抄本，今天只有 ClickHouse 消费）。
+    /// 声明里没有名字的走约定名，成员 → 列换算与撞名判定都只有 <see cref="MapSkipIndexes"/> 一份。</param>
     public static EntityContract Build(Type clrType, TableInfo table, IReadOnlyList<ColumnFacts> columns, IReadOnlyList<IndexFacts> indexes,
-        IReadOnlyList<RelationshipFacts> relationships, ITypeMap types, bool integralPrimaryKeyAutoIncrement = true)
+        IReadOnlyList<RelationshipFacts> relationships, ITypeMap types, bool integralPrimaryKeyAutoIncrement = true,
+        IReadOnlyList<SkipIndexFacts>? skipIndexes = null)
     {
         var resolved = new ColumnContract[columns.Count];
 
@@ -177,12 +180,70 @@ public static class EntityContractFactory
 
         var (edges, collections) = MapRelationships(relationships, resolved);
 
+        // 约定名的底子与 [Index] 同一颗：名字没有模板的表用表名，分表的表名是 {year} 样模板，
+        // 按它算名物理表还没成形，取类名（镜像 ShardLog 的名字）。
+        var skip = MapSkipIndexes(skipIndexes, resolved,
+            table.Split is null ? table.Name : clrType.Name, clrType.Name);
+
         return new EntityContract(clrType, table, resolved, MapIndexes(indexes, resolved,
-            // 约定索引名的底子：名字没有模板的表用表名（与 [Index] 显式点名时代的习惯同源 ——
-            // 仓内实体钉着的 IX_{表}_{列} 就是这一形）；分表的表名是 {year} 样模板，按它算名
-            // 物理表还没成形，那一样式取类名（镜像 ShardLog 的名字）。
             table.Split is null ? table.Name : clrType.Name),
-            edges, collections);
+            edges, collections, skip);
+    }
+
+    /// <summary>跳过索引声明 → 已换算的契约。三件事只有这里一份（G1 ∶ G2 两侧同一出口）：
+    /// <b>类挂没有表达式当场红</b>（G1 在编译期以同一句话先拦一遍）；<b>属性挂的成员可以表中无主</b>
+    /// （那条也要红：漏映射就是建出一个不存在的列，与 <see cref="MapToColumns"/> 同一条拒绝）；
+    /// <b>名字撞车当场红</b> —— 同一张表上两条同名 INDEX，第二条会把第一条顶掉，静默过去就是"看似建好"。
+    /// 档位参数的合法性（Set 要 max_rows、ngrambf 要 n 之类）不在这里判：那是发射那一家 CodeFirst 的
+    /// 方言语义，中性契约只背声明（§10.3）。</summary>
+    static IReadOnlyList<SkipIndexContract> MapSkipIndexes(IReadOnlyList<SkipIndexFacts>? facts, ColumnContract[] columns,
+        string nameBase, string entityName)
+    {
+        if (facts is null || facts.Count == 0)
+            return [];
+
+        var result = new SkipIndexContract[facts.Count];
+        var classOrdinary = 0;
+
+        for (var i = 0; i < facts.Count; i++)
+        {
+            var fact = facts[i];
+            string expression;
+            string? memberName = null;
+            string name;
+
+            if (fact.MemberName is { } member)
+            {
+                var column = Array.Find(columns, c => string.Equals(c.MemberName, member, StringComparison.Ordinal))
+                    ?? throw new QuickSqlException($"跳过索引引用了不是列的成员 {member}（实体 {entityName}，可能被 [NotMapped] 排除）");
+
+                memberName = column.MemberName;
+
+                // 属性挂且没写表达式 = 就是那颗列：发的是 plain 列名（发射侧加方言引号），
+                // <see cref="SkipIndexContract.MemberName"/> 非 null 就是那把"要加引号"的信号。
+                expression = fact.Expression ?? column.ColumnName;
+                name = fact.Name ?? $"QSI_{nameBase}_{column.ColumnName}_{ProviderAttributes.KindToken(fact.Kind)}";
+            }
+            else
+            {
+                expression = fact.Expression
+                    ?? throw new QuickSqlException($"实体 {entityName} 有一颗表级跳过索引声明但没有表达式："
+                        + "类挂的那一路没有\"缺省成员\"可言，请把表达式写进声明（属性挂那一档才默认用自己的列）");
+
+                classOrdinary++;
+                name = fact.Name ?? $"QSI_{nameBase}_{classOrdinary}";
+            }
+
+            for (var j = 0; j < i; j++)
+                if (string.Equals(result[j].Name, name, StringComparison.Ordinal))
+                    throw new QuickSqlException($"跳过索引的名字撞车：这一张表上两条声明都要叫 {name}（实体 {entityName}）。"
+                        + "显式点名或换一条声明，让每颗索引有自己的名字");
+
+            result[i] = new SkipIndexContract(name, fact.Kind, fact.Granularity, expression, memberName,
+                fact.SetMaxRows, fact.NgramSize, fact.BucketSize, fact.HashFunctions, fact.Seed);
+        }
+
+        return result;
     }
 
     /// <summary>分片声明 → 已换算的声明，顺手把四条启动期判据比一遍：分片键得是一列、

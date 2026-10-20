@@ -89,8 +89,8 @@ public sealed class GeneratedEntitySchemaRegistry : IEntitySchemaRegistry
     {
         var metadata = Find(clrType)!;
 
-        return EntityContractFactory.Build(metadata.ClrType, metadata.Table, metadata.Columns, metadata.Indexes, metadata.Relationships, _types,
-            _integralPrimaryKeyAutoIncrement);
+        return EntityContractFactory.Build(metadata.ClrType, metadata.Table, metadata.Columns, metadata.Indexes,
+            metadata.Relationships, _types, _integralPrimaryKeyAutoIncrement, metadata.SkipIndexes);
     }
 
     object BuildSchema(Type clrType)

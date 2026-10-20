@@ -1,5 +1,6 @@
 using System.Data;
 using System.Data.Common;
+using System.ComponentModel;
 using System.Text;
 using QuickSql.Metadata;
 using QuickSql.Metadata.Fluent;
@@ -89,31 +90,32 @@ public sealed class ClickHouseDialectTests
         Assert.NotEqual(QuickSql.Providers.PostgreSql.PostgreSqlProvider.DriverKey, ClickHouseProvider.DriverKey);
     }
 
-    // ── 能力位：六位、且写路径那组一位都不声明 ───────────────────────
+    // ── 能力位：七位（beta.26 批起列注释那颗进列）、写路径一组一颗都不声明 ──
 
     [Fact]
-    public void The_capability_mask_is_six_bits_and_declares_none_of_the_write_path()
+    public void The_capability_mask_is_seven_bits_and_declares_none_of_the_write_path()
     {
-        // 六位逐颗对 §4 那句"代码今天真的走到那一条语句"（产出文本与断言略列在下面的别格里）：
+        // 七位逐颗对 §4 那句"代码今天真的走到那一条语句"（产出文本与断言略列在下面的别格里）：
         // 分页两子句独立（Paging）、布尔原生型（Boolean_Type + 谓词 = true）、UUID 16 字节（Raw16）、
         // database 限定（Schemas）、MODIFY COLUMN 那一句（Alter_Column_Precision）、官方 identifiers
-        // 页点名大小写（CaseSensitive）。除之外一位都不声明。
+        // 页点名大小写（CaseSensitive）、列注释（Comment_On_Column：COMMENT COLUMN 那一句 + 读侧
+        // system.columns.comment 两半 —— 发射与读回都在活库逐字回放过，出处 replay-5/replay-6，
+        // 记 §13.5 第十七本）。除之外一位都不声明。
         Assert.Equal(
             DbCapabilities.Paging_LimitOffset | DbCapabilities.Boolean_Type | DbCapabilities.Guid_Raw16 |
-            DbCapabilities.Schemas | DbCapabilities.Alter_Column_Precision | DbCapabilities.CaseSensitive_Identifiers,
+            DbCapabilities.Schemas | DbCapabilities.Alter_Column_Precision | DbCapabilities.CaseSensitive_Identifiers |
+            DbCapabilities.Comment_On_Column,
             Provider.Capabilities);
 
         // 本家刻意不声明的那几格，格位要点出"为什么不是漏记"：
         // —— Transactions：内核写路径逐句 autocommit 直发、多语句不原子，公开 BeginTransaction 无位即抛
         //    （ClickHouse 重开·笔二的那颗表态格，行为在 LLM 册的迟发那一条并不例外）；
-        // —— Returning：EmitReturning 整格抛（点击那一路官方语句清单没有 RETURNING/OUTPUT 任何一支【文档没逐页回读】）；
+        // —— Returning：EmitReturning 整格抛（点击那一路官方语句清单没有 RETURNING/OUTPUT 任何一支【文档没逐页回读】)；
         // —— Upsert_*：MERGE/ON CONFLICT/ON DUPLICATE 都没有【文档没逐页回读】；
-        // —— Comment_On_Column：TryEmitColumnComment 恒 false（列级 COMMENT 修饰词存在而同步那一侧没接）；
         // —— MultiStatement/MultiResultSets/TempTable/Bulk_Copy：src/ 一行没发过。
         Assert.False(Provider.Capabilities.HasFlag(DbCapabilities.Transactions));
         Assert.False(Provider.Capabilities.HasFlag(DbCapabilities.Returning));
         Assert.False(Provider.Capabilities.HasFlag(DbCapabilities.Upsert_OnConflict));
-        Assert.False(Provider.Capabilities.HasFlag(DbCapabilities.Comment_On_Column));
         Assert.False(Provider.Capabilities.HasFlag(DbCapabilities.MultiStatement));
         Assert.False(Provider.Capabilities.HasFlag(DbCapabilities.MultiResultSets));
 
@@ -156,6 +158,30 @@ public sealed class ClickHouseDialectTests
         Assert.Contains("无处可发", Checks.Raised<QuickSqlException>(() => SqGetStoreType(typeof(TimeOnly))).Message);
         Assert.Contains("无处可发", Checks.Raised<QuickSqlException>(() => SqGetStoreType(typeof(TimeSpan))).Message);
         Assert.Contains("无处可发", Checks.Raised<QuickSqlException>(() => SqGetStoreType(typeof(byte[]))).Message);
+    }
+
+    /// <summary>注释两槽与跳过索引那几格的夹具：表注释（[Description] 打类上）、列注释（打属性上）、
+    /// 跳过索引三颗（两颗列挂、一颗类挂表达式式）。名字故意不入 TestInfra 全家福 —— 这一册走 G2
+    /// 反射解析那一侧就够（生成器不认它，未标注实体退 G2，§12.7 同一条）；两颗管线（G1 ∶ G2）的
+    /// 对拍纪律由共用收尾器兜住，夹具不进那套对拍阵容。</summary>
+    [Description("点击事件表，probe 夹具一颗")]
+    // 类挂那一形：必须给表达式的形状 —— 表达式原样抄（"toMinute(EventAt)"，收尾器两边同一句管）。
+    // 表注释与表级声明两颗都挂类头，GetCustomAttributes 按声明序取，与反射侧次序一致。
+    [ClickHouseSkipIndex(SkipIndexKind.BloomFilter, Expression = "toMinute(EventAt)", Granularity = 2)]
+    sealed class ProbeClick
+    {
+        public int Id { get; set; }
+
+        // 列挂缺省那一形：表达式就是这颗列（"EventAt"），名字约定给（QSI_ProbeClick_EventAt_minmax）。
+        [ClickHouseSkipIndex(SkipIndexKind.MinMax)]
+        public DateTime EventAt { get; set; }
+
+        // 列挂带参数那一形：GRANULARITY 随声明走（2），名字约定给。
+        [ClickHouseSkipIndex(SkipIndexKind.BloomFilter, Granularity = 2)]
+        public string Title { get; set; } = "";
+
+        [Description("备注文字，probe 一颗")]
+        public string Note { get; set; } = "";
     }
 
     static string SqGetStoreType(Type clrType, IDbProvider? family = null, int? maxChars = null)
@@ -247,7 +273,7 @@ public sealed class ClickHouseDialectTests
     }
 
     [Fact]
-    public void Column_changes_bind_the_same_nullable_shape_and_the_comment_slot_says_no()
+    public void Column_changes_bind_the_same_nullable_shape()
     {
         var contract = orm().Schemas.Contract<SessionToken>();
         var value = contract.Columns.Single(c => c.MemberName == nameof(SessionToken.Value));
@@ -261,14 +287,92 @@ public sealed class ClickHouseDialectTests
         Verify("ddl-alter-and-comment", sql);
 
         // 改列走 MODIFY COLUMN 完整列定义【文档·ClickHouse：alter 页】；可空那一半读 Definition 里
-        // 同一份判据（NullableInStore），所以"改一次精度"不会把形状改岔。列注释那一格交 false：
-        // 列级 COMMENT 修饰词语法上有而同步那一侧没接 —— 与 GBase 8s 同果不同因，两份档案分开记。
+        // 同一份判据（NullableInStore），所以"改一次精度"不会把形状改岔。
+        // 列注释那一格 beta.26 批起接上了（下一格断言它），本格只管改列两形。
         Checks.Has("ALTER TABLE \"QuickSqlSessionToken\" ADD COLUMN \"Value\" Nullable(String)", sql);
         Checks.Has("ALTER TABLE \"QuickSqlSessionToken\" MODIFY COLUMN \"ExpiresAt\" DateTime64(3) NOT NULL", sql);
+    }
 
+    [Fact]
+    public void Column_and_table_comments_go_by_the_two_alter_shapes()
+    {
+        var contract = orm().Schemas.Contract<ProbeClick>();
+        var note = contract.Columns.Single(c => c.MemberName == nameof(ProbeClick.Note));
+
+        // 列注释：ALTER TABLE … COMMENT COLUMN "列" '注'【实测·2026-10-20 活库 26.9.21.9 ∶ 驱动 7.14.0，
+        // replay-6：发射、幂等重发、system.columns.comment 原字读回三件事都过】。
         var writer = NewWriter();
 
-        Assert.False(Provider.CodeFirst.TryEmitColumnComment(writer, contract.Table, value));
+        Assert.True(Provider.CodeFirst.TryEmitColumnComment(writer, contract.Table, note));
+        Verify("ddl-column-comment", writer.ToSqlString());
+        Checks.Has("ALTER TABLE \"ProbeClick\" COMMENT COLUMN \"Note\" '备注文字，probe 一颗'", writer.ToSqlString());
+
+        // 表注释：ALTER TABLE … MODIFY COMMENT '注'【同出处：裸 COMMENT 形被服务端拒回 Expected COLUMN，
+        // MODIFY 形收】。读回那一半在 reader（system.tables.comment 表注半 / system.columns.comment 列注半）。
+        var tableWriter = NewWriter();
+
+        Assert.True(Provider.CodeFirst.TryEmitTableComment(tableWriter, contract.Table, contract.Table.Comment));
+        Verify("ddl-table-comment", tableWriter.ToSqlString());
+        Checks.Has("ALTER TABLE \"ProbeClick\" MODIFY COMMENT '点击事件表，probe 夹具一颗'", tableWriter.ToSqlString());
+    }
+
+    [Fact]
+    public void Skip_index_declarations_land_in_the_create_table_skeleton()
+    {
+        var contract = orm().Schemas.Contract<ProbeClick>();
+        var sql = Statement(w => Provider.CodeFirst.EmitCreateTable(w, contract));
+
+        Verify("ddl-skip-index", sql);
+
+        // 声明这一档（[ClickHouseSkipIndex]）进建表括号清单，与列同一份逗号表——活库兼收列式
+        // 与表达式式两半（replay-5/6 均收，读回见 system.data_skipping_indices）。
+        // 列挂缺省名 QSI_{表}_{列}_{档}、缺省表达式就是那颗列；GRANULARITY 没写发本家缺省 1。
+        Checks.Has("INDEX \"QSI_ProbeClick_EventAt_minmax\" \"EventAt\" TYPE minmax GRANULARITY 1", sql);
+
+        // 格位参数随声明走（Title 的 [ClickHouseSkipIndex(…, Granularity = 2)]）：
+        Checks.Has("INDEX \"QSI_ProbeClick_Title_bloom\" \"Title\" TYPE bloom_filter GRANULARITY 2", sql);
+
+        // 类挂那一档：表达式原样抄、名字按约定序号给（QSI_{表}_{序号}）。
+        Checks.Has("INDEX \"QSI_ProbeClick_1\" toMinute(EventAt) TYPE bloom_filter GRANULARITY 2", sql);
+
+        // 表注释不发建表尾（SPI 单路 TryEmitTableComment 管）——实体的 [Description] 不内联。
+        Checks.Absent(" COMMENT", sql);
+
+        // 建成之后后补一颗：ALTER … ADD INDEX（replay-5/6 收，读回 system.data_skipping_indices）。
+        // Core 的结构同步不找这一句（索引差按 IndexContract 算、本家整格拒；跳过索引在 schema 读侧
+        // 没有形状）—— 这是给宿主的手工口，不假装"同步会带它"。
+        var addWriter = NewWriter();
+
+        // Cast 本家的实类：EmitAddSkipIndex 是这一家的手工口，不在 SPI 上（同上段的活库出处）。
+        var codeFirst = (ClickHouseCodeFirst)Provider.CodeFirst;
+
+        codeFirst.EmitAddSkipIndex(addWriter, contract.Table,
+            contract.SkipIndexes.Single(s => s.MemberName == nameof(ProbeClick.EventAt)));
+
+        Verify("ddl-add-skip-index", addWriter.ToSqlString());
+        Checks.Has("ALTER TABLE \"ProbeClick\" ADD INDEX \"QSI_ProbeClick_EventAt_minmax\" \"EventAt\" TYPE minmax GRANULARITY 1", addWriter.ToSqlString());
+    }
+
+    [Fact]
+    public void A_set_grade_skip_index_without_max_rows_refuses_at_the_emission_point()
+    {
+        // 档位参数是型名的一部分：set 缺 max_rows 发出去就是一句库不认的 TYPE —— 发射侧当场红，
+        // 不把这条 ClickHouse 语义塞进中性契约（§10.3）。
+        var contract = orm().Schemas.Contract<ProbeClick>();
+
+        var raised = Checks.Raised<QuickSqlException>(() =>
+        {
+            var writer = NewWriter();
+
+            ((ClickHouseCodeFirst)Provider.CodeFirst).EmitAddSkipIndex(writer, contract.Table, contract.SkipIndexes[0] with
+            {
+                Kind = SkipIndexKind.Set,
+            });
+
+            return string.Empty;
+        });
+
+        Assert.Contains("SetMaxRows（set 档的 max_rows）", raised.Message);
     }
 
     // ── 读侧：双引号、独立的两子句分页 ─────────────────────────────
@@ -411,7 +515,8 @@ public sealed class ClickHouseDialectTests
 
         // 方言那颗整格拒不在上面那条路径上，单独点名：EmitReturning 抛而不是发（写入那一路
         // 官方语句清单里没有 RETURNING/OUTPUT 任何一支【文档没逐页回读】），所以
-        // golden/clickhouse/ 是 10 份而不是 11 份 —— insert-with-keys 在本家断言抛、不落盘。
+        // golden/clickhouse/ 里没有 insert-with-keys 那一份 —— 本家断言抛、不落盘
+        //（beta.26 批基线另添注释两槽与跳过索引四份，与这一格互不相干）。
         var slot = Checks.Raised<QuickSqlException>(() =>
         {
             var writer = NewWriter();

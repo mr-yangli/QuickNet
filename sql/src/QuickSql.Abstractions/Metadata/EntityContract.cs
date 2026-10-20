@@ -67,7 +67,8 @@ public sealed record CollectionEdgeContract(
 public sealed class EntityContract
 {
     public EntityContract(Type clrType, TableInfo table, ColumnContract[] columns, IReadOnlyList<IndexContract>? indexes,
-        IReadOnlyList<RelationshipContract> relationships, IReadOnlyList<CollectionEdgeContract>? collections = null)
+        IReadOnlyList<RelationshipContract> relationships, IReadOnlyList<CollectionEdgeContract>? collections = null,
+        IReadOnlyList<SkipIndexContract>? skipIndexes = null)
     {
         ClrType = clrType;
         Table = table;
@@ -75,6 +76,7 @@ public sealed class EntityContract
         Indexes = indexes ?? [];
         Relationships = relationships;
         Collections = collections ?? [];
+        SkipIndexes = skipIndexes ?? [];
         ByMember = columns.ToFrozenDictionary(c => c.MemberName, StringComparer.Ordinal);
         ByColumn = columns.ToFrozenDictionary(c => c.ColumnName, StringComparer.Ordinal);
         PrimaryKey = Array.FindAll(columns, c => c.IsPrimary);
@@ -90,6 +92,12 @@ public sealed class EntityContract
     public ColumnContract[] Columns { get; }
 
     public IReadOnlyList<IndexContract> Indexes { get; }
+
+    /// <summary>跳过索引声明（provider 专属声明位那颗，今天只有 ClickHouse 消费）。
+    /// 与 <see cref="Indexes"/> 分两格：<see cref="IndexContract"/> 是"表建成之后另有对象"的
+    /// OLTP 形状（唯一/聚集那一族），而跳过索引是发射进建表骨架的<em>声明</em>，两格不换算
+    /// —— 混进一格会让拒收整族索引的那一家（ClickHouse）连自家合法的声明一起拒。</summary>
+    public IReadOnlyList<SkipIndexContract> SkipIndexes { get; }
 
     /// <summary>引用导航解析出来的关系边（§8.2 的写序读它）。顺序 = 实体里的声明序，
     /// 与 <see cref="Columns"/> 同一纪律：两侧生成的是同一份顺序，对拍才比得出「谁漏了一条」。</summary>
@@ -118,5 +126,5 @@ public sealed class EntityContract
     /// 只给第一张发则是一句<em>看起来建好了</em>的假绿。所以这里不发，而 <c>SplitTablesResult.IndexesNotCreated</c>
     /// 每次都点名"模板上有几条索引没随片建"（规格 §16.4 记为已裁，随片索引的建档口径排在 P2）。</remarks>
     public EntityContract ForShardDdl(TableInfo shard)
-        => new(ClrType, shard, Columns, [], Relationships, Collections);
+        => new(ClrType, shard, Columns, [], Relationships, Collections, []);
 }

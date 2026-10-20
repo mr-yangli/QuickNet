@@ -946,7 +946,15 @@ public sealed class CapabilityLedgerTests
         // golden 测试自己那句注释）—— 与 Gbase8s 那本"一次发送多语句"那颗未问之问同格，本家第一次
         // 有读数：不可行 §14；③'' Insert/ExecuteNonQuery 交回的受影响行数恒 0（驱动不数行），
         // 依赖行数的路径别赖在这一家身上。
-        new("clickhouse", static () => ClickHouse.Provider(SqlServer.NoDriverFactory.Instance), 6, 0, 6,
+        //【v0.39 第四笔（beta.26 批，2026-10-20）：声明 6 → 7，第 7 颗是列注释】
+        // <c>Comment_On_Column</c> 从"刻意不声明"清单挪进声明清单：发射 <c>ALTER TABLE … COMMENT COLUMN
+        // "列" '注'</c> 与读回 <c>system.columns.comment</c>（列注半）、<c>ALTER TABLE … MODIFY COMMENT
+        // '注'</c> 与读回 <c>system.tables.comment</c>（表注半，无能力位、读回义务记 TryEmitTableComment
+        // 行）—— 四件事一组活库逐字回放过（obj/logs/v39-ch-replay-5/6.md：幂等重发不红；表注半另一份
+        // 落盘 golden/clickhouse/ddl-table-comment.sql）。宣言这件事
+        // 其实在说：本家"列级 COMMENT 修饰词语法存在而从前没接"是选边、非缺档，与 GBase 8s 那格
+        //（真没有那条语句）从此两档分开记，不再同果同账。
+        new("clickhouse", static () => ClickHouse.Provider(SqlServer.NoDriverFactory.Instance), 7, 0, 7,
         [
             new(DbCapabilities.Paging_LimitOffset, Provenance.Live, "golden/clickhouse/paging-order-skip-take.sql"),
             new(DbCapabilities.Boolean_Type, Provenance.Live, "golden/clickhouse/where-boolean-flag.sql"),
@@ -954,6 +962,7 @@ public sealed class CapabilityLedgerTests
             new(DbCapabilities.CaseSensitive_Identifiers, Provenance.Live, "判等区分大小写【实测·2026-10-20 活库】：\"quicksql_probe\".\"QuickSqlT1\" 按引号名命中；按小写非引号问同表名被服务端拒并给出 \"Maybe you meant … QuickSqlT1\" 提示 —— 第二笔那颗【推断】就此结"),
             new(DbCapabilities.Schemas, Provenance.Live, "golden/clickhouse/ddl-qualified.sql"),
             new(DbCapabilities.Alter_Column_Precision, Provenance.Live, "golden/clickhouse/ddl-alter-and-comment.sql"),
+            new(DbCapabilities.Comment_On_Column, Provenance.Live, "golden/clickhouse/ddl-column-comment.sql"),
         ]),
     ];
 

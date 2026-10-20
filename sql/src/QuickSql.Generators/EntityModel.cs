@@ -28,6 +28,10 @@ sealed class EntityModel
 
     public List<IndexModel> Indexes = [];
 
+    /// <summary>跳过索引声明（<c>[ClickHouseSkipIndex]</c>）。次序：类挂在前、列挂按列清单次序在后，
+    /// 与反射侧 <c>ContractResolver.ResolveSkipIndexes</c> 同一份次序 —— 顺序也算对拍的内容（§13.11）。</summary>
+    public List<SkipIndexModel> SkipIndexes = [];
+
     public List<RelationshipModel> Relationships = [];
 
     /// <summary>分表声明，null = 这张表不分表。与 <see cref="TableName"/> 分开存：
@@ -121,6 +125,35 @@ sealed class IndexModel
     public bool Clustered;
 
     public bool Descending;
+}
+
+/// <summary><c>[ClickHouseSkipIndex]</c> 的编译期抄本。<see cref="Kind"/> 存的是
+/// <c>global::QuickSql.Metadata.SkipIndexKind.{成员}</c> 的完整表达式，写手只管抄；
+/// <see cref="Member"/> 为 null = 类挂（那一路必须有表达式，否则编译期诊断）。</summary>
+sealed class SkipIndexModel
+{
+    /// <summary>属性挂 = 该属性名；类挂 = null。</summary>
+    public string? Member;
+
+    /// <summary>显式表达式；null = 用成员的列（列挂缺省那一档）。</summary>
+    public string? Expression;
+
+    /// <summary>显式索引名；null = 约定名在运行期收口（两侧同一句）。</summary>
+    public string? Name;
+
+    public string Kind = "";
+
+    public int Granularity;
+
+    public int SetMaxRows;
+
+    public int NgramSize;
+
+    public int BucketSize;
+
+    public int HashFunctions;
+
+    public int Seed;
 }
 
 /// <summary>一条导航边的声明（to-one 或集合，按 <see cref="IsCollection"/> 分）。列名换算不在生成期做——

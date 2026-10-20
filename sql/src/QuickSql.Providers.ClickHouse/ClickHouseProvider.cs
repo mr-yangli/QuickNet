@@ -17,7 +17,7 @@ namespace QuickSql.Providers.ClickHouse;
 /// <para>各槽位共用同一批实例（与已落地的每一族同一条纪律）：<c>Expressions.Register</c> 的覆写必须同时
 /// 对翻译器和方言生效，各 new 一份就会出现"注册了却不改行为"的幽灵 bug。</para>
 ///
-/// <para><b>能力位：声明 6 位</b>。历届差距要读清：GBase 8s 那家"分页有产出而一位都报不出"是因为
+/// <para><b>能力位：声明 7 位</b>。历届差距要读清：GBase 8s 那家"分页有产出而一位都报不出"是因为
 /// 句首限定词在枚举里没有位；本家的分页形状恰好就是枚举里现成的那颗 —— <c>LIMIT/OFFSET</c> 两子句
 /// 各自独立、不要求 ORDER BY【文档·ClickHouse，SELECT 页】。逐位对 §4 那句"代码今天真的走到那一条语句"：
 /// <c>Paging_LimitOffset</c> 对 <see cref="ClickHouseDialect.EmitPaging"/> 那两段尾巴文本；
@@ -31,7 +31,10 @@ namespace QuickSql.Providers.ClickHouse;
 /// <c>Alter_Column_Precision</c> 对 <see cref="ClickHouseCodeFirst.EmitAlterColumnPrecision"/> 那一句
 /// <c>ALTER TABLE … MODIFY COLUMN</c>【文档·ClickHouse，alter 页】；
 /// <c>CaseSensitive_Identifiers</c> 对 <see cref="IdentifierPolicy.ClickHouse"/> 的 <c>CaseSensitive: true</c>
-///（官方 identifiers 页写明标识符区分大小写）。</para>
+///（官方 identifiers 页写明标识符区分大小写）；<c>Comment_On_Column</c> 对
+/// <see cref="ClickHouseCodeFirst.TryEmitColumnComment"/> 那一句 <c>ALTER TABLE … COMMENT COLUMN</c>
+/// 与读侧 <c>system.columns.comment</c> 两半（发射与读回都在活库 26.9.21.9 上逐字回放过，
+/// 出处 replay-5，§13.5 第十七本）。</para>
 ///
 /// <para>刻意<b>不</b>声明的，逐条给理由（与已落地的每一族同一条纪律：不声明比声明更需要写下来）：
 /// <list type="bullet">
@@ -52,12 +55,6 @@ namespace QuickSql.Providers.ClickHouse;
 /// 送值要动内核 SPI，本笔不拦，整格记 §14。</item>
 /// <item><c>Bulk_Copy</c>/<c>Bulk_ArrayBind</c>：<see cref="Bulk"/> 交回 <see langword="null"/>，
 /// 批量退回链自然从 L3 起（§12.1）。</item>
-/// <item><c>Comment_On_Column</c>：列级 <c>COMMENT</c> 修饰词在本家语法上<em>存在</em>
-///【文档·ClickHouse，CREATE TABLE 页】，但 <see cref="ClickHouseCodeFirst.TryEmitColumnComment"/> 取
-/// false —— 与 GBase 8s 那一格同果不同因：那一家是<em>没有</em>这一条语句，这一家是语法有那颗修饰词
-/// 而结构同步那一侧没接。表注释则走 <see cref="ClickHouseCodeFirst.EmitCreateTable"/> 里
-/// "建表顺手带上"那一支（COMMENT 子句必须在 ENGINE 与存储子句之后、query settings 之前
-///【文档·ClickHouse，CREATE TABLE 页】，词序钉在那一格）。</item>
 /// <item><c>MultiStatement</c>/<c>MultiResultSets</c>/<c>TempTable</c>/<c>Json_Type</c>/<c>Array_Type</c>/
 /// <c>Cte</c>/<c>WindowFunctions</c>/<c>Count_Over_Window</c>/<c>SkipLocked</c>/<c>Lock_NoWait</c>/
 /// <c>RefCursor</c>/<c>Truncate_Cascade</c>：<c>src/</c> 一行没发过 —— 声明一颗没有消费者的"支持"
@@ -88,10 +85,11 @@ public sealed class ClickHouseProvider : IDbProvider
 
     public DbKind Kind => DbKind.ClickHouse;
 
-    /// <summary>位掩码本体，六位各自的产出文本写在类注释第三段，不声明的逐条在第四段。</summary>
+    /// <summary>位掩码本体，七位各自的产出文本写在类注释第三段，不声明的逐条在第四段。</summary>
     public DbCapabilities Capabilities =>
         DbCapabilities.Paging_LimitOffset | DbCapabilities.Boolean_Type | DbCapabilities.Guid_Raw16 |
-        DbCapabilities.Schemas | DbCapabilities.Alter_Column_Precision | DbCapabilities.CaseSensitive_Identifiers;
+        DbCapabilities.Schemas | DbCapabilities.Alter_Column_Precision | DbCapabilities.CaseSensitive_Identifiers |
+        DbCapabilities.Comment_On_Column;
 
     public IConnectorFactory Connectors { get; }
 

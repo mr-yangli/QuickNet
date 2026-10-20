@@ -98,7 +98,8 @@ public sealed class ContractResolver(IDbProvider provider, ModelConfiguration? c
         // 收尾（provider 的 storage defaults、自增约定、索引与外键的列名换算）在 EntityContractFactory 里，
         // 与 G1 生成的事实共用同一段代码：这条链的正确性由 §13.11 的两侧逐字段相等断言兜住。
         return EntityContractFactory.Build(clrType, table, [.. columns], ResolveIndexFacts(clrType, fluent),
-            ResolveRelationships(members, columns), Provider.Types, IntegralPrimaryKeyAutoIncrement);
+            ResolveRelationships(members, columns), Provider.Types, IntegralPrimaryKeyAutoIncrement,
+            ResolveSkipIndexes(clrType));
     }
 
     TableInfo ResolveTable(Type clrType, FluentEntity? fluent)
@@ -472,6 +473,53 @@ public sealed class ContractResolver(IDbProvider provider, ModelConfiguration? c
 
         foreach (var index in fluent?.Indexes ?? [])
             facts.Add(new IndexFacts(index.Name, index.MemberNames, index.Unique, Descending: index.Descending));
+
+        return [.. facts];
+    }
+
+    /// <summary>跳过索引声明只认自研注解那一层（Fluent 侧今天不落这一格）。类挂与属性挂两条来路
+    /// 收进同一份名单按声明序排：表级在前、列级在后，与 G1 生成器 <c>SkipIndexesOf</c> 的次序一致 ——
+    /// 顺序也算对拍的内容（§13.11）。抄声明而已：成员换算与约定名都在收尾那一份里（§10.3）。</summary>
+    [RequiresUnreferencedCode("G2 兜底路径按 Type 扫描属性与注解；主路径是 G1 源生成。")]
+    IReadOnlyList<SkipIndexFacts> ResolveSkipIndexes(Type clrType)
+    {
+        var facts = new List<SkipIndexFacts>();
+
+        foreach (var declared in clrType.GetCustomAttributes<ClickHouseSkipIndexAttribute>())
+        {
+            // 类挂没有"缺省成员"可言：那一档没写表达式让收尾去红，比在这里悄悄丢掉声明诚实
+            // —— 收尾那一句话对两侧是同一句。
+            facts.Add(new SkipIndexFacts
+            {
+                Expression = declared.Expression,
+                Name = declared.Name,
+                Kind = declared.Kind,
+                Granularity = declared.Granularity,
+                SetMaxRows = declared.SetMaxRows,
+                NgramSize = declared.NgramSize,
+                BucketSize = declared.BucketSize,
+                HashFunctions = declared.HashFunctions,
+                Seed = declared.Seed,
+            });
+        }
+
+        foreach (var property in clrType.GetProperties(BindingFlags.Public | BindingFlags.Instance))
+        foreach (var declared in property.GetCustomAttributes<ClickHouseSkipIndexAttribute>())
+        {
+            facts.Add(new SkipIndexFacts
+            {
+                MemberName = property.Name,
+                Expression = declared.Expression,
+                Name = declared.Name,
+                Kind = declared.Kind,
+                Granularity = declared.Granularity,
+                SetMaxRows = declared.SetMaxRows,
+                NgramSize = declared.NgramSize,
+                BucketSize = declared.BucketSize,
+                HashFunctions = declared.HashFunctions,
+                Seed = declared.Seed,
+            });
+        }
 
         return [.. facts];
     }
