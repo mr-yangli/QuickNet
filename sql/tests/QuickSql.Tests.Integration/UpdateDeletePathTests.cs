@@ -553,4 +553,58 @@ public sealed class UpdateDeletePathTests
 
         Assert.NotEmpty(Orders("[Id] = @id", ("@id", id)));
     }
+
+    // ── 按实体那一行的两个入口（orm.Update(实体) ∶ orm.Delete(实体)） ──────────
+
+    [Fact]
+    public async Task An_entity_update_leaves_the_column_it_never_said_at_the_value_the_store_has()
+    {
+        Database.Ready();
+
+        // 库里那一行 PaidAt 有值，而交回来的那只实体把它抹成 null。这一档读作"这一列这次没说"，
+        // 于是那一格必须留在库里。这一条是整件事唯一的证人：整行摊平那一种写法（UpdateRange 的契约）
+        // 发出去的句子少一颗参数、而这一档发的句子也少一颗参数，两份黄金样本各自都"看着对" ——
+        // 只有库能回答"那一格现在还是不是那颗时间"。
+        var paidOn = new DateTime(2026, 6, 7, 8, 9, 10, 111);
+        var order = row(tagged(26), 3m, scope("entity-door"));
+        order.PaidAt = paidOn;
+
+        var id = await Inserted(order);
+
+        var loaded = await Orm.Select<Order>().Where(o => o.Id == id)
+            .FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+
+        Assert.NotNull(loaded);
+        Assert.Equal(paidOn, loaded!.PaidAt);
+
+        loaded.Note = "改过备注";
+        loaded.PaidAt = null;
+
+        Assert.Equal(1, await Orm.Update(loaded).ExecuteAffrowsAsync(TestContext.Current.CancellationToken));
+
+        var stored = Row(id);
+
+        // 点名的那一格真变了，没点名的那一格一格没动，其余列被同一份值原样盖回去（它们带来值）。
+        Assert.Equal("改过备注", stored["Note"]);
+        Assert.Equal(paidOn, When(stored, "PaidAt"));
+        Assert.Equal(3m, Money(stored, "Amount"));
+        Assert.Equal(4242, Num(stored, "CustomerId"));
+        Assert.Equal(Moment, When(stored, "CreatedAt"));
+    }
+
+    [Fact]
+    public async Task An_entity_delete_takes_exactly_the_row_it_was_handed_and_reads_nothing_else()
+    {
+        Database.Ready();
+
+        var kept = await Inserted(row(tagged(27), 1m, scope("delete-door")));
+        var gone = await Inserted(row(tagged(27), 2m, scope("delete-door")));
+
+        // 交出去的是一只只填了主键的实体：其余列一列都不读，所以"这只实体别的列全是默认值"这件事
+        // 在这一档没有任何后果——那一格只借主键定位，不借值。
+        Assert.Equal(1, await Orm.Delete(new Order { Id = gone }).ExecuteAffrowsAsync(TestContext.Current.CancellationToken));
+
+        Assert.Empty(Orders("[Id] = @id", ("@id", gone)));
+        Assert.Equal(1m, Money(Row(kept), "Amount"));
+    }
 }

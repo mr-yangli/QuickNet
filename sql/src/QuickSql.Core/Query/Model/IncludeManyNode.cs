@@ -1,4 +1,5 @@
 using QuickSql.Metadata;
+using QuickSql.Tracking;
 
 namespace QuickSql.Query.Model;
 
@@ -17,6 +18,21 @@ public sealed class IncludeManyNode
 
     /// <summary>子实体上的 FK 列名（指向父实体 PK）。顺序与父实体 PK 列对齐。</summary>
     public required IReadOnlyList<string> ChildFkColumnNames { get; init; }
+
+    /// <summary>子型那一档的<em>建档</em>委托（带编译期子型，故建档不必反射）。
+    ///
+    /// <para><b>为什么这一格要有它</b>：IncludeMany 往会话里登记子型时走
+    /// <see cref="ChangeTracker.TrackAll{T}"/>，而它按<em>运行期</em>类型找档位；档位只有泛型那一颗
+    /// <c>For&lt;T&gt;()</c> 能建（<see cref="EntityTracker{T}"/> 的构造要编译期的 <c>T</c>），
+    /// 于是「子型那一档还没有」时就是那句「内核的不变量被破」。
+    /// 调用方若自己先摸一句 <c>Set&lt;子型&gt;()</c> 把档建出来，那条路能走通 ——
+    /// 但那是<em>调用方的现场手续</em>，不是「IncludeMany 缝出来的子行理应被跟住」这件事本身。</para>
+    ///
+    /// <para><b>静态型从哪来</b>：只有接链那一刻有它 —— <c>IncludeMany&lt;TDetail&gt;</c> 与
+    /// <c>ThenIncludeMany&lt;…,TProp&gt;</c> 两个泛型口的形参上。节点上因此不放运行期类型，
+    /// 放一把「按编译期子型建档」的委托；建出来的档与 <see cref="ChildType"/> 对不上时当场响
+    /// （见 <see cref="QuickSql.Core.Query.QueryEngine"/> 里那一格），不留「建了另一型的档」这种静默。</para></summary>
+    internal Func<ChangeTracker, ITypeTracker>? ChildTrackerFactory { get; init; }
 
     /// <summary>子节点（<c>ThenIncludeMany</c> 链）：挂在<em>本节点子型</em>上的再一层集合导航。
     /// 与 <see cref="IncludeNode.Children"/> 同一棵树形态，区别在每一层各发一条 SELECT，

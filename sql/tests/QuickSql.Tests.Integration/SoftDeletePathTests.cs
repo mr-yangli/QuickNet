@@ -1,4 +1,6 @@
 using System.Globalization;
+using QuickSql.Aop;
+using QuickSql.Metadata;
 using QuickSql.TestInfra;
 using QuickSql.Tracking;
 using QuickSql.Write;
@@ -193,6 +195,56 @@ public sealed class SoftDeletePathTests
 
         // 而过滤器不是删除：它自己不动任何一行，所以按 [Id] 数还是 1。
         Assert.Equal(1, Count("[Id] = @id", ("@id", id)));
+    }
+
+    // ── 订阅者往上加的那一格：软删自己只写两格，「谁删的」是调用方的领域事实 ──
+
+    /// <summary><c>QuickSqlAop.SoftDeleteValues</c>：订阅者往上加的 SET 项真的进了那句 UPDATE，也真的落了库。
+    ///
+    /// <para><b>它为什么要有这一格</b>：软删自己只写两格（置位 + 时间），而「谁删的」那一格是调用方的领域事实 ——
+    /// 库不知道当前用户是谁、也不该知道。这一颗让调用方把那一格往上加，库负责把它参数化、写出去，
+    /// 并按与那两格同一把尺子验（自增列与并发列不收）。</para>
+    ///
+    /// <para><b>判据</b>：行还在（软删的本分）、置位那一格是 1、时间那一格是钉住的那颗、
+    /// <b>而订阅者加的那一格是它给的那个值</b>。最后一句是这一条的全部意义 ——
+    /// 那一格若没进 SET，前三句照样全绿。</para>
+    ///
+    /// <para><b>用 <c>Title</c> 当「谁删的」那一格</b>：这颗模型没有专用的删除人列，
+    /// 而加一列会动 <c>Ticket</c> 的 DDL（那一片有黄金样本）。这一条判的是机制，
+    /// 所以拿哪一列当载体不影响它判的那件事。</para></summary>
+    [Fact]
+    public async Task The_extra_column_a_subscriber_adds_lands_in_the_soft_delete_statement()
+    {
+        Database.Ready();
+        Database.EnsureTable(typeof(Ticket));
+
+        var aop = new QuickSqlAop();
+        var orm = Database.OrmWith(aop);
+        orm.Behaviors.SoftDelete<Ticket>(t => t.Deleted, t => t.DeletedAt, () => Moment);
+
+        // 「谁删的」那一格要用契约上那一列 —— 订阅者拿到的是表名，列得自己从契约上取（列名 → 列契约）。
+        var titleColumn = orm.Schemas.Contract(typeof(Ticket)).ByMember[nameof(Ticket.Title)];
+
+        aop.SoftDeleteValues = e =>
+            e.ExtraValues.Add(new KeyValuePair<ColumnContract, object?>(titleColumn, "谁删的"));
+
+        var id = await Seed(orm, 6);
+
+        // 走会话那一条路（跟踪器的摘行），那一档才有「一只一行」可给。
+        var db = new DbContext(orm);
+        var ticket = await db.Set<Ticket>().Where(t => t.Id == id).FirstOrDefaultAsync(ct);
+
+        Assert.NotNull(ticket);
+
+        db.Remove(ticket!);
+
+        await db.SaveChangesAsync(ct);
+
+        var stored = Stored(id);
+
+        Assert.True(Flagged(stored));
+        Assert.Equal(Moment, Stamped(stored));
+        Assert.Equal("谁删的", stored["Title"]);
     }
 
     // ── 批量出口：一批键变一句置位的 UPDATE ──────────────────────────

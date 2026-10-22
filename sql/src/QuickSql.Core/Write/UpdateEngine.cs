@@ -27,6 +27,12 @@ sealed class UpdateEngine<T> : IUpdate<T> where T : class
     readonly IReadOnlyList<SetClause> _sets;
     readonly SqlExpression? _where;
 
+    /// <summary>取值段（<see cref="FromEntity"/> 那一趟 <c>AuditValue</c>）留下的改写痕迹。
+    /// 链式点名的那条路永远是空表——<see cref="Set{TProp}(System.Linq.Expressions.Expression{System.Func{T,int}},System.Linq.Expressions.Expression{System.Func{T,int}})"/>
+    /// 那些重载不读实体、不过钩子，与 <c>UpdateBulkEngine._valueTraces</c> 同一分工。
+    /// 它必须跟着 <see cref="Append"/>/<see cref="Where"/> 的每一次复制走：<see cref="Build"/> 里的步号从它末尾续编（§10.1 硬规则 1）。</summary>
+    readonly IReadOnlyList<HookTrace> _valueTraces;
+
     UpdatePlan? _plan;
 
     public UpdateEngine(QuickSqlOrm orm)
@@ -34,7 +40,7 @@ sealed class UpdateEngine<T> : IUpdate<T> where T : class
     {
     }
 
-    UpdateEngine(QuickSqlOrm orm, IReadOnlyList<SetClause> sets, SqlExpression? where, TableInfo? target)
+    UpdateEngine(QuickSqlOrm orm, IReadOnlyList<SetClause> sets, SqlExpression? where, TableInfo? target, IReadOnlyList<HookTrace>? valueTraces = null)
     {
         _orm = orm;
         _contract = orm.Schemas.Contract<T>();
@@ -49,6 +55,78 @@ sealed class UpdateEngine<T> : IUpdate<T> where T : class
         _table = new TableRef(0, _orm.Provider.Dialect.WriteTargetAlias(table), table, _contract);
         _sets = sets;
         _where = where;
+        _valueTraces = valueTraces ?? [];
+    }
+
+    /// <summary>按实体那一行定位的 UPDATE：<c>orm.Update(entity)</c> 的落点。
+    /// <para><b>它点的是"哪一行"，不点"改哪几列"</b>，而 <see cref="UpdateEngine{T}"/> 那条链正好相反，
+    /// 所以这一格不能并进 <see cref="Set{TProp}(System.Linq.Expressions.Expression{System.Func{T,TProp}},TProp)"/>
+    /// 重载去。<b>列尺子在 <see cref="FromEntity"/> 里换了一把</b>：只把<em>带来值</em>（非 null）的可写列写进
+    /// <c>SET</c>，那一格交来 null 就是"这一列这次没说"，不进语句。这与 <see cref="UpdateBulkEngine{T}"/>
+    /// 的「整行交出去，那一格说的是 NULL 就是 NULL」<em>正对面</em>，是同一批实体的两种意图而不是可以互换的两种写法
+    /// （想连 null 一起覆盖就走 <c>UpdateRange</c>；想把某一格显式写成 NULL 就走链式点那一列）。</para>
+    /// <para><c>WHERE</c> 是主键合取式（复合键逐列 <c>=</c> 再 <c>AND</c>，与跟踪器 <c>KeyPredicate</c> 同一个形状），
+    /// 所以这张表必须有主键。之后叠加的顺序与链式那条逐字相同：调用方再写的 <c>.Where(...)</c> 排在主键之后、
+    /// 全局过滤器排在最后，软删在册时 <c>Delete</c> 侧的改写规则不参与这一句。</para></summary>
+    internal static UpdateEngine<T> FromEntity(QuickSqlOrm orm, T entity)
+    {
+        var contract = orm.Schemas.Contract<T>();
+        var schema = orm.Schemas.Schema<T>();
+
+        if (contract.PrimaryKey.Length == 0)
+            throw new QuickSqlException($"{contract.Table.Name} 没有主键列：按实体的 UPDATE 要按主键定位，WHERE 出不来。" +
+                $"要么给实体点主键（[PrimaryKey] 或约定名 Id），要么按条件走 orm.Update<{typeof(T).Name}>().Set(...).Where(...)。");
+
+        // 分表实体按<em>这只实体自己的分片键</em>换算那一片 —— 与 InsertEngine 的 SplitGroups 同一颗 Resolve，
+        // 于是"这一行进哪张片"在插入与更新上是同一个答案。链式那条的 SplitTable(日期/桶号) 在这里用不上：
+        // 选片发生在链首，而这一条链的链首就是这只实体。
+        var target = EntityRowLocator.ShardOf(contract, schema, entity);
+        var table = target ?? contract.Table;
+        var tableRef = new TableRef(0, orm.Provider.Dialect.WriteTargetAlias(table), table, contract);
+
+        var audit = orm.Aop.AuditValue;
+        var traces = new List<HookTrace>();
+        var sets = new List<SetClause>(contract.Columns.Length);
+
+        for (var ordinal = 0; ordinal < contract.Columns.Length; ordinal++)
+        {
+            var column = contract.Columns[ordinal];
+
+            // 三道筛与 UpdateBulkEngine 构造函数逐字同源：主键进 WHERE 不进 SET，库里给值的列与并发列不接受书写。
+            if (column.IsPrimary || column.ValueFromStore || column.IsConcurrencyToken)
+                continue;
+
+            var value = schema.GetValue(entity, ordinal);
+
+            // 取值段与批量链同一趟钩子、同一个种类（"update"）：订阅"补修改时间"的人不该因为调用方选了哪扇门
+            // 而少填一格。钩子写完值再判 null —— 钩子把 null 填成有值的那些列因此进得了 SET。
+            if (audit is not null)
+            {
+                var @event = new AuditValueEvent(entity, column, value, "update", written => schema.SetValue(entity, ordinal, written));
+
+                audit(@event);
+
+                if (@event.WasSet)
+                {
+                    traces.Add(new HookTrace(traces.Count, "AuditValue", HookCategory.Rewrite, $"{column.MemberName} = {StatementEmitter.Text(value)}", $"{column.MemberName} = {StatementEmitter.Text(@event.CurrentValue)}"));
+                    value = @event.CurrentValue;
+                }
+            }
+
+            if (value is null)
+                continue;
+
+            Check(orm, contract, column, value);
+
+            sets.Add(new SetClause(column, new ParameterValue(value, column)));
+        }
+
+        if (sets.Count == 0)
+            throw new QuickSqlException($"{contract.Table.Name} 的这只实体除主键、库里给值的列与并发列以外没有一列带值：" +
+                "按实体的 UPDATE 只写带来值的那些列，这一只一列都没说，那一句 SET 出不来。" +
+                $"要么把要改的那几列填上，要么显式写 orm.Update<{typeof(T).Name}>().Set(o => o.列, 值)——后者还能把一格真写成 NULL，这一档做不到。");
+
+        return new UpdateEngine<T>(orm, sets, EntityRowLocator.KeyPredicate(contract, schema, entity, tableRef, "按实体的 UPDATE"), target, traces);
     }
 
     // ── 算子 ──────────────────────────────────────────────────────────
@@ -73,7 +151,7 @@ sealed class UpdateEngine<T> : IUpdate<T> where T : class
                 $"{_contract.Table.Name} 的 SplitTable 要放在链式最前面：这条链上已叠加 {_sets.Count} 个 SET/{(_where is null ? 0 : 1)} 个条件，" +
                 "它们的列引用仍指向没选片时的那个目标。");
 
-        return new UpdateEngine<T>(_orm, _sets, _where, target);
+        return new UpdateEngine<T>(_orm, _sets, _where, target, _valueTraces);
     }
 
     /// <summary>这一条链的目标片：已选就用它，没选而实体分了片就在<em>构建之前</em>拒。</summary>
@@ -107,7 +185,7 @@ sealed class UpdateEngine<T> : IUpdate<T> where T : class
     {
         var target = ColumnOf(column.Body);
 
-        Check(target, value);
+        Check(_orm, _contract, target, value);
 
         return Append(target, new ParameterValue(value, target));
     }
@@ -124,7 +202,7 @@ sealed class UpdateEngine<T> : IUpdate<T> where T : class
     public IUpdate<T> Where(Expression<Func<T, bool>> predicate)
         => new UpdateEngine<T>(_orm, _sets, _where is null
             ? _orm.Expressions.Predicate(predicate, ScopeOf(predicate))
-            : And(_where, _orm.Expressions.Predicate(predicate, ScopeOf(predicate))), _target);
+            : And(_where, _orm.Expressions.Predicate(predicate, ScopeOf(predicate))), _target, _valueTraces);
 
     /// <summary>SET 左侧的列。四件事在这里判：<b>是不是列</b>（导航属性与计算成员不进 SET）、
     /// <b>是不是自增列</b>（库里那一列不接受写，除非开 IDENTITY_INSERT，P0 未接）、
@@ -138,7 +216,7 @@ sealed class UpdateEngine<T> : IUpdate<T> where T : class
                 throw new QuickSqlException($"{_contract.Table.Name} 的 {target.ColumnName} 被设置了两次：后一次不会覆盖前一次，" +
                     "库里直接报错。要基于原值算就写成表达式那一档：Set(o => o.Amount, o => o.Amount + 1)。");
 
-        return new UpdateEngine<T>(_orm, [.. _sets, new SetClause(target, value)], _where, _target);
+        return new UpdateEngine<T>(_orm, [.. _sets, new SetClause(target, value)], _where, _target, _valueTraces);
     }
 
     ColumnContract ColumnOf(Expression body)
@@ -172,10 +250,12 @@ sealed class UpdateEngine<T> : IUpdate<T> where T : class
     /// <b>为什么只有这两把</b>：DataAnnotations 与 Custom 档的规则挂在<em>实体</em>上，而这条链上没有整实体，
     /// 只有一格要进 <c>SET</c> 的值 —— 拿 <c>IEntityValidator.TryValidate</c> 就得先造一只假实体，
     /// 那会把没填的列一起判成"缺"。所以这里直接调 <see cref="ContractRules"/> 那两条，
-    /// 消息文本与插入链逐字同源（它也是从那里出来的）。差异记在 §14。</summary>
-    void Check(ColumnContract column, object? value)
+    /// 消息文本与插入链逐字同源（它也是从那里出来的）。差异记在 §14。
+    /// <b>静态化的理由是一件事而不是形态</b>：<c>orm.Update(entity)</c> 那一档也在建 <c>SET</c>，
+    /// 两扇门量的是同一把尺子，留成两份迟早会在"哪一格算超长"上分家。</summary>
+    static void Check(QuickSqlOrm orm, EntityContract contract, ColumnContract column, object? value)
     {
-        var validator = _orm.Schemas.Validator<T>();
+        var validator = orm.Schemas.Validator<T>();
 
         if (validator.Mode == ValidationMode.Off)
             return;
@@ -197,7 +277,7 @@ sealed class UpdateEngine<T> : IUpdate<T> where T : class
             return;
 
         throw new ValidationFailedException(
-            $"{_contract.Table.Name} 的 {column.ColumnName} 被拒绝：这一格的值违反库契约（ValidationMode.{validator.Mode}）。语句还没有生成，什么都没写进库。",
+            $"{contract.Table.Name} 的 {column.ColumnName} 被拒绝：这一格的值违反库契约（ValidationMode.{validator.Mode}）。语句还没有生成，什么都没写进库。",
             failures);
     }
 
@@ -249,8 +329,10 @@ sealed class UpdateEngine<T> : IUpdate<T> where T : class
         // 谓词的列引用绑的是那一个实例，换一份反而会让两边指不同的 TableRef。）
         var table = Target();
 
-        var traces = new List<HookTrace>();
-        var step = 0;
+        // 取值段那几笔（只有 FromEntity 那一档有）排在最前、步号从 0 起，CudBuilding/ParameterBinding
+        // 接着往下编 —— 与 UpdateBulkEngine.Build 同一条回放纪律（§10.1 硬规则 1）。
+        var traces = new List<HookTrace>(_valueTraces);
+        var step = _valueTraces.Count;
 
         // §10.7 约束 1 的写侧那一半：过滤器叠在调用方写的条件<em>之后</em>（与读侧多次 Where 的折叠同一个方向，
         // 于是同一条链在读写两侧看到的括号形状一致）。位置在 Guard.Whereless 之后 —— 全局过滤器不是
@@ -369,6 +451,28 @@ sealed class DeleteEngine<T> : IDelete<T> where T : class
             ? _orm.Expressions.Predicate(predicate, ScopeOf(predicate))
             : new SqlBinaryExpression(BinaryOperator.And, _where, _orm.Expressions.Predicate(predicate, ScopeOf(predicate))), _target);
 
+    /// <summary>按实体那一行定位的 DELETE：<c>orm.Delete(entity)</c> 的落点。<b>这一格只借主键，不借值</b>——
+    /// 实体上的其余列一列都不读（读它们也不会进语句），所以「哪几列是 null」在这条路上没有任何含义，
+    /// 与 <see cref="UpdateEngine{T}.FromEntity"/> 那把「null 不进 SET」的尺子是两件事。
+    /// <b>复合主键在这里支持</b>：逐列 <c>=</c> 再 <c>AND</c>，与跟踪器摘行、批量链各自主键时同一个形状；
+    /// <see cref="DeleteRange{T}"/> 拒它靠的是「IN 清单装不下元组」，那一句在单行上根本不成立。
+    /// 软删与全局过滤器那两道闸门由 <see cref="Build"/> 接手，与 <c>.Where(...)</c> 那条路逐字同一条。</summary>
+    internal static DeleteEngine<T> FromEntity(QuickSqlOrm orm, T entity)
+    {
+        var contract = orm.Schemas.Contract<T>();
+        var schema = orm.Schemas.Schema<T>();
+
+        if (contract.PrimaryKey.Length == 0)
+            throw new QuickSqlException($"{contract.Table.Name} 没有主键列：按实体的 DELETE 要按主键定位，WHERE 出不来。" +
+                $"要么给实体点主键（[PrimaryKey] 或约定名 Id），要么按条件走 orm.Delete<{typeof(T).Name}>().Where(...)。");
+
+        var target = EntityRowLocator.ShardOf(contract, schema, entity);
+        var table = target ?? contract.Table;
+        var tableRef = new TableRef(0, orm.Provider.Dialect.WriteTargetAlias(table), table, contract);
+
+        return new DeleteEngine<T>(orm, EntityRowLocator.KeyPredicate(contract, schema, entity, tableRef, "按实体的 DELETE"), target);
+    }
+
     public DeletePlan Explain() => _plan ??= Build();
 
     public string ToSql() => Explain().Sql.Text;
@@ -466,4 +570,55 @@ static class Guard
         => $"{table} 的 {operation} 没有 WHERE：那是整表操作，不是一种可以漏写条件漏出来的默认行为。" +
         $"要真的对全部行做这件事，就把它写成 .Where(o => true) —— 产出的语句一模一样，但这句话是你说的。" +
         "运行期还有第二道闸（§10.1 的 CommandTerminating 钩子），可以做更细的拦截规则。";
+}
+
+/// <summary>「按实体那一行定位」这一档共用的两件：目标片换算与主键合取式。
+/// <b>它们存在的理由是 <c>orm.Update(entity)</c> 与 <c>orm.Delete(entity)</c> 要给出同一个答案</b>——
+/// 同一只实体先改后删，两次定位必须落在同一张片、同一个 <c>WHERE</c> 形状上，而两份判据分别长在两条链里
+/// 迟早会分家。判据本身不是新东西：分片键那一句抄 <see cref="InsertEngine{T}"/> 的 <c>SplitGroups</c>
+/// （插入与更新对"这一行进哪张片"不许有两种说法），合取式那一句抄跟踪器的 <c>KeyPredicate</c>
+/// （逐列 <c>=</c> 再 <c>AND</c>，不用行值构造器——<c>(a, b) IN ((…))</c> 的支持面在国产库里参差）。</summary>
+static class EntityRowLocator
+{
+    /// <summary>这只实体该打的那一张片。<see langword="null"/> = 这张表不分片，照模板名走。
+    /// 分片键为空由 <see cref="SplitRouting.Resolve"/> 当场抛，不"当作今天"——
+    /// 一行数据因为一个空字段静默进错表，那笔账要到月底统计时才看得见。</summary>
+    public static TableInfo? ShardOf<T>(EntityContract contract, IEntityTypeSchema<T> schema, T entity) where T : class
+    {
+        if (contract.Table.Split is not { } split)
+            return null;
+
+        var ordinal = Array.IndexOf(contract.Columns, contract.ByMember[split.MemberName]);
+
+        return SplitRouting.Resolve(contract.Table, split, schema.GetValue(entity, ordinal));
+    }
+
+    /// <summary>主键合取式，逐列 <c>=</c> 再 <c>AND</c>。<b>键位不过 <c>AuditValue</c></b>：那一列在这条链上是
+    /// 定位条件而不是写出去的列，让钩子改它等于允许订阅方把一批语句挪到别的行上（与 <c>UpdateBulkEngine.Prepare</c>
+    /// 那条"主键列不进取值段"同一道闸门）。两道空键判据也抄那里：null 定位不到任何行，而库里给值的键交来
+    /// CLR 默认形态时同样定位不到——两者都只会安静地报告 0 行。</summary>
+    public static SqlExpression KeyPredicate<T>(EntityContract contract, IEntityTypeSchema<T> schema, T entity, TableRef table, string what) where T : class
+    {
+        SqlExpression? where = null;
+        var storeGivenKey = Array.Exists(contract.PrimaryKey, static key => key.ValueFromStore);
+
+        foreach (var key in contract.PrimaryKey)
+        {
+            var value = schema.GetValue(entity, Array.IndexOf(contract.Columns, key));
+
+            if (value is null)
+                throw new QuickSqlException($"{contract.Table.Name} 的主键列 {key.ColumnName} 是 null：{what}按主键定位，null 键定位不到任何行，" +
+                    "而那一句会安静地报告 0 行。新行请走 orm.Insert。");
+
+            if (storeGivenKey && StatementEmitter.IsUnassignedKey(value))
+                throw new QuickSqlException($"{contract.Table.Name} 的主键列 {key.ColumnName} 由库给值（自增 ∶ 序列），而它交来的是没给值的那个默认形态：" +
+                    $"{what}定位不到那一行。要么把键给实，要么这一趟其实是插一行、走 orm.Insert。");
+
+            var equal = new SqlBinaryExpression(BinaryOperator.Equal, new ColumnExpression(table, key), new ParameterValue(value, key));
+
+            where = where is null ? equal : new SqlBinaryExpression(BinaryOperator.And, where, equal);
+        }
+
+        return where!;
+    }
 }

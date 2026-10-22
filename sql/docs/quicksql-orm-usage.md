@@ -44,18 +44,18 @@
 先立两条与版本口径有关的纪律，它们决定了装包命令怎么写：
 
 - **预发布档不进默认解析**：全家都是 `-beta.N` 系列，`dotnet add package` 必须带 `--prerelease`，或者在 `PackageReference` 里写死版本号——二选一，否则会报"找不到稳定版本"。
-- **每重打一次包升一颗 beta**（`sql/Directory.Build.props` 注释里那条纪律）：同版本号不同内容的两颗包，消费方全局缓存里那颗会压住新打的——还原照样绿，拿到的却是旧二进制。对版本以源上实读为准：截至 2026-10-17，nuget.org 上最新是 `0.39.0-beta.15`，而本仓库 props 已声明 `0.39.0-beta.21`（beta.16–beta.21 那几批只打到本机喂源（`sql/obj/nupkg-local`）就被消费方接走、没上 nuget.org，逐笔的重打与推送同样没做），所以**装包按源上那颗写**，下面 csproj 示例里的三行版本号就是这个口径（等 props 那一颗真的上了源，这一句与那三行要一起翻）。
+- **每重打一次包升一颗 beta**（`sql/Directory.Build.props` 注释里那条纪律）：同版本号不同内容的两颗包，消费方全局缓存里那颗会压住新打的——还原照样绿，拿到的却是旧二进制。对版本以源上实读为准：2026-10-20 把攒了九颗 beta 的那一批一次性发了上去，nuget.org 上现在有 `QuickSql` 那一族全系列 `0.39.0-beta.24`（24 颗，含这一代新建的 `QuickSql.Providers.DuckDb` 与 `QuickSql.Providers.ClickHouse`），props 声明的就是同一颗，下面 csproj 示例那三行也按这一颗写。**两句要留着**：① 中间那几颗号（`beta.16`–`beta.23`）没有补发，源上从 `beta.15` 直接跳到 `beta.24`，包内 `<repository commit>` 钉的是 `3fd3ca2` 那一笔；② 刚推完那十几分钟，`dotnet add package --prerelease`（不带 `--version`）读到的还是上一代 —— 两半原因分开说：源侧注册文档要追八到六十分钟，而本机 `%LOCALAPPDATA%\NuGet\v3-cache` 里那份旧文档会一直端出来。2026-10-20 实测：清掉它（`dotnet nuget locals http-cache --clear`）之后，五颗探针全部直接拿到这一代那颗；等不及就把版本号写死。
 
 主路径的最小 csproj（SQL Server 为例，换库只把 provider 那颗换成目的库、驱动包跟着换）：
 
 ```xml
 <ItemGroup>
   <!-- ① 内核：QuickSqlOrm / DbContext / 查询与写链都在这颗里 -->
-  <PackageReference Include="QuickSql.Core" Version="0.39.0-beta.15" />
+  <PackageReference Include="QuickSql.Core" Version="0.39.0-beta.24" />
   <!-- ② provider：只装你真要连的那家（nuspec 把同版本的 Core 与血统基类包一起带进来） -->
-  <PackageReference Include="QuickSql.Providers.SqlServer" Version="0.39.0-beta.15" />
+  <PackageReference Include="QuickSql.Providers.SqlServer" Version="0.39.0-beta.24" />
   <!-- ③ 源生成器：普通包安装即挂进编译（包内走 analyzers/dotnet/cs，不用再手写 OutputItemType） -->
-  <PackageReference Include="QuickSql.Generators" Version="0.39.0-beta.15" />
+  <PackageReference Include="QuickSql.Generators" Version="0.39.0-beta.24" />
   <!-- ④ 驱动：provider 不带你自己的 ADO.NET 驱动，应用侧显式装（§1.4） -->
   <PackageReference Include="Microsoft.Data.SqlClient" Version="7.1.1" />
 </ItemGroup>
@@ -364,8 +364,10 @@ DuckDb 没有新增预设：它是 PG 血统的第七颗叶子，沿用血统的
 | `Executed` 25 | 观察 | `CommandLogEvent`（含 `ElapsedMilliseconds`、`TableNames`，以及 v0.38 第十一笔添的 `Route`——`DataSourceRoute(Cluster, Role, Reason)`，必填的一格，见 :112。所以"这一句实际走了哪座库、哪个角色、按哪一档"是订阅出来的事实，不用翻库猜，见 §3.7） |
 | `Error` 26 / `SlowQuery` 27 | 观察 | `CommandErrorEvent(Exception, string Sql, long)`、`SlowCommandEvent`；阈值 `SlowQueryThresholdMilliseconds`（默认 500，行 62） |
 | `Materialized` 28 | 观察 | `MaterializedEvent(object Entity, string EntityTypeName, int OrdinalInBatch)` |
+| `EntityWritten` 29 | 观察 | `EntityWrittenEvent(object Entity, string OperationKind)`：**这一轮写出去的实体**逐只点名，操作种类 `insert`/`update`/`delete`。发射点是会话的写阶段（`EntityTracker.WritePhaseAsync`），**在语句建出来之前** —— 于是订阅者既能观察（发领域事件、发实体变更事件），也能**改实体**（那一格改出来的值会被紧接着建出来的语句带出去；取值段读的是实体）。逐只一次 ⇒ 收到的事件与「这一轮改了几行」一一对应。**只覆盖会话那一条路**（链式的 `orm.Insert`/`InsertRange`、`orm.Update(实体)`/`UpdateRange`、`orm.Delete(实体)`/`DeleteRange` 都不走跟踪器）。v0.39.0-beta.28 新增，见 §3.3 |
+| `SoftDeleteValues` 30 | 改写 | `SoftDeleteValuesEvent { Entity, TableName, ExtraValues }`：软删那一档**往上加的 SET 项**（列 + 值）。软删自己只写两格（置位 + 时间），「谁删的」是调用方的领域事实，库里替不了 —— 这一颗让调用方把它加上去，库负责参数化、写出去，并按与那两格同一把尺子验（自增列与并发列不收）。**逐行触发**（有行才触发）：链式 `Delete<T>().Where(...)` 那一档没有行可给，那一档不触发。v0.39.0-beta.28 新增，见 §2.5 |
 | `BulkDegraded` 36 | 观察 | `BulkDegradedEvent(BulkMethod Requested, BulkMethod Method, int RowCount, string Reason)`：只在**真的降级**时派发，见 §3.2 的批量高速层 |
-| `AuditValue` 45 / `ParameterBinding` 46 | 改写 | `AuditValueEvent`（`SetValue`/`WasSet`/`OperationKind`）、`ParameterBindingEvent`（`SetValue`/`ChangeType`）。**前者的发射点只有两条"手上有整行实体"的链**：`orm.Insert`/`InsertRange`（`OperationKind` = `insert`）与 `orm.UpdateRange(实体集)`（= `update`，v0.38 第十六笔）；链式 `orm.Update<T>().Set(...)`、`orm.Delete<T>()` 与 `SaveChanges` 的 update 档都不问它，那两条链的改写槽位是 `ParameterBinding`，判据与两处未接的理由见规格 §10.1 同笔记录 |
+| `AuditValue` 45 / `ParameterBinding` 46 | 改写 | `AuditValueEvent`（`SetValue`/`WasSet`/`OperationKind`）、`ParameterBindingEvent`（`SetValue`/`ChangeType`）。**前者的发射点只有三条"手上有整行实体"的路**：`orm.Insert`/`InsertRange`（`OperationKind` = `insert`）、`orm.UpdateRange(实体集)`（= `update`，v0.38 第十六笔）与 `orm.Update(实体)`（同 = `update`，两扇门问的列与列序逐字相同——筛列的判据、钩子种类、空键那把尺子各只有一份实现）；链式 `orm.Update<T>().Set(...)`、两条删除出口 `orm.Delete<T>()` 与 `orm.Delete(实体)`、以及 `SaveChanges` 的 update 档都不问它，那几条出口的改写槽位仍是 `ParameterBinding`，判据与两处未接的理由见规格 §10.1 同笔记录 |
 | `CudBuilding` 52 | 改写 | `CudBuildingEvent { OperationKind, Sql, Rewritten }` |
 
 改写过的步骤进 `HookTrace(int Step, string HookName, HookCategory Category, string Before, string After)`，在 `Explain()` 与 `SaveChangesReport.HookReplay` 里回放。观察类钩子的异常被 `Observe(...)`（行 73）吞掉并上报，不让日志代码打挂写入。
@@ -402,7 +404,7 @@ orm.Behaviors.SoftDelete<Ticket>(t => t.Deleted, t => t.DeletedAt);             
 orm.Behaviors.SoftDelete<Order>(o => o.Deleted, clock: () => DateTime.UtcNow);  // 要 UTC 就自己给一颗
 ```
 
-签名 `SoftDelete<TEntity>(Expression<Func<TEntity, bool>> deleted, Expression<Func<TEntity, DateTime?>>? at = null, Func<DateTime>? clock = null)`（`src/QuickSql.Core/Behaviors/BehaviorRegistry.cs`），回返 `this` 所以可链式，册子一只 orm 实例一份。注册之后，**三处删除出口**都不再发 `DELETE`：链式 `orm.Delete<T>()`、批量 `orm.DeleteRange(rows)`、以及 `SaveChanges` 里被摘掉的那些行。三家一起接不是因为写了三遍，而是因为「这张表是软删表」是一条按实体成立的事实 —— 只接一家就会留下"同一张表走 A 留住行、走 B 丢行"那个洞。**它与 `orm.Filters` 是两只对象、各管一半**：行为管"`Delete` 落库里是哪一句"，过滤器管"读到的集合里有没有已删的行"；只注册行为，`orm.Delete<Ticket>()` 置了位而没人替读侧筛掉那几行，只注册过滤器，读侧筛得掉而那一格永远不会有人置位。
+签名 `SoftDelete<TEntity>(Expression<Func<TEntity, bool>> deleted, Expression<Func<TEntity, DateTime?>>? at = null, Func<DateTime>? clock = null)`（`src/QuickSql.Core/Behaviors/BehaviorRegistry.cs`），回返 `this` 所以可链式，册子一只 orm 实例一份。注册之后，**四处删除出口**都不再发 `DELETE`：链式 `orm.Delete<T>()`、按实体那一行 `orm.Delete(实体)`、批量 `orm.DeleteRange(rows)`、以及 `SaveChanges` 里被摘掉的那些行。四家一起接不是因为写了四遍，而是因为「这张表是软删表」是一条按实体成立的事实 —— 只接一家就会留下"同一张表走 A 留住行、走 B 丢行"那个洞。**它与 `orm.Filters` 是两只对象、各管一半**：行为管"`Delete` 落库里是哪一句"，过滤器管"读到的集合里有没有已删的行"；只注册行为，`orm.Delete<Ticket>()` 置了位而没人替读侧筛掉那几行，只注册过滤器，读侧筛得掉而那一格永远不会有人置位。
 
 读这一档要知道的六件事：
 
@@ -411,9 +413,23 @@ orm.Behaviors.SoftDelete<Order>(o => o.Deleted, clock: () => DateTime.UtcNow);  
 - **`deleted` 与 `at` 要的是成员的读法**（`t => t.Deleted`），不是谓词也不是表达式：`t => !t.Deleted`、`t => t.A.B`、`t => t.DeletedAt!.Value` 都在注册期拒 —— 这一档回答的是"置位哪一列、时间记在哪一列"这两件事。
 - **失败点分两档**：具体类键在 `SoftDelete(...)` 那一句就把两列各量一遍（缺列、自增列「不接受写」、并发列「只比较不书写」，与 `UPDATE` 链同一把尺子）；**接口与抽象基类键**（`SoftDelete<ISoftDelete>(e => e.Deleted)` 一次注册覆盖所有实现类）注册期量不出来 —— 它没有列契约，只有第一次真贴上某张表时才响，而消息会同时点名"谁的注册"与"哪张表缺这一列"。
 - **同一把键注册两次当场拒**（键就是 `SoftDelete<T>` 的那个 `T`；两张册子对同一张表各说一种写法时，谁赢没有任何依据）。**接口键与具体类键的重叠不在这一格**：那种情况按注册序取第一条匹配得上的（与过滤器的"注册序折叠"同一条纪律）。册子挂在实例上，要换写法就换一只 orm 实例或把两处合成一处。
-- **时钟在构建语句时读，一次构建一颗**：注册期一次都不读（冻在它上面等于后面所有删除记同一个时刻）；链式一条链一颗（所以 `ToSql()` 预览两次不会多读一次，预览的那句就是要发出去的那句），一次 `DeleteRange` 整批一颗（切成几句都是同一时刻），一次 `SaveChanges` 一颗。缺省 `DateTime.Now` —— 本库不替你决定本地还是 UTC。
+- **时钟在构建语句时读，一次构建一颗**：注册期一次都不读（冻在它上面等于后面所有删除记同一个时刻）；链式一条链一颗（所以 `ToSql()` 预览两次不会多读一次，预览的那句就是要发出去的那句），`orm.Delete(实体)` 交回的就是链式那一条，所以同一次调用里预览加执行仍只读一颗、而连着删两只实体是两条链各读一颗（单行的两次删除本来就不是同一时刻），一次 `DeleteRange` 整批一颗（切成几句都是同一时刻），一次 `SaveChanges` 一颗。缺省 `DateTime.Now` —— 本库不替你决定本地还是 UTC。
 
-**这一档没有的三件事，别读成有**：① 软删只写那两列，第三格「谁删的」没有槽位（要连操作人一起置位，目前只能自己 fetch→`Set` 三列→写回，而那条退路不是原子的）；② 分表实体注册软删按构造打在你 `SplitTable(…)` 点名的那一片上（链式那条闸门见 §3.6），但这一格今天没有用例；③ **开了软删也不会让过滤器管到 `SaveChanges` 与批量** —— 那是上一段那句裁决的事。见证：离线 `tests/QuickSql.Tests.Dialects/SoftDeleteTests.cs` 19 颗 + 一份基线 `golden/sqlserver/soft-delete-update.sql`，真库 `tests/QuickSql.Tests.Integration/SoftDeletePathTests.cs` 6 颗（SQL Server 与 MySQL 两家各一场），可跑示例 `samples/QuickSql.Sample/Program.cs` §15 在真 SQLite 上把链式与批量两处出口逐条打印（含"同一条谓词连跑两次各 1 行"、"批量两行同一颗时刻"、"只注册行为时读侧 4 行都看得见、补上过滤器才 1 行而库里仍是 4 行"）。
+**这一档没有的三件事，别读成有**：① 软删只写那两列，第三格「谁删的」**现在有槽位了**（v0.39.0-beta.28 起：`orm.Aop.SoftDeleteValues` 订阅者往上加，见下）；② 分表实体注册软删按构造打在你 `SplitTable(…)` 点名的那一片上（链式那条闸门见 §3.6），但这一格今天没有用例；③ **开了软删也不会让过滤器管到 `SaveChanges` 与批量** —— 那是上一段那句裁决的事。见证：离线 `tests/QuickSql.Tests.Dialects/SoftDeleteTests.cs` 19 颗 + 一份基线 `golden/sqlserver/soft-delete-update.sql`，真库 `tests/QuickSql.Tests.Integration/SoftDeletePathTests.cs` 7 颗（SQL Server 与 MySQL 两家各一场），可跑示例 `samples/QuickSql.Sample/Program.cs` §15 在真 SQLite 上把链式与批量两处出口逐条打印（含"同一条谓词连跑两次各 1 行"、"批量两行同一颗时刻"、"只注册行为时读侧 4 行都看得见、补上过滤器才 1 行而库里仍是 4 行"）。
+
+**「谁删的」那一格（v0.39.0-beta.28 新增）** —— 软删自己只写两格（置位 + 时间），而「谁删的」是**调用方的领域事实**，库里不知道当前用户是谁、也不该知道。订阅者往上加即可，库负责把它参数化、写出去，并按与那两格同一把尺子验（自增列与并发列不收）：
+
+```csharp
+// 订阅者拿到的是表名与那一只实体；列得自己从契约上取
+var titleColumn = orm.Schemas.Contract(typeof(Ticket)).ByMember[nameof(Ticket.Title)];
+
+orm.Aop.SoftDeleteValues = e =>
+    e.ExtraValues.Add(new KeyValuePair<ColumnContract, object?>(titleColumn, "谁删的"));
+
+orm.Behaviors.SoftDelete<Ticket>(t => t.Deleted, t => t.DeletedAt);
+```
+
+**逐行触发**（有行才触发）：链式 `orm.Delete<T>().Where(...)` 那一档没有行可给（它删的是一批行，不是一只），那一档不触发这一颗 —— 那一档要自己写那一格。见证：真库 `tests/QuickSql.Tests.Integration/SoftDeletePathTests.cs` 的 `The_extra_column_a_subscriber_adds_lands_in_the_soft_delete_statement`。
 
 **这三只对象都挂在实例上，所以 DI 里它们只有一个落点：`builder.AfterBuild`**（v0.38 第十八笔）。`AddQuickSqlOrm` 交回的是 Scoped 的 `QuickSqlOrm`，而"当前登录者属于哪一家企业""这一条流要不要打 SQL"恰恰是按请求的事实：注册期那只 builder 手上没有 `IServiceProvider`，实例建好之后宿主又拿不到"还没被用过"的那个时机（谁先解析谁先用，晚一步装的过滤器会漏掉前面那几句）。所以库给的是装配清单，不是让宿主自己盖一层 Scoped 注册去猜内核怎么装配：
 
@@ -490,12 +506,17 @@ if (!result.Success) Log(result.Exception);         // TransactionResult { Succe
   ```csharp
   var added = await orm.InsertRange(orders).ExecuteReturnKeysAsync();   // 回填 Id 后交回同一批实体
   ```
-- **改（按条件 / 整行 / 一句 upsert）** —— 三条链各有分工：`orm.Update<T>().Set(列, 值).Where(条件)` 点名改几列（带 lambda，入口有反射税）；`orm.UpdateRange(实体集)` 按主键整行改（除主键·自增·并发列全部写回，零反射税，可用 `.WithBulk(Merged∶SingleRow∶Upsert)` 选档）；`orm.InsertOrUpdate<T>().SetSource(实体∶集合)` 主键命中就改、不命中就插。
+- **改（按条件 / 按实体那一行 / 整行 / 一句 upsert）** —— 四条链各有分工：`orm.Update<T>().Set(列, 值).Where(条件)` 点名改几列（带 lambda，入口有反射税）；`orm.Update(实体)` 按主键改**这只实体带来值的那些列**（值为 null 的属性不进 `SET`，读作"这一列这次没说"；入口不建 lambda，只有全局过滤器在场时出口仍要翻那几句谓词）；`orm.UpdateRange(实体集)` 按主键整行改（除主键·自增·并发列全部写回，**那一格是 null 就真写 NULL**，零反射税，可用 `.WithBulk(Merged∶SingleRow∶Upsert)` 选档）；`orm.InsertOrUpdate<T>().SetSource(实体∶集合)` 主键命中就改、不命中就插。
   ```csharp
   await orm.Update<Order>().Set(o => o.Note, "只改备注").Where(o => o.Id == 7).ExecuteAffrowsAsync();
+  await orm.Update(order).ExecuteAffrowsAsync();                     // 按主键改这只实体填了值的那几列
   await orm.UpdateRange(orders).WithBatchTransaction().ExecuteBulkAsync();   // 按主键整行改，一批一句
   ```
-- **删（按条件 / 按主键整批 / 软删）** —— `orm.Delete<T>().Where(条件)` 按条件删、`orm.DeleteRange(实体集)` 按主键删整批（一句 `WHERE 键 IN (…)`；复合主键当场拒）。**软删**不是删链的参数而是在 `orm.Behaviors.SoftDelete<T>(置位列, 时间列)` 注册后，上面三条删除出口一起改写成"置位 + 记时间"的 `UPDATE`（与 `orm.Filters` 是两只对象、各管一半，见 §2.5）。
+  `orm.Update(实体)` 与 `orm.UpdateRange(实体集)` 的分工是**两种意图而不是两种写法**：前者不把 null 写进库，
+  所以"清空某一格"只有链式那一条做得到（`.Set(o => o.Note, null)`）；值类型列永远带来值（`int Amount = 0` 不是"没填"），
+  每一趟都进 `SET`。交回的仍是 `IUpdate<T>`，所以后面还能 `.Where(...)` 再钉一句（叠在主键之后、全局过滤器之前）；
+  而实体带着值的那一列再 `.Set` 一次会被"设置了两次"那道守卫拦下——本家答案不是后写的覆盖先写的，是说清哪个值算。
+- **删（按条件 / 按实体那一行 / 按主键整批 / 软删）** —— `orm.Delete<T>().Where(条件)` 按条件删；`orm.Delete(实体)` 按主键删那一行，**复合主键在这一档支持**（逐列 `=` 再 `AND`，与跟踪器摘行同一个形状——`orm.DeleteRange(实体集)` 拒复合键靠的是"一句 `WHERE 键 IN (…)` 装不下元组"，而那一句在单行上根本不成立），分表实体按这只实体自己的分片键换算那一张片；`orm.DeleteRange(实体集)` 按主键删整批。**软删**不是删链的参数而是在 `orm.Behaviors.SoftDelete<T>(置位列, 时间列)` 注册后，上面四条删除出口一起改写成"置位 + 记时间"的 `UPDATE`（与 `orm.Filters` 是两只对象、各管一半，见 §2.5）。
   ```csharp
   await orm.Delete<Order>().Where(o => o.CreatedAt < cutoff).ExecuteAffrowsAsync();
   ```
@@ -632,7 +653,7 @@ var template = await orm.Select<ExamTemplate>()
 - **那一根的查询形状**：`SELECT 目标各列 FROM 目标 WHERE 主键 IN (这一批子实体手里的外键值)` —— 方向与集合那一档相反（集合按父键筛子行，引用按子键捞目标），<b>按键去重</b>（四只明细只有三种键值就只绑三颗参数），而配不到行的那一只<em>留在结果里、导航为 `null`</em>，不会被筛掉
 - **集合边不能打进 `ThenInclude`**：那一格当场响并指名换 `ThenIncludeMany` —— 编译期看不出来（`List<SlotHook>` 是一只完全合法的返回值），放过去的话执行层按主键缝引用，一根集合边只会剩下最后一只
 - **`AsSplitQuery()` 与 `IncludeMany` 现在不要混在同一句里**：两者同时在场时分派按拆分那一支先赢，集合那一家今天会被静默丢掉（规格 §5.7 第四笔那条"没给的三件"里记着）
-- **会话跟踪要知道的那一格**：`IncludeMany` 缝上来的子实体<em>不会自己在会话里建档</em>（今天这是一格已记名的缺口，规格 §8.2），所以"改完子实体再 `SaveChanges`、由会话落库"这条路对链上的子实体不成立 —— 要写这批子行走 `Update`/级联那一档，或在读之前先摸一句 `db.Set<ExamGroup>()` 建上档
+- **会话跟踪要知道的那一格**：`IncludeMany` 缝上来的子实体<em>自己在会话里建档</em>（v0.39.0-beta.27 起：接链那一刻把「按编译期子型建档」的那把委托交给节点，执行期自己建档，不必调用方先摸一句 `db.Set<ExamGroup>()`）。所以"改完子实体再 `SaveChanges`、由会话落库"这条路对链上的子实体<em>成立</em>；从集合里摘掉一只，那一行也会跟着删（裁决③：摘行就是要把那一行删掉）—— 前提是那根集合边是级联的（默认是，`[NoCascade]` 才退出），而摘掉的那一只自己名下的子串也已捞进会话（裁决①：捞不到就拒）
 - **可重跑**：`samples/QuickSql.Sample` 的 §16.7（订单 → 明细 → 明细旁边那根回指订单 → 明细的包裹：一句链端出四条 `SELECT`，而主查询里 `OrderItems` 与 `Parcels` 各出现 0 次；第三层那张表是示例自己的 `Parcels`，它挂在 `OrderItem` 上而打了 `[NoCascade]`，为的是让"往下长一层"演示得了又不回头改 §4 那几段级联读数）
 
 **分组（`GroupBy`/`Having`）走的是另一条类型链，出口只有 `Select`。**

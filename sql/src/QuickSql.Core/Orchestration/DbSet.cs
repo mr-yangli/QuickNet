@@ -127,46 +127,14 @@ public sealed class DbSet<T> : QuickSqlQuery<T>, ITrackedSet<T> where T : class
         }
 
         var targetTable = Engine.Orm.NewTableRef(targetType, 0);
-        var projections = new List<Projection>(targetContract.Columns.Length);
 
-        for (var i = 0; i < targetContract.Columns.Length; i++)
-            projections.Add(new Projection(new ColumnExpression(targetTable, targetContract.Columns[i]), null));
-
-        var inValues = new List<SqlExpression>(fkValues.Count);
-
-        foreach (var fkValue in fkValues)
-            inValues.Add(new ParameterValue(fkValue, null));
-
-        var conditions = new List<SqlExpression>(targetPkColumns.Length);
-
-        for (var i = 0; i < targetPkColumns.Length; i++)
-            conditions.Add(new InExpression(new ColumnExpression(targetTable, targetPkColumns[i]), inValues));
-
-        SqlExpression? where = null;
-
-        foreach (var condition in conditions)
-            where = where is null ? condition : new SqlBinaryExpression(BinaryOperator.And, where, condition);
-
-        var ast = new SelectStatement
-        {
-            Columns = projections,
-            From = new SourceTable(targetTable),
-            Where = where,
-        };
-
-        var dialect = Engine.Orm.Provider.Dialect;
-        var writer = new SqlWriter(
-            new StringBuilder(QueryCompiler.EstimateSqlLength(ast)),
-            new List<AdoParameter>(),
-            dialect.ParameterPrefix);
-        dialect.Emit(in ast, writer);
-        var sql = new DialectSql(writer.ToSqlString(), writer.Parameters);
-
-        var children = await Engine.Orm.Ado.QueryAsync(
-            sql,
+        // IN 的值按参数预算分块发射（QueryEngine.QueryInBatchesAsync）：父端 FK 集超过预算
+        //（SQL Server 2100 / Oracle IN 列表 1000）时是多条子 SELECT，不是整条在驱动侧失败。
+        var children = await Engine.QueryInBatchesAsync(
+            [.. fkValues], targetPkColumns, targetTable, targetContract,
             Materializer.EntityRows<object>(targetRead, targetContract),
+            [],
             new ExecutionTag("load-ref", [targetContract.Table.Name], DataSourceRouting.ClusterOf(targetContract.Table)),
-            null,
             ct).ConfigureAwait(false);
 
         var pkGetters = BuildKeyGetters(targetType, targetPkColumns);
@@ -226,46 +194,19 @@ public sealed class DbSet<T> : QuickSqlQuery<T>, ITrackedSet<T> where T : class
         }
 
         var childTable = Engine.Orm.NewTableRef(childType, 0);
-        var projections = new List<Projection>(childContract.Columns.Length);
 
-        for (var i = 0; i < childContract.Columns.Length; i++)
-            projections.Add(new Projection(new ColumnExpression(childTable, childContract.Columns[i]), null));
+        var fkColumns = new ColumnContract[fkColumnNames.Count];
 
-        var inValues = new List<SqlExpression>(pkValues.Count);
+        for (var i = 0; i < fkColumns.Length; i++)
+            fkColumns[i] = childContract.ByColumn[fkColumnNames[i]];
 
-        foreach (var pkValue in pkValues)
-            inValues.Add(new ParameterValue(pkValue, null));
-
-        var conditions = new List<SqlExpression>(fkColumnNames.Count);
-
-        for (var i = 0; i < fkColumnNames.Count; i++)
-            conditions.Add(new InExpression(new ColumnExpression(childTable, childContract.ByColumn[fkColumnNames[i]]), inValues));
-
-        SqlExpression? where = null;
-
-        foreach (var condition in conditions)
-            where = where is null ? condition : new SqlBinaryExpression(BinaryOperator.And, where, condition);
-
-        var ast = new SelectStatement
-        {
-            Columns = projections,
-            From = new SourceTable(childTable),
-            Where = where,
-        };
-
-        var dialect = Engine.Orm.Provider.Dialect;
-        var writer = new SqlWriter(
-            new StringBuilder(QueryCompiler.EstimateSqlLength(ast)),
-            new List<AdoParameter>(),
-            dialect.ParameterPrefix);
-        dialect.Emit(in ast, writer);
-        var sql = new DialectSql(writer.ToSqlString(), writer.Parameters);
-
-        var children = await Engine.Orm.Ado.QueryAsync(
-            sql,
+        // IN 的值按参数预算分块发射（QueryEngine.QueryInBatchesAsync）：父端 PK 集超过预算
+        //（SQL Server 2100 / Oracle IN 列表 1000）时是多条子 SELECT，不是整条在驱动侧失败。
+        var children = await Engine.QueryInBatchesAsync(
+            [.. pkValues], fkColumns, childTable, childContract,
             Materializer.EntityRows<object>(childRead, childContract),
+            [],
             new ExecutionTag("load-coll", [childContract.Table.Name], DataSourceRouting.ClusterOf(childContract.Table)),
-            null,
             ct).ConfigureAwait(false);
 
         var fkGetters = BuildKeyGettersByColumnName(childType, childContract, fkColumnNames);

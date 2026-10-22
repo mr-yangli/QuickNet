@@ -29,6 +29,19 @@ static class StatementEmitter
     /// <summary>只用于 <see cref="StringBuilder"/> 的预容量（§12.7 E）：每颗参数按 <c>@p123, </c> 估 7 个字符。</summary>
     public static int EstimateLength(int parameters, int identifierChars) => 96 + parameters * 7 + identifierChars;
 
+    /// <summary>"这一颗键等于没给"的判据：数值零、<see cref="Guid.Empty"/> 与空串三种。只在主键由库给值时才问它
+    /// （非自增主键的 0 是一颗合法键，那种现场不拒）。日期与枚举一类的键落不进这三种，一律放行。
+    /// <b>按主键定位的三条路共用这一份</b>（<c>UpdateRange</c> 的逐行键、一句 upsert 的冲突键、<c>orm.Update(entity)</c>
+    /// 的 WHERE）：判据分成三份时，"哪一格算没填"会在某一条路上悄悄和另外两条不一样，而三处拒的都是同一种笔误。</summary>
+    public static bool IsUnassignedKey(object value) => value switch
+    {
+        Guid guid => guid == Guid.Empty,
+        string text => text.Length == 0,
+        sbyte or byte or short or ushort or int or uint or long or ulong or decimal or double or float =>
+            Convert.ToDouble(value) == 0d,
+        _ => false,
+    };
+
     public static SqlWriter Writer(ISqlDialect dialect, int capacity)
         => new(new StringBuilder(capacity), [], dialect.ParameterPrefix);
 

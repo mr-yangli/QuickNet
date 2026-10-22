@@ -439,6 +439,78 @@ public sealed class CascadePathTests
         Assert.Equal(1, Count("[dbo].[QuickSqlStorageRack]", "[Id] = @id", ("@id", rackId)));
     }
 
+    /// <summary>IncludeMany 缝出来的子行<em>自己</em>进会话：调用方不必先摸一句 <c>Set&lt;子型&gt;()</c>。
+    ///
+    /// <para><b>这一格是补上的那一笔</b>：<c>IncludeMany</c> 往会话里登记子型时，子型那一档（跟踪档）此前
+    /// 只有调用方自己先摸一句 <c>Set&lt;ShelfSlot&gt;()</c> 才存在 —— 否则登记那一步撞的是「内核的不变量被破」
+    /// （档位只有泛型那一颗 <c>For&lt;T&gt;()</c> 能建，而编译期子型只在接链那一刻有）。
+    /// 那一格曾是<em>调用方的现场手续</em>，不是「IncludeMany 缝出来的子行理应被跟住」这件事本身；
+    /// 现在接链处把建档委托交给节点，执行期自己建。</para>
+    ///
+    /// <para><b>判据两条</b>：① 缝出来的子行确实在会话里（<c>Local</c> 看得见它们，且是同一只实例）；
+    /// ② 摘掉一只 → <c>SaveChanges</c> 之后那只真的出库，而另一只与父都还在。
+    /// 读回用<em>另一只会话</em>走 ORM 的读，不写裁判 SQL —— 于是这一条与目标库无关，各家都跑。</para>
+    ///
+    /// <para><b>为什么用托盘/明细而不用架/位、也不用板/卡片</b>：位那一档自己还挂着一串钩，而钩是<em>集合</em>导航 ——
+    /// 摘掉位要连带钩一起走，钩没捞进会话时那一档按裁决①当场拒（会话看不见子行就不能替它判「没有要删的」）；
+    /// 卡片那一档的导航上打了 <c>[NoCascade]</c>，级联本就不带它（卡片压根没进库）。
+    /// 明细那一档只有一根<em>引用</em>导航（物资），引用边不参与级联删除，
+    /// 于是这一条只判_include_many 缝出来的那一格</em>。</para>
+    [Fact]
+    public async Task An_include_many_child_is_tracked_without_the_caller_touching_the_child_set()
+    {
+        Database.Ready();
+
+        EnsureTable(typeof(Pallet));
+        EnsureTable(typeof(PalletLine));
+
+        var db = Session();
+        var pallet = new Pallet
+        {
+            Id = 0,
+            Label = slate("托"),
+            Lines =
+            [
+                new PalletLine { Name = slate("线甲"), MaterialId = 0 },
+                new PalletLine { Name = slate("线乙"), MaterialId = 0 },
+            ],
+        };
+
+        db.Add(pallet);
+
+        await db.SaveChangesAsync(ct);
+
+        var palletId = pallet.Id;
+        var lineA = slate("线甲");
+        var lineB = slate("线乙");
+
+        var again = Session();
+
+        // 这一句就是全部：IncludeMany 缝出来的子行自己进会话，调用方不碰子型那一档。
+        var loaded = Assert.Single(await again.Set<Pallet>()
+            .IncludeMany(p => p.Lines!)
+            .Where(p => p.Id == palletId)
+            .ToListAsync(ct));
+
+        var pulled = loaded.Lines!.Single(l => l.Name == lineA);
+
+        // ① 缝上来的子行在会话里，而且是缝上去的那一只（不是另物化一只）。
+        Assert.Same(pulled, Assert.Single(again.Set<PalletLine>().Local, l => l.Name == lineA));
+
+        loaded.Lines!.Remove(pulled);
+
+        var report = await again.SaveChangesAsync(ct);
+
+        Assert.Contains("QuickSqlPalletLine", Written(report));
+
+        // ② 摘掉的那一只出库了，另一只与父都还在（读回走另一只会话，不写裁判 SQL）。
+        var check = Session();
+
+        Assert.Empty(await check.Set<PalletLine>().Where(l => l.Name == lineA).ToListAsync(ct));
+        Assert.Single(await check.Set<PalletLine>().Where(l => l.Name == lineB).ToListAsync(ct));
+        Assert.Single(await check.Set<Pallet>().Where(p => p.Id == palletId).ToListAsync(ct));
+    }
+
     /// <summary>链式集合加载（<c>IncludeMany(…).ThenIncludeMany(…)</c>，§5.7）判在真库上：架→位一层、位→钩二层，
     /// 一条链三张表。
     ///

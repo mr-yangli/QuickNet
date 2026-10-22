@@ -497,9 +497,11 @@ sealed class ChangeTracker(QuickSqlOrm orm) : DbChangeTracker
     /// <summary>补载路径的身份映射问句（§8.2「同一上下文内重复读取返回同一只」）：这一行在会话里已经是哪一只。
     ///
     /// <para><b>它与 <see cref="TrackAll"/> 的分别是职权，不只是一个方法的差别</b>：TrackAll 顺带登记，
-    /// 而登记一个从没建过档的子型会撞 <see cref="Tracker"/> 那句"不变量被破"（<c>IncludeMany</c> 的档案还欠着，
-    /// 已单独报出）。补载这一步只该问"会话里有没有这一行"，有就把那一只递回去 —— <b>没有档就是没在跟，
-    /// 原样递回去才是这句话的真话</b>，既不新建档也不响亮地拒（那是 §12.2 的另一档事）。</para>
+    /// 而登记一个从没建过档的子型会撞 <see cref="Tracker"/> 那句"不变量被破"—— 那一格由接链处补上了
+    /// （<c>IncludeMany</c> 把「按编译期子型建档」的那把委托交给节点，见
+    /// <see cref="QuickSql.Query.Model.IncludeManyNode.ChildTrackerFactory"/>），
+    /// 于是走到 <see cref="TrackAll"/> 时子型那一档已经在场。补载这一步只该问"会话里有没有这一行"，
+    /// 有就把那一只递回去 —— <b>没有档就是没在跟，原样递回去才是这句话的真话</b>，既不新建档也不响亮地拒（那是 §12.2 的另一档事）。</para>
     ///
     /// <para>参数同 <see cref="TrackEntity"/> 是<em>静态</em>类型：按 <c>GetType()</c> 问会把派生实例问到
     /// 另一颗从没建过的键上，从而把同键两只实例留在会话里 —— 那正是本句要挡住的事故。</para></summary>

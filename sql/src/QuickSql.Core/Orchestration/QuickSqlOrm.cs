@@ -356,6 +356,77 @@ public sealed class QuickSqlOrm
     [RequiresDynamicCode("不可约子表达式的退路是编译表达式树。")]
     public IDelete<T> Delete<T>() where T : class => new DeleteEngine<T>(this);
 
+    /// <summary>按实体定位的单行 UPDATE（<c>orm.Update(order).ExecuteAffrowsAsync()</c>）：
+    /// <b>列清单来自这只实体，<c>WHERE</c> 来自它的主键</b>，于是这句话读作"把这只实体写回它那一行"。
+    /// <para><b>它写的是带来值的那些列</b>：除主键、库里给值的列与并发列以外，<em>值为 null 的属性不进 <c>SET</c></em>。
+    /// 这一条与 <see cref="UpdateRange{T}"/> 的「整行交出去，那一格说的是 NULL 就是 NULL」<em>正对面</em>，
+    /// 是同一批实体的两种意图而不是可以互换的两种写法——要把某一格真写成 NULL，只有链式那一条做得到
+    /// （<c>orm.Update&lt;T&gt;().Set(o =&gt; o.列, null)</c>），因为在这一档里 null 说的是"这一列我没说"。
+    /// 值类型列永远带来值（<c>int Amount = 0</c> 不是"没填"），所以它每趟都进 <c>SET</c>。</para>
+    /// <para>取的是 <see cref="QuickSqlAop.AuditValue"/> 之后的值、种类是 <c>"update"</c>，与批量链同一趟钩子：
+    /// 订阅"补修改时间"的人不该因为调用方选了哪扇门而少填一格。逐列的契约尺子（§10.6 长度与必填）也照链式那份过。
+    /// 主键为空、或主键由库给值而交来的是没给的形态，<b>当场拒</b>——那两句都只会安静地报告 0 行。
+    /// 分表实体按它<em>自己的分片键</em>换算那一张片（与插入同一颗 <c>SplitRouting.Resolve</c>），
+    /// 全局过滤器与软删那两道闸门在这条路上与链式同一条。</para>
+    /// <para><b>交回的仍是 <see cref="IUpdate{T}"/></b>，所以可以再叠 <c>.Where(...)</c>（条件排在主键之后、
+    /// 过滤器最后）。<c>.Set(...)</c> 只补得动<em>实体没带的就是 null 的那些列</em>：实体带着值的那一列再点一次
+    /// 会被链式那道"设置了两次"守卫拦下，本家答案不是让后写的覆盖先写的，而是让调用方说清哪个值算。
+    /// 因此"整只实体写回 + 某一列在库里算"这种混合现场在这一档<em>不成立</em>，那是链式的形状（§14 记一笔）。</para></summary>
+    /// <remarks><b>取值段跑在这一颗入口的调用时刻，不跑在出口</b>：这只实体的列值与钩子改写在那一刻定格，
+    /// 之后改实体不会再改出一份文本——与 <see cref="InsertRange{T}"/> 那句"立刻物化，看到的那份与发出去的那份
+    /// 必须是同一份"是同一条纪律，只是这里的"一段"短到一只实体。
+    /// <para><b>这一颗正是 <see cref="InsertRange{T}"/> 抬头记过的那个重载形状</b>：把整批实体递进来会命中它，
+    /// 而 <c>T</c> 被推成 <c>List&lt;Order&gt;</c>、去建一张根本没映射的表的契约。下面那颗 <c>RefuseCollection</c>
+    /// 把它拦在运行期并指路——本家没有能看调用点的分析器，编译期就红这件事欠着（§14）。
+    /// 成本那一格要说准：入口一次 lambda 都不建（列来自契约、值来自编译好的读写委托，与
+    /// <see cref="InsertRange{T}"/> 同档），但交回的那条链<em>在有全局过滤器在册时</em>出口仍要翻那几句谓词，
+    /// 所以 <c>RequiresUnreferencedCode</c> 与 <c>RequiresDynamicCode</c> 照链式挂着，不因"这一格不写条件"而摘掉。</para></remarks>
+    [RequiresUnreferencedCode("全局过滤器的叠加走闭包常量求值。")]
+    [RequiresDynamicCode("与 RequiresUnreferencedCode 同一条：谓词翻译的退路是编译表达式树。")]
+    public IUpdate<T> Update<T>(T entity) where T : class
+    {
+        ArgumentNullException.ThrowIfNull(entity);
+        RefuseCollection(entity, nameof(Update));
+
+        return UpdateEngine<T>.FromEntity(this, entity);
+    }
+
+    /// <summary>按实体定位的单行 DELETE（<c>orm.Delete(order).ExecuteAffrowsAsync()</c>）：
+    /// <b>这一格只借主键，不借值</b>——实体上其余列一列都不读，所以"哪几列是 null"在这条路上没有含义。
+    /// 发出去的是 <c>DELETE</c> 还是置位的 <c>UPDATE</c>，与 <see cref="Delete{T}"/> 同一条规则：
+    /// <see cref="Behaviors"/> 上在册的软删改写接管，<see cref="Filters"/> 叠进 <c>WHERE</c>，
+    /// <c>Explain().Reason</c> 按最终发出去的那一句自陈。
+    /// <b>复合主键在这里支持</b>（逐列 <c>=</c> 再 <c>AND</c>）：<see cref="DeleteRange{T}"/> 拒它靠的是
+    /// "IN 清单装不下元组"，那一句在单行上根本不成立。分表实体同样按自己的分片键换算那一片。</summary>
+    [RequiresUnreferencedCode("全局过滤器的叠加走闭包常量求值。")]
+    [RequiresDynamicCode("与 RequiresUnreferencedCode 同一条：谓词翻译的退路是编译表达式树。")]
+    public IDelete<T> Delete<T>(T entity) where T : class
+    {
+        ArgumentNullException.ThrowIfNull(entity);
+        RefuseCollection(entity, nameof(Delete));
+
+        return DeleteEngine<T>.FromEntity(this, entity);
+    }
+
+    /// <summary>「把一批实体递给了一只实体的门」那道拦截。<b>判据是<em>实例</em>的形状而不是 <c>typeof(T)</c> 的接口表</b>：
+    /// 后者要 <c>Type.GetInterface</c>，那一条会在裁剪产物上要求把 <c>DynamicallyAccessedMembers</c> 一路标到公开方法的
+    /// 泛型参数上——为一道守卫把注解摊进公共 API 是不值的。
+    /// <c>orm.Update(orders)</c> 会把 <c>T</c> 推成 <c>List&lt;Order&gt;</c>，那一档撞上的是一张根本没映射的表，
+    /// 而报错点离写它的人隔着一整条契约解析。
+    /// <b>能走到这一格的必然是引用类型的序列</b>（<c>IEnumerable&lt;out T&gt;</c> 的协方差只在引用类型之间成立），
+    /// 所以 <c>string</c>、<c>byte[]</c> 与值类型元素的集合天然落不进来；真把 <c>IEnumerable&lt;…&gt;</c>
+    /// 实现成自身形状的聚合根确实会被拦——那一档本家的答案是<em>响</em>，因为它宁可让调用方改走链式，
+    /// 也不肯安静地按一张不存在的表建契约。</summary>
+    static void RefuseCollection(object entity, string entrance)
+    {
+        if (entity is not IEnumerable<object>)
+            return;
+
+        throw new QuickSqlException($"{entrance} 收的是一只实体，而 {entity.GetType().Name} 是一批可以枚举的对象：" +
+            $"把它当实体会去建一张不存在的表的契约。整批按主键写走 {entrance}Range(rows)，" +
+            $"按条件写走 {entrance.ToLowerInvariant()}<实体>().Where(...)。");
+    }
+
     /// <summary>批量整行更新（§12.1 写侧扩展）：每行把除主键、库里给值的列与并发列以外的全部列写进
     /// <c>SET</c>，主键进 <c>WHERE</c>；Merged 档把多条 UPDATE 并成一条命令文本一次递交，只有声明了
     /// <see cref="Providers.IBulkStrategy.SupportsMergedStatements"/> 的家可达，其余家 Auto 落逐条。

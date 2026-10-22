@@ -119,8 +119,11 @@ public class QuickSqlQuery<T> : IQuery<T>, IEngineCarrier
     // ── P1：接口里有、实现还没有，所以直接抛，不给"看起来能用"的假象 ──────────
 
     public IIncludableCollectionQuery<T, TDetail> IncludeMany<TDetail>(Expression<Func<T, IEnumerable<TDetail>>> navigation)
+        where TDetail : class
     {
-        var node = Engine.IncludeMany(navigation);
+        // 子型那一档的建档委托在这一句给：编译期子型只在这里有，而档位只有泛型那一颗 For<T>() 能建。
+        // 有了它，IncludeMany 缝出来的子行自己就进会话，不再要调用方先摸一句 Set<子型>()。
+        var node = Engine.IncludeMany<TDetail>(navigation, static tracker => tracker.For<TDetail>());
         return new QuickSqlIncludableManyQuery<T, TDetail>(Engine.AddIncludeMany(node), node);
     }
 

@@ -20,7 +20,7 @@
 | --- | --- | --- |
 | TFM | `net10.0`；`LangVersion preview`、`Nullable enable`、`ImplicitUsings enable` | `pdf/Directory.Build.props` |
 | XML 文档 | `GenerateDocumentationFile` | `QuickPdf.csproj` |
-| NuGet 包 | 有：`QuickPdf` —— **安装主路径就靠它**（见下方 §1.1）。源上（nuget.org）截至 2026-10-15 最新是 `0.1.0-beta.4`，与本仓库 props 声明的那颗逐字相同（版本串在此，作者/许可在仓库根 props；CPM 那份仍只钉测试四件套） | `pdf/Directory.Build.props` + 根 `Directory.Build.props` |
+| NuGet 包 | 有：`QuickPdf` —— **安装主路径就靠它**（见下方 §1.1）。源上（nuget.org）截至 2026-10-20 最新是 `0.1.0-beta.5`，与本仓库 props 声明的那颗逐字相同（版本串在此，作者/许可在仓库根 props；CPM 那份仍只钉测试四件套） | `pdf/Directory.Build.props` + 根 `Directory.Build.props` |
 | 引用 | 无：`ProjectReference` / `PackageReference` 均无（纯 BCL） | `QuickPdf.csproj` |
 
 ### 1.1 应用侧怎么装：NuGet 主路径
@@ -29,7 +29,7 @@
 
 ```xml
 <ItemGroup>
-  <PackageReference Include="QuickPdf" Version="0.1.0-beta.4" />
+  <PackageReference Include="QuickPdf" Version="0.1.0-beta.5" />
 </ItemGroup>
 ```
 
@@ -39,7 +39,7 @@
 dotnet add package QuickPdf --prerelease
 ```
 
-版本口径以源上实读为准：截至 2026-10-15，nuget.org 上最新是 `0.1.0-beta.4`，本仓库 props 声明的就是这一颗——**装包请填源上已有的那颗**，写一颗还没发布的版本还原会失败。
+版本口径以源上实读为准：2026-10-20 实发 `0.1.0-beta.5`，本仓库 props 声明的就是这一颗——**装包请填源上已有的那颗**，写一颗还没发布的版本还原会失败；刚推完那阵注册索引可能还认旧号，而本机那份 NuGet 缓存会把旧号一直端出来（`dotnet nuget locals http-cache --clear` 清掉就直接拿到这一代那颗），装不上就把版本号写死。
 
 > **辅助路径（只有仓库内开发、贡献者、`tests`∶`samples` 才走）：源码 `ProjectReference`。** `<ProjectReference Include="..\..\pdf\src\QuickPdf\QuickPdf.csproj" />`。普通消费者请用上面的 NuGet 主路径。
 

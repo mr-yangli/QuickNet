@@ -103,11 +103,12 @@ public sealed class DerivedTableTests
     [Fact]
     public void The_two_new_exits_of_the_count_family_reach_the_driver_on_the_same_throat()
     {
-        // <c>AnyAsync</c>/<c>LongCountAsync</c> 在引擎里早就有（AggregateAsync 的 countLike 那一档），
-        // 缺的一直只是 <c>IQuery</c> 上那两颗口。接上之后走的是同一条咽喉，所以这两颗钉的是
-        // "新口没有另起一条路"：规划与编译全过，停在第 5 层没有驱动。
-        // <b>文本判据在这里落不了</b>：它们是出口不是链，<c>ToSql()</c> 拿不到"执行期那一条句子"，
-        // 所以"发出去的是 COUNT(*)"那一句由集成册在真库上判（ReadPathTests）。
+        // <c>AnyAsync</c>/<c>LongCountAsync</c> 在引擎里早就有，缺的一直只是 <c>IQuery</c> 上那两颗口。
+        // 接上之后走的是同一条咽喉，所以这两颗钉的是"新口没有另起一条路"：规划与编译全过，停在第 5 层没有驱动。
+        // <b>文本判据在这里落不了</b>：它们是出口不是链，<c>ToSql()</c> 拿不到"执行期那一条句子"。
+        // <c>Any</c> 发出去的形状（「<c>SELECT 1 … 取第一行</c>」的存在性探针，不再是 <c>COUNT(*)</c>）由
+        // <c>AnyProbeTests</c> 离线钉文本、由集成册 <c>ReadPathTests</c> 在真库上钉行为。
+        // <c>LongCount</c> 仍是 <c>COUNT(*)</c>（它要的就是总数），同样由集成册在真库上判。
         var any = Checks.Raised<DriverNotAvailableException>(
             () => Grouped(orm()).AnyAsync(TestContext.Current.CancellationToken).GetAwaiter().GetResult());
 

@@ -26,6 +26,33 @@ public sealed class QuickSqlAop
     public Action<CommandErrorEvent>? Error;
     public Action<SlowCommandEvent>? SlowQuery;
     public Action<MaterializedEvent>? Materialized;
+    /// <summary>观察类：<b>这一轮有哪些实体被写出去</b>（§10.1 观察类那一族里最新的一格）。
+    ///
+    /// <para><b>发射点是会话的写阶段</b>（<c>EntityTracker.WritePhaseAsync</c>）：三档（增/改/删）各一次、
+    /// <b>逐只实体</b>派发，<b>且在语句建出来之前</b>。于是订阅者有两件事可做：
+    /// ① 观察（发领域事件、发实体变更事件、记审计流水）；② <b>改实体</b>——
+    /// 那一格改出来的值会被紧接着建出来的语句带出去（取值段在建语句之前，而取值段读的是实体）。
+    /// 这条「改完就写出去」是它与 <see cref="AuditValue"/> 的分工：<c>AuditValue</c> 逐格改值，
+    /// 这一位逐只改实体。</para>
+    ///
+    /// <para><b>零成本规则照旧</b>：未订阅时不构造事件对象。</para>
+    /// <para><b>只覆盖会话那一条路</b>：链式的 <c>orm.Insert</c> / <c>orm.UpdateRange</c> / <c>orm.DeleteRange</c>
+    /// 不走跟踪器，那三条路上没有这一格（它们各有自己的值钩子 <see cref="AuditValue"/> 与整句钩子
+    /// <see cref="CudBuilding"/>）。</para></summary>
+    public Action<EntityWrittenEvent>? EntityWritten;
+    /// <summary>改写类：<b>软删那一档往上加的 SET 项</b>（列 + 值）。
+    ///
+    /// <para><b>为什么要有它</b>：软删（<c>orm.Behaviors.SoftDelete</c>）自己只写两格 —— 置位那一格与时间那一格。
+    /// 而「谁删的」那一格（操作人、删除原因）是<b>调用方的领域事实</b>，库里替不了：
+    /// 库不知道当前用户是谁、也不该知道。这一颗让调用方把那一格往上加，库负责把它参数化、写出去、
+    /// 并按与那两格同一把尺子验（自增列与并发列不收）。</para>
+    ///
+    /// <para><b>逐行触发</b>：有行才触发（<see cref="EntityWrittenEvent.Entity"/> 那一格就是这一行）。
+    /// 链式 <c>orm.Delete&lt;T&gt;().Where(...)</c> 那一档没有行可给（它删的是一批行，不是一只），
+    /// 那一档不触发这一颗 —— 那一档要自己写那一格。</para>
+    ///
+    /// <para><b>零成本规则照旧</b>：未订阅时不构造事件对象，SET 清单与原来逐字节同形。</para></summary>
+    public Action<SoftDeleteValuesEvent>? SoftDeleteValues;
 
     /// <summary>批量降级的那一位（§12.2 的 <c>DegradeAndLog</c>）。<b>它存在的理由是一格缺口</b>：
     /// 那一节原稿要求"每一次降级在三处留痕（<c>LogLevel.Warning</c> + OTel 标签 + <c>BulkReport</c>）"，
@@ -61,7 +88,7 @@ public sealed class QuickSqlAop
 
     public long SlowQueryThresholdMilliseconds { get; set; } = 500;
 
-    public bool HasObservers => Executing is not null || Executed is not null || Error is not null || SlowQuery is not null || Materialized is not null;
+    public bool HasObservers => Executing is not null || Executed is not null || Error is not null || SlowQuery is not null || Materialized is not null || EntityWritten is not null;
 
     public bool HasValueRewriters => AuditValue is not null || ParameterBinding is not null;
 
@@ -119,6 +146,37 @@ public sealed record CommandErrorEvent(Exception Exception, string Sql, long Ela
 public sealed record SlowCommandEvent(Sql.DialectSql Sql, long ElapsedMilliseconds, long ThresholdMilliseconds);
 
 public sealed record MaterializedEvent(object Entity, string EntityTypeName, int OrdinalInBatch);
+
+/// <summary>会话那一轮写出去的实体（<see cref="QuickSqlAop.EntityWritten"/>）。
+///
+/// <para><b>逐只一次</b>：一只实体在这一轮里只被写一次，所以订阅者收到的事件与「这一轮改了几行」一一对应。
+/// <see cref="OperationKind"/> 是 <c>insert</c> / <c>update</c> / <c>delete</c>，与 <c>ExecutionTag</c>
+/// 与 <see cref="CudBuildingEvent.OperationKind"/> 同一个词。</para>
+/// <para><b>它在语句建出来之前发</b>：订阅者改得动实体，而那一格改出来的值会被紧接着建出来的语句带出去。</para></summary>
+public sealed record EntityWrittenEvent(object Entity, string OperationKind);
+
+/// <summary>软删那一档往上加的 SET 项（<see cref="QuickSqlAop.SoftDeleteValues"/>）。
+///
+/// <para>订阅者往 <see cref="ExtraValues"/> 里加（列, 值）对，库把它们参数化并写进那句 UPDATE 的 SET。
+/// 值的形状与 <see cref="AuditValueEvent.SetValue"/> 那一格同形（CLR 值，库负责绑定）。</para>
+/// <para><b>列要过与那两格同一把尺子</b>：自增列与并发列不收（前者不接受写，后者只比较不书写）。</para></summary>
+public sealed class SoftDeleteValuesEvent
+{
+    internal SoftDeleteValuesEvent(object entity, string tableName)
+    {
+        Entity = entity;
+        TableName = tableName;
+    }
+
+    /// <summary>被删的那一只。</summary>
+    public object Entity { get; }
+
+    /// <summary>那张表的表名。</summary>
+    public string TableName { get; }
+
+    /// <summary>订阅者往上加的 SET 项（列 + 值）。</summary>
+    public IList<KeyValuePair<ColumnContract, object?>> ExtraValues { get; } = [];
+}
 
 /// <summary>批量降级事件（<see cref="QuickSqlAop.BulkDegraded"/>）。<b>只在真的降级时派发</b>：
 /// 请求 <c>Auto</c> 而拿到的就是阶梯上第一档不算降级，请求了装载通道而那一家根本没有通道才算。

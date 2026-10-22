@@ -522,7 +522,7 @@ sealed class UpdateBulkEngine<T> : IUpdateBulk<T> where T : class
                         if (value is null)
                             throw new QuickSqlException($"第 {first + row} 行的主键列 {columns[column].ColumnName} 是 null：UpdateRange 按主键定位，null 键定位不到任何行。新行请用 InsertRange。");
 
-                        if (storeGivenKey && IsUnassignedKey(value!))
+                        if (storeGivenKey && StatementEmitter.IsUnassignedKey(value!))
                             throw new QuickSqlException(
                                 $"第 {first + row} 行的主键列 {columns[column].ColumnName} 由库给值（自增 ∶ 序列），而它交来的是没给值的那个默认形态：" +
                                 $"一句 upsert 的冲突判定出不来，写进去的会是一个新行而不是改了那一行。要么把键给实，要么这种现场走 SaveChanges 或 orm.InsertRange。");
@@ -588,17 +588,6 @@ sealed class UpdateBulkEngine<T> : IUpdateBulk<T> where T : class
 
         return writer.ToSqlString();
     }
-
-    /// <summary>"这一颗键等于没给"的判据：数值零、<see cref="Guid.Empty"/> 与空串三种。只在主键由库给值时才问它
-    /// （非自增主键的 0 是一颗合法键，那种现场不拒）。日期与枚举一类的键落不进这三种，一律放行。</summary>
-    static bool IsUnassignedKey(object value) => value switch
-    {
-        Guid guid => guid == Guid.Empty,
-        string text => text.Length == 0,
-        sbyte or byte or short or ushort or int or uint or long or ulong or decimal or double or float =>
-            Convert.ToDouble(value) == 0d,
-        _ => false,
-    };
 
     /// <summary>全局过滤器在场时一句 upsert 不可达：<c>INSERT … 冲突子句</c> 里没有 WHERE 可以叠过滤器，
     /// 而冲突那一支改的是"键相同的那一行"——租户、软删那一道闸门在这句文本上无处安放。

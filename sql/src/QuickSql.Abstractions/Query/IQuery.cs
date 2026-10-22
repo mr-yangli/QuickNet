@@ -155,8 +155,11 @@ public interface IQuery<T> : IAsyncEnumerable<T>
     /// 下一层的父端就是上一层刚缝出来的那一批）。外键发现按<em>约定</em>三档：子实体上指向父类型的引用导航、
     /// 集合边上点名的 <c>[ForeignKey]</c>、列名 <c>{父类型名}Id</c>。
     /// <b>子行的序</b>接链上的 <c>OrderByMany(d =&gt; d.Order)</c> 那颗扩展口（排在 <c>ThenIncludeMany</c>
-    /// 之前就是给前一层点序）：发射在这一层子 SELECT 的 <c>ORDER BY</c> 上，主查询与不发序时逐字节同形。</summary>
-    IIncludableCollectionQuery<T, TDetail> IncludeMany<TDetail>(Expression<Func<T, IEnumerable<TDetail>>> navigation);
+    /// 之前就是给前一层点序）：发射在这一层子 SELECT 的 <c>ORDER BY</c> 上，主查询与不发序时逐字节同形。
+    /// <para><b><typeparamref name="TDetail"/> 要 class</b>：它就是子实体，而子实体那一档的跟踪档由泛型那一颗
+    /// <c>For&lt;T&gt;()</c> 建（要编译期的 <c>T</c>）—— 集合导航的元素型永远是实体，故这一格收紧到引用型。</para></summary>
+    IIncludableCollectionQuery<T, TDetail> IncludeMany<TDetail>(Expression<Func<T, IEnumerable<TDetail>>> navigation)
+        where TDetail : class;
 
     /// <summary>显式别名，取代按形参名找表（§5.1）。</summary>
     IQuery<T> As(string alias);

@@ -138,7 +138,12 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
         UnaryExpression { NodeType: ExpressionType.Convert or ExpressionType.ConvertChecked } u => Coerce(Evaluate(u.Operand), u.Type),
 
         // default(T)、用户算术、方法调用等一律交给编译退路：形态再多也不必在此枚举一遍。
-        _ => Expression.Lambda(node).Compile().DynamicInvoke(),
+        // 编译成 Func<object> 直接调用，不走 DynamicInvoke：后者每次调用多一层运行期参数封送与装箱，
+        // 而这颗退路在谓词翻译里按"每颗不可约子表达式"付 —— 同一次编译的产物，调用形状没有理由更贵。
+        // void 子表达式（原 DynamicInvoke 对它是 null）在 Convert 处编不出来，单独按 null 交回，语义逐字保留。
+        _ => node.Type == typeof(void)
+            ? null
+            : Expression.Lambda<Func<object>>(Expression.Convert(node, typeof(object))).Compile()(),
     };
 
     static object? Coerce(object? value, Type target)

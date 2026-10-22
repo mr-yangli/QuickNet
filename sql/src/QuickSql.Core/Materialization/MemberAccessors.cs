@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics.CodeAnalysis;
 using System.Linq.Expressions;
 using System.Reflection;
@@ -22,11 +23,39 @@ namespace QuickSql.Materialization;
 [RequiresDynamicCode("把成员读写与集合追加编译成委托。")]
 public static class MemberAccessors
 {
+    // ── 编译产物的进程级缓存 ─────────────────────────────────────────────
+    // 三张表的键都只有委托体真正依赖的那几项（声明类型、成员名、元素型），<b>不含调用方递进来的报错文本</b>：
+    // 文本只在"成员找不到/写口不可绑"那一次抛里用到，而那一抛发生在进缓存之前 —— 失败不落缓存，
+    // 成功落的那一份与哪个调用点先来无关。形状与 Materializer.DtoReaders 同一条纪律（§12.7 C 第一条），
+    // 修的也是同一件事的执行期那一半：Include / IncludeMany / 拆分加载 / DbSet.Load 四条路都在<b>每次执行</b>
+    // 调这里，没有缓存时每次执行各付一轮反射定位 + Expression.Compile（数十 µs 起）——
+    // 「加载可以反射、调用不行」里那些调用点根本不是启动期。契约构建那一次（ContractResolver）
+    // 从此与执行期共用同一份产物，编译只发生一次。
+
+    static readonly ConcurrentDictionary<(Type DeclaringType, string MemberName), Func<object, object>> Getters = new();
+
+    static readonly ConcurrentDictionary<(Type DeclaringType, string MemberName), Action<object, object?>> Setters = new();
+
+    static readonly ConcurrentDictionary<(Type DeclaringType, string MemberName, Type ElementType), CollectionBindings> Collections = new();
+
     /// <summary>读一颗公共实例属性的值，返回装箱后的 <c>object</c>（当字典键用）。
     /// 属性挂在基类上时委托里转的是那个基类而不是派生型 —— 与「按名字找成员」的原写法同形。</summary>
     /// <param name="missingMessage">属性不存在时的报错文本。</param>
     /// <param name="noGetterMessage">属性存在但没有公共读口时的报错文本。</param>
     public static Func<object, object> Getter(Type declaringType, string memberName, string missingMessage, string? noGetterMessage = null)
+    {
+        var key = (DeclaringType: declaringType, MemberName: memberName);
+
+        // 命中路径先 TryGetValue：值类型键不装箱、不分配，连 GetOrAdd 那颗工厂元组都不造。
+        if (Getters.TryGetValue(key, out var hit))
+            return hit;
+
+        return Getters.GetOrAdd(key,
+            static (k, messages) => GetterCore(k.DeclaringType, k.MemberName, messages.missingMessage, messages.noGetterMessage),
+            (missingMessage, noGetterMessage));
+    }
+
+    static Func<object, object> GetterCore(Type declaringType, string memberName, string missingMessage, string? noGetterMessage)
     {
         var read = (declaringType.GetProperty(memberName)
                     ?? throw new QuickSqlException(missingMessage)).GetGetMethod()
@@ -49,6 +78,18 @@ public static class MemberAccessors
     /// <param name="missingMessage">属性不存在时的报错文本。</param>
     /// <param name="noSetterMessage">属性存在但没有公共写口时的报错文本。</param>
     public static Action<object, object?> Setter(Type declaringType, string memberName, string missingMessage, string? noSetterMessage = null)
+    {
+        var key = (DeclaringType: declaringType, MemberName: memberName);
+
+        if (Setters.TryGetValue(key, out var hit))
+            return hit;
+
+        return Setters.GetOrAdd(key,
+            static (k, messages) => SetterCore(k.DeclaringType, k.MemberName, messages.missingMessage, messages.noSetterMessage),
+            (missingMessage, noSetterMessage));
+    }
+
+    static Action<object, object?> SetterCore(Type declaringType, string memberName, string missingMessage, string? noSetterMessage)
     {
         var property = declaringType.GetProperty(memberName) ?? throw new QuickSqlException(missingMessage);
         var write = property.GetSetMethod() ?? throw new QuickSqlException(noSetterMessage ?? missingMessage);
@@ -107,6 +148,16 @@ public static class MemberAccessors
     /// 两样都没有（没有公共写口、属性类型又收不了追加）⇒ 当场抛，文案说清缺的到底是哪一样形状。
     /// <b>公共写口那一臂一字不易</b>：已经能工作的实体不为这一改换任何东西 —— 逐算子的分配基线也钉在那一臂上。</para>
     public static CollectionBindings BindCollection(Type declaringType, string memberName, Type elementType, string missingMessage)
+    {
+        var key = (DeclaringType: declaringType, MemberName: memberName, ElementType: elementType);
+
+        if (Collections.TryGetValue(key, out var hit))
+            return hit;
+
+        return Collections.GetOrAdd(key, static (k, message) => BindCollectionCore(k.DeclaringType, k.MemberName, k.ElementType, message), missingMessage);
+    }
+
+    static CollectionBindings BindCollectionCore(Type declaringType, string memberName, Type elementType, string missingMessage)
     {
         var property = declaringType.GetProperty(memberName) ?? throw new QuickSqlException(missingMessage);
         var listType = typeof(List<>).MakeGenericType(elementType);
@@ -220,7 +271,6 @@ public static class MemberAccessors
     /// <c>RuntimeHelpers.GetUninitializedObject</c> 能出实例但<b>不跑构造器也不跑字段初始化器</b>，
     /// 于是 <c>Xxx { get; set; } = [];</c> 那一格留 null——正是集合导航最怕的形状。
     /// <c>Expression.New(非公共 ctor).Compile()</c> 两样都对，所以走这一条。</para></summary>
-    // TEMP 反探针：把可见性门槛装回去，看新用例是否真的守着这一格
     public static ConstructorInfo? ParameterlessConstructor(Type type)
         => type.GetConstructor(Type.EmptyTypes)
            ?? type.GetConstructor(

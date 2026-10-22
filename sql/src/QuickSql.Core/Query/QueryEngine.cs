@@ -7,6 +7,7 @@ using QuickSql.Query.Model;
 using QuickSql.Sql;
 using QuickSql.Tracking;
 using QuickSql.Translation;
+using QuickSql.Write;
 using System.Collections;
 using System.Data.Common;
 using System.Diagnostics.CodeAnalysis;
@@ -488,7 +489,7 @@ sealed class QueryEngine
 
     /// <summary>解析引用导航属性并构造 IncludeNode。从根实体的契约中查找关系，创建目标表位，
     /// 构建 LEFT JOIN 条件（FK = PK）。</summary>
-    public IncludeNode Include(LambdaExpression navigation)
+    internal IncludeNode Include(LambdaExpression navigation)
     {
         if (Model.Plan is not EntityProjection rootProjection)
             throw new QuickSqlException("Include 只能在实体查询上使用，投影之后不能再加载导航属性。把 Include 放到 Select 之前。");
@@ -517,7 +518,7 @@ sealed class QueryEngine
 
     /// <summary>在已有 Include 的基础上继续加载更深层导航。从指定父节点的实体契约中查找关系，
     /// 新节点作为父节点的子节点加入树中。</summary>
-    public IncludeNode ThenInclude(IncludeNode parent, LambdaExpression navigation)
+    internal IncludeNode ThenInclude(IncludeNode parent, LambdaExpression navigation)
     {
         var parentContract = parent.TargetTable.Contract
             ?? throw new QuickSqlException($"Include 的目标表 {parent.TargetTable.Alias} 没有实体契约。");
@@ -650,8 +651,15 @@ sealed class QueryEngine
 
     /// <summary>解析集合导航属性并构造 IncludeManyNode。不改写主查询 SQL，执行层发两条查询再缝合。
     /// FK 发现：先在子实体契约的 Relationships 里找指向父类型的边，找不到时按约定匹配
-    /// （<c>{父类型名}Id</c> / <c>{父类型名}{PK列名}</c>）。</summary>
-    public IncludeManyNode IncludeMany(LambdaExpression navigation)
+    /// （<c>{父类型名}Id</c> / <c>{父类型名}{PK列名}</c>）。
+    ///
+    /// <para><b>子型那一档的建档委托是泛型口给的</b>（<c>TDetail</c> 是编译期子型）：
+    /// 档位只有 <c>For&lt;T&gt;()</c> 能建，而它要编译期的 <c>T</c>；节点上放运行期类型就建不出档，
+    /// 放委托就建得出（见 <see cref="IncludeManyNode.ChildTrackerFactory"/>）。</para></summary>
+    internal IncludeManyNode IncludeMany<TDetail>(
+        LambdaExpression navigation,
+        Func<ChangeTracker, ITypeTracker> childTrackerFactory
+    )
     {
         if (Model.Plan is not EntityProjection rootProjection)
             throw new QuickSqlException("IncludeMany 只能在实体查询上使用，投影之后不能再加载集合导航。把 IncludeMany 放到 Select 之前。");
@@ -661,7 +669,7 @@ sealed class QueryEngine
         var parentContract = rootTable.Contract
             ?? throw new QuickSqlException($"表位 {rootTable.Alias} 没有实体契约，无法解析集合导航。");
 
-        return NewIncludeManyNode(parentContract, memberName);
+        return NewIncludeManyNode<TDetail>(parentContract, memberName, childTrackerFactory);
     }
 
     /// <summary>把根上的那一颗集合节点加进模型（追加到 IncludeManys 列表）。子节点走
@@ -671,11 +679,16 @@ sealed class QueryEngine
 
     /// <summary>在已有集合节点上再挂一层集合导航（<c>ThenIncludeMany</c>，§5.7）。父端是<em>上一层刚缝出来的
     /// 那一批子实体</em>，所以这一档不需要表位、也不动 <c>QueryModel</c> —— 主查询 SQL 一个字符不变，
-    /// 多出来的只是执行层的一条 SELECT。判"这一层能不能挂"的是父节点子型的契约上有没有那根集合边。</summary>
-    public IncludeManyNode ThenIncludeMany(IncludeManyNode parent, LambdaExpression navigation)
+    /// 多出来的只是执行层的一条 SELECT。判"这一层能不能挂"的是父节点子型的契约上有没有那根集合边。
+    /// 子型那一档的建档委托同样由泛型口给（<c>TDetail</c> 是这一层的编译期子型）。</summary>
+    internal IncludeManyNode ThenIncludeMany<TDetail>(
+        IncludeManyNode parent,
+        LambdaExpression navigation,
+        Func<ChangeTracker, ITypeTracker> childTrackerFactory
+    )
     {
         var parentContract = Orm.Schemas.Contract(parent.ChildType);
-        var node = NewIncludeManyNode(parentContract, ExtractMemberName(navigation.Body));
+        var node = NewIncludeManyNode<TDetail>(parentContract, ExtractMemberName(navigation.Body), childTrackerFactory);
 
         parent.Children.Add(node);
 
@@ -689,7 +702,7 @@ sealed class QueryEngine
     /// 已有的那颗加载器，一条引用边在两条路上必须长成同一个答案。
     /// 集合导航在这一档当场拒：它有自己的那颗口（<see cref="ThenIncludeMany"/>），按引用那一档发出去只缝得上
     /// 集合里的最后一只，而"只少一只"这种错在结果里看不出形状。</summary>
-    public IncludeNode ThenInclude(IncludeManyNode parent, LambdaExpression navigation)
+    internal IncludeNode ThenInclude(IncludeManyNode parent, LambdaExpression navigation)
     {
         var memberName = ExtractMemberName(navigation.Body);
         var parentContract = Orm.Schemas.Contract(parent.ChildType);
@@ -756,8 +769,17 @@ sealed class QueryEngine
             $"这一档不发 JOIN，嵌套路径（如 d => d.Warehouse.Name）与算式都排不出去。当前表达式形态是 {key.Body.NodeType}。");
     }
 
-    /// <summary>两层共用的一颗节点构造：从父契约上按属性名取集合元素类型，再发现外键。</summary>
-    IncludeManyNode NewIncludeManyNode(EntityContract parentContract, string memberName)
+    /// <summary>两层共用的一颗节点构造：从父契约上按属性名取集合元素类型，再发现外键。
+    ///
+    /// <para><b>运行期元素型与编译期 <typeparamref name="TDetail"/> 必须一致</b>：节点上那份建档委托是按
+    /// <typeparamref name="TDetail"/> 建的档，而这一档的账要记在缝上去的那些实例身上 ——
+    /// 两者不是同一型时，建出来的是另一型的档，登记与缝合就落在两张不同的账上。
+    /// 这一格当场响，不留「建了另一型的档」那种静默（§12.2）。</para></summary>
+    IncludeManyNode NewIncludeManyNode<TDetail>(
+        EntityContract parentContract,
+        string memberName,
+        Func<ChangeTracker, ITypeTracker> childTrackerFactory
+    )
     {
         var navProperty = parentContract.ClrType.GetProperty(memberName)
             ?? throw new QuickSqlException(
@@ -767,6 +789,12 @@ sealed class QueryEngine
             ?? throw new QuickSqlException(
                 $"属性 {parentContract.ClrType.Name}.{memberName} 不是集合类型（IEnumerable<T>）。IncludeMany 只用于集合导航。");
 
+        if (childType != typeof(TDetail))
+            throw new QuickSqlException(
+                $"IncludeMany 的泛型参数与导航属性的元素类型对不上：导航 {parentContract.ClrType.Name}.{memberName} 的元素型是 " +
+                $"{childType.Name}，而这一句给的泛型参数是 {typeof(TDetail).Name}。集合导航的元素型就是子实体，" +
+                "两处写成不同的型是调用方的错 —— 那一档的跟踪档会按泛型参数建，与缝上去的实例不是同一型。");
+
         var childContract = Orm.Schemas.Contract(childType);
         var fkColumns = DiscoverFkColumns(parentContract, childContract, memberName);
 
@@ -775,6 +803,7 @@ sealed class QueryEngine
             NavigationMemberName = memberName,
             ChildType = childType,
             ChildFkColumnNames = fkColumns,
+            ChildTrackerFactory = childTrackerFactory,
         };
     }
 
@@ -1111,53 +1140,24 @@ sealed class QueryEngine
         }
 
         var childTable = Orm.NewTableRef(node.ChildType, 0);
-        var childColumns = new List<Projection>(childContract.Columns.Length);
 
-        for (var i = 0; i < childContract.Columns.Length; i++)
-            childColumns.Add(new Projection(new ColumnExpression(childTable, childContract.Columns[i]), null));
+        var fkColumns = new ColumnContract[node.ChildFkColumnNames.Count];
 
-        var inValues = new List<SqlExpression>(parentKeyValues.Count);
+        for (var i = 0; i < fkColumns.Length; i++)
+            fkColumns[i] = childContract.ByColumn[node.ChildFkColumnNames[i]];
 
-        foreach (var pkValue in parentKeyValues)
-            inValues.Add(new ParameterValue(pkValue, null));
+        // 子行序（OrderByMany，§5.7）：点过就把序灌进这一层子 SELECT 的 ORDER BY 槽，发射在方言里；
+        // 没点过这一格就是空清单，方言不发 ORDER BY，那条子句与本口存在之前逐字节同形。
+        var ordering = new OrderExpression[node.Orderings.Count];
 
-        var conditions = new List<SqlExpression>(node.ChildFkColumnNames.Count);
+        for (var i = 0; i < ordering.Length; i++)
+            ordering[i] = new OrderExpression(new ColumnExpression(childTable, node.Orderings[i].Column), node.Orderings[i].Descending);
 
-        for (var i = 0; i < node.ChildFkColumnNames.Count; i++)
-        {
-            var fkColumn = childContract.ByColumn[node.ChildFkColumnNames[i]];
-            conditions.Add(new InExpression(new ColumnExpression(childTable, fkColumn), inValues));
-        }
-
-        SqlExpression? where = null;
-
-        foreach (var condition in conditions)
-            where = where is null ? condition : new SqlBinaryExpression(BinaryOperator.And, where, condition);
-
-        var childAst = new SelectStatement
-        {
-            Columns = childColumns,
-            From = new SourceTable(childTable),
-            Where = where,
-            // 子行序（OrderByMany，§5.7）：点过就把序灌进这一层子 SELECT 的 ORDER BY 槽，发射在方言里；
-            // 没点过这一格就是空清单，方言不发 ORDER BY，那条子句与本口存在之前逐字节同形。
-            OrderBy = [.. node.Orderings.Select(o => new OrderExpression(new ColumnExpression(childTable, o.Column), o.Descending))],
-        };
-
-        var dialect = Orm.Provider.Dialect;
-        var writer = new SqlWriter(
-            new StringBuilder(QueryCompiler.EstimateSqlLength(childAst)),
-            new List<AdoParameter>(),
-            dialect.ParameterPrefix);
-        dialect.Emit(in childAst, writer);
-        var childSql = new DialectSql(writer.ToSqlString(), writer.Parameters);
-
-        var children = await Orm.Ado.QueryAsync(
-            childSql,
+        // IN 的值按参数预算分块发射（QueryInBatchesAsync）：父集合超过预算时是多条子 SELECT，不是整条失败。
+        var children = await QueryInBatchesAsync(
+            parentKeyValues, fkColumns, childTable, childContract,
             Materializer.EntityRows<object>(childRead, childContract),
-            Tag("include-many"),
-            null,
-            ct).ConfigureAwait(false);
+            ordering, Tag("include-many"), ct).ConfigureAwait(false);
 
         var childKeyGetters = BuildKeyGettersByColumnName(node.ChildType, childContract, node.ChildFkColumnNames);
         var nav = MemberAccessors.BindCollection(
@@ -1192,7 +1192,20 @@ sealed class QueryEngine
         }
 
         if (_tracker is not null)
+        {
+            // 子型那一档先建好：TrackAll 按运行期类型找档，而档位只有泛型那一颗 For<T>() 能建。
+            // 建档委托是接链那一刻（IncludeMany<TDetail> / ThenIncludeMany<…,TDetail>）按编译期子型给的，
+            // 所以这一格不必反射，也不必调用方自己先摸一句 Set<子型>()。
+            var childTracker = node.ChildTrackerFactory?.Invoke(_tracker);
+
+            // 建出来的档与节点上的子型必须同型：登记与缝合要落在同一张账上。
+            if (childTracker is not null && childTracker.EntityType != node.ChildType)
+                throw new QuickSqlException(
+                    $"IncludeMany 缝出来的子型（{node.ChildType.Name}）与建出来的那一档（{childTracker.EntityType.Name}）不是同一型：" +
+                    "登记与缝合会落在两张不同的账上。这是内核缺陷，不是调用方写错。请带这个查询的 Explain() 报缺陷。");
+
             _tracker.TrackAll(children, node.ChildType);
+        }
 
         return children;
     }
@@ -1278,47 +1291,12 @@ sealed class QueryEngine
             }
 
             var childTable = Orm.NewTableRef(childContract.ClrType, 0);
-            var childColumnProjections = new List<Projection>(childContract.Columns.Length);
 
-            for (var i = 0; i < childContract.Columns.Length; i++)
-                childColumnProjections.Add(new Projection(new ColumnExpression(childTable, childContract.Columns[i]), null));
-
-            var inValues = new List<SqlExpression>(fkValues.Count);
-
-            foreach (var fkValue in fkValues)
-                inValues.Add(new ParameterValue(fkValue, null));
-
-            var conditions = new List<SqlExpression>(childPkColumns.Length);
-
-            for (var i = 0; i < childPkColumns.Length; i++)
-                conditions.Add(new InExpression(new ColumnExpression(childTable, childPkColumns[i]), inValues));
-
-            SqlExpression? where = null;
-
-            foreach (var condition in conditions)
-                where = where is null ? condition : new SqlBinaryExpression(BinaryOperator.And, where, condition);
-
-            var childAst = new SelectStatement
-            {
-                Columns = childColumnProjections,
-                From = new SourceTable(childTable),
-                Where = where,
-            };
-
-            var dialect = Orm.Provider.Dialect;
-            var writer = new SqlWriter(
-                new StringBuilder(QueryCompiler.EstimateSqlLength(childAst)),
-                new List<AdoParameter>(),
-                dialect.ParameterPrefix);
-            dialect.Emit(in childAst, writer);
-            var childSql = new DialectSql(writer.ToSqlString(), writer.Parameters);
-
-            var children = await Orm.Ado.QueryAsync(
-                childSql,
+            // IN 的值按参数预算分块发射（QueryInBatchesAsync）：父端 FK 集超过预算时是多条子 SELECT，不是整条失败。
+            var children = await QueryInBatchesAsync(
+                [.. fkValues], childPkColumns, childTable, childContract,
                 Materializer.EntityRows<object>(childRead, childContract),
-                Tag("split-include"),
-                null,
-                ct).ConfigureAwait(false);
+                [], Tag("split-include"), ct).ConfigureAwait(false);
 
             // 先登记再缝：TrackAll 就地写回"会话里的那一只"（§8.2），于是导航上挂的、往下递归加载的都是那一只。
             // 这里可以登记在配之前，因为配的是子端<em>主键</em>对父端外键 —— 身份映射就是按主键建的，
@@ -1396,6 +1374,83 @@ sealed class QueryEngine
         }
 
         return getters;
+    }
+
+    /// <summary>「按一批键 IN 捞子行」的共用发射段（IncludeMany、拆分 Include 与 <c>DbSet.Load</c>
+    /// 两条补载路，全仓四处调用）。<b>这一格回答的是参数预算</b>：IN 的值按 provider 的预算分块
+    /// （公式与 Insert 链共用 <see cref="StatementEmitter.RowsPerStatement"/>，没声明预算的走同一颗
+    /// 保守值），每块一条子 SELECT，结果按块序串接。每行的参数个数是 IN 目标列的列数 ——
+    /// 复合键那一形每个条件各绑一遍同一批值，与 <see cref="StatementEmitter"/> 抬头
+    /// 「分母是每行几颗参数而不是几列」同一口径。
+    /// <para><b>不分块的后果不是慢，是整条子查询在驱动侧失败</b>：SQL Server 的参数上限是 2100、
+    /// Oracle 的 IN 列表上限是 1000 项，而"父集合有多大"由调用方的上一趟查询决定 ——
+    /// <c>Take(int.MaxValue)</c> 的"取全部"档不是假想（<c>AdoExecutor</c> 预容量那一格的抬头记过
+    /// 同一现场）。写侧早就按预算分块（§12.3），读侧这四条 IN 此前是漏网的那一族。</para>
+    /// <para>行读取器在循环外只建一份：<see cref="Materializer.EntityRows"/> 的直读票按 reader 引用
+    /// 每场次自探（§16.21），跨块复用是它声明支持的形状。空键集一条语句都不发。</para></summary>
+    internal async Task<List<object>> QueryInBatchesAsync(
+        IReadOnlyList<object> keyValues,
+        IReadOnlyList<ColumnContract> inColumns,
+        TableRef targetTable,
+        EntityContract targetContract,
+        Func<DbDataReader, object> rowMap,
+        IReadOnlyList<OrderExpression> ordering,
+        ExecutionTag tag,
+        CancellationToken ct)
+    {
+        var budget = Orm.Provider.Bulk?.ParameterBudget ?? StatementEmitter.ConservativeParameterBudget;
+        var perChunk = StatementEmitter.RowsPerStatement(budget, Math.Max(1, inColumns.Count));
+
+        var projections = new Projection[targetContract.Columns.Length];
+
+        for (var i = 0; i < projections.Length; i++)
+            projections[i] = new Projection(new ColumnExpression(targetTable, targetContract.Columns[i]), null);
+
+        var dialect = Orm.Provider.Dialect;
+        var result = new List<object>();
+
+        for (var first = 0; first < keyValues.Count; first += perChunk)
+        {
+            var width = Math.Min(perChunk, keyValues.Count - first);
+
+            var inValues = new List<SqlExpression>(width);
+
+            for (var i = 0; i < width; i++)
+                inValues.Add(new ParameterValue(keyValues[first + i], null));
+
+            SqlExpression? where = null;
+
+            foreach (var column in inColumns)
+            {
+                var condition = new InExpression(new ColumnExpression(targetTable, column), inValues);
+                where = where is null ? condition : new SqlBinaryExpression(BinaryOperator.And, where, condition);
+            }
+
+            var ast = new SelectStatement
+            {
+                Columns = projections,
+                From = new SourceTable(targetTable),
+                Where = where,
+                OrderBy = ordering,
+            };
+
+            var writer = new SqlWriter(
+                new StringBuilder(QueryCompiler.EstimateSqlLength(ast)),
+                new List<AdoParameter>(),
+                dialect.ParameterPrefix);
+            dialect.Emit(in ast, writer);
+
+            var rows = await Orm.Ado.QueryAsync(
+                new DialectSql(writer.ToSqlString(), writer.Parameters),
+                rowMap,
+                tag,
+                null,
+                ct).ConfigureAwait(false);
+
+            result.AddRange(rows);
+        }
+
+        return result;
     }
 
     /// <summary>复合外键的字典比较器：按元素比较 <c>object[]</c> 键值。</summary>
@@ -1507,10 +1562,33 @@ sealed class QueryEngine
 
     public Task<long> LongCountAsync(CancellationToken ct) => AggregateAsync<long>(AggregateKind.LongCount, null, ct);
 
-    /// <summary><c>Any()</c> 现在就是 <c>COUNT(*) &gt; 0</c>，语义对但没到最优：<c>WHERE EXISTS(...)</c> 的
-    /// 反形要改投影计划，记在 P1。留在这里而不是不说，是因为"大表上 Any 很慢"是可预期的成本，
-    /// 而"Any 返回错结果"不是。</summary>
-    public async Task<bool> AnyAsync(CancellationToken ct) => await AggregateAsync<int>(AggregateKind.Any, null, ct).ConfigureAwait(false) > 0;
+    /// <summary>存在性探针：<b>发「<c>SELECT 1 … 取第一行</c>」而不是 <c>COUNT(*) &gt; 0</c></b>（§5.12 记名的 P1，
+    /// 这一格落地）。差别是算法级的：COUNT 在大表上是全量计数，而存在性只要库交出第一行就能收口 ——
+    /// 谓词命中越早，省得越多，最坏（空集）也只与 COUNT 同阶。
+    /// <para>形状与 <see cref="CappedAsync"/> 同一条：投影换成常量 1 的 <see cref="ValueProjection"/>
+    /// （<see cref="InlineLiteral"/>，不进参数集合）、<c>Limit = 1</c>、序剥掉 —— 存在性与行序无关
+    /// （<c>OFFSET n</c> 之后有没有行是"行数 &gt; n"，任何序同一个答案），剥序省的是一次排序，
+    /// 而 T-SQL 那一族分页要求的 ORDER BY 由方言的占位序补（<c>DialectBase.EmitPagingOrdering</c>）。
+    /// <c>Offset</c> 原样保留：<c>Skip(n).Any()</c> 问的是"跳过 n 行之后还有没有"，不是整表。
+    /// 分组与 <c>HAVING</c> 也天然成立：<c>SELECT 1 … GROUP BY k LIMIT 1</c> 交回一行 ⟺ 至少有一组，
+    /// 与旧版派生表 COUNT 同一个答案，只是不再数完。投影换成值档之后 Include/IncludeMany 的机器
+    /// 整体旁路（判据都带 <c>Plan is EntityProjection</c>），LEFT JOIN 不改变存在性，一条子查询都不多发。</para>
+    /// <para>读到一行即 <c>true</c>；空集时 <see cref="AdoExecutor.FirstAsync"/> 交回 <c>null</c>。
+    /// 旧版那句「COUNT(*) &gt; 0，语义对但没到最优」的记账到此结清。</para></summary>
+    public async Task<bool> AnyAsync(CancellationToken ct)
+    {
+        var model = Effective() with
+        {
+            Plan = new ValueProjection(new InlineLiteral("1"), typeof(int)),
+            Ordering = [],
+            Limit = 1,
+        };
+
+        // int? 那一档是判据本身：FirstAsync 对空集交回 default，只有可空型才分得开"没有行"与"值为 1 的那一行"。
+        var row = await Orm.Ado.FirstAsync(Build(model, out _), Reader<int?>(model), Tag("any"), ct).ConfigureAwait(false);
+
+        return row.HasValue;
+    }
 
     public Task<TResult> SumAsync<TResult>(LambdaExpression key, CancellationToken ct) => AggregateAsync<TResult>(AggregateKind.Sum, key, ct);
 

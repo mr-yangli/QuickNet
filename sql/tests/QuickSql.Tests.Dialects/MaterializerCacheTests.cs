@@ -176,6 +176,41 @@ public sealed class MaterializerCacheTests
 
         Assert.Null(Materialize(declared, ((Type) typeof(int), DBNull.Value)).Maybe);
     }
+
+    /// <summary>§12.7 C 第一条的<b>执行期那一半</b>：导航访问器（<c>MemberAccessors</c> 的 Getter/Setter/
+    /// BindCollection）也<b>编译一次</b>、按成员缓存，而不是每次调用各编一次。这一格与上面那批 DTO 读取器
+    /// 同一条纪律，判据也同一个 —— <b>委托引用相等</b>：未命中必然走 <c>Expression.Lambda(...).Compile()</c>
+    /// 产出一只新委托，所以"两次拿到同一个引用"就是"命中了缓存"的充分可观察证据。
+    ///
+    /// <para>为什么单钉这一格：<c>Include</c> / <c>IncludeMany</c> / 拆分加载 / <c>DbSet.Load</c> 四条路
+    /// 都在<b>每次执行</b>调这三个口（不是启动期一次），没有缓存时每执行一趟就各付一轮反射定位 +
+    /// <c>Expression.Compile</c>（数十 µs 起）。<b>报错文本不进键</b>是这里唯一要守的边界：四条路给的
+    /// <c>missingMessage</c> 各不相同，若把它算进键，同一个成员就会因文案不同各编一份 —— 那正是要修的毛病，
+    /// 所以两次调用故意给不同的报错文本，仍须命中同一只委托。</para></summary>
+    [Fact]
+    public void Navigation_accessors_compile_once_per_member_regardless_of_the_error_text()
+    {
+        // 同一个成员、两套不同的报错文本：键只认 (声明类型, 成员名[, 元素型])，文案不进键。
+        var getterA = MemberAccessors.Getter(typeof(Order), nameof(Order.Note), "第一套缺失文案");
+        var getterB = MemberAccessors.Getter(typeof(Order), nameof(Order.Note), "第二套完全不同的缺失文案");
+        Assert.Same(getterA, getterB);
+
+        var setterA = MemberAccessors.Setter(typeof(Order), nameof(Order.Note), "甲");
+        var setterB = MemberAccessors.Setter(typeof(Order), nameof(Order.Note), "乙");
+        Assert.Same(setterA, setterB);
+
+        var bindA = MemberAccessors.BindCollection(typeof(Order), nameof(Order.Items), typeof(OrderItem), "A");
+        var bindB = MemberAccessors.BindCollection(typeof(Order), nameof(Order.Items), typeof(OrderItem), "B");
+        Assert.Same(bindA, bindB);
+
+        // 不同成员是不同键：缓存不会把两颗成员并成一只委托（并了就是"取错值"而不是"没变快"）。
+        var otherGetter = MemberAccessors.Getter(typeof(Order), nameof(Order.CustomerName), "另一颗成员");
+        Assert.NotSame(getterA, otherGetter);
+
+        // 缓存的是委托，不是"关掉了功能"：命中同一只委托仍读得出真值。
+        var order = new Order { Note = "still-works" };
+        Assert.Equal("still-works", getterA(order));
+    }
 }
 
 /// <summary>三个槽位、三种类型，且同时给出构造器与可写属性 —— 为的是让"装配方式"这一维能在同一个类型上分开测。</summary>

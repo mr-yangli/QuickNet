@@ -59,13 +59,16 @@ public static class IncludeExtensions
     public static IIncludableCollectionQuery<T, TProp> ThenIncludeMany<T, TItem, TProp>(
         this IIncludableCollectionQuery<T, TItem> query,
         Expression<Func<TItem, IEnumerable<TProp>>> navigation)
+        where TProp : class
     {
         if (query is not QuickSqlIncludableManyQuery<T, TItem> fq)
             throw new QuickSqlException(
                 $"ThenIncludeMany 只能用在 QuickSql 的 IncludeMany/ThenIncludeMany 链式对象上。当前类型是 {query.GetType().Name}。");
 
         var engine = fq.Engine;
-        var node = engine.ThenIncludeMany(fq.LastIncludeManyNode, navigation);
+
+        // 这一层的子型那一档同样在接链处建（编译期子型只有这一句有），缝出来的子行自己就进会话。
+        var node = engine.ThenIncludeMany<TProp>(fq.LastIncludeManyNode, navigation, static tracker => tracker.For<TProp>());
         return new QuickSqlIncludableManyQuery<T, TProp>(engine, node);
     }
 

@@ -519,6 +519,220 @@ public sealed class SqlServerUpdateTests
         Assert.Empty(deleted.Ast.Joins);
     }
 
+    // ── 按实体那一行的两个入口（orm.Update(entity) ∶ orm.Delete(entity)） ────
+
+    [Fact]
+    public void An_entity_update_writes_the_columns_that_carry_a_value_and_locates_by_the_key()
+    {
+        // row(1) 的 PaidAt 是 null —— 这一档读到的就是"这一列我没说"，那一格整列不进语句。
+        var sql = orm().Update(row(1)).ToSql(out var parameters);
+
+        Golden.Verify("update-by-entity", sql);
+
+        Checks.Has("WHERE [t0].[Id] = @p6", sql);
+        Assert.Equal(7, parameters.Count);
+
+        // 键位带列出处：它是按主键定位的那三条路共用的形状（批量链与跟踪器都带），
+        // 不带 Hint 的是链式 .Where(...) 那种"调用方自己写的条件"。
+        Assert.Equal("Id", parameters[^1].Hint?.MemberName);
+        Assert.Equal(["CustomerName", "CustomerId", "Amount", "State", "CreatedAt", "Note", "Id"],
+            parameters.Select(p => p.Hint!.MemberName).ToArray());
+
+        Checks.Absent("[PaidAt]", sql);
+    }
+
+    [Fact]
+    public void A_column_the_entity_left_null_is_not_said_while_the_chain_still_can_say_NULL()
+    {
+        string? cleared = null;
+
+        // 同一只实体、同一列：按实体那一档不说这一列，链式那一档把它真写成 NULL。
+        // 两扇门可以互换的话，"清空备注"这句话就没有任何一种写法是安全的。
+        var byEntity = orm().Update(new Order { Id = 3, CustomerName = null }).ToSql();
+
+        Checks.Absent("[CustomerName]", byEntity);
+
+        var byChain = orm().Update<Order>().Set(o => o.CustomerName, cleared).Where(o => o.Id == 3).ToSql();
+
+        Checks.Has("[CustomerName] = @p0", byChain);
+
+        // 而值类型列永远带来值：0 不是"没填"，所以 Amount 每趟都进 SET。
+        Checks.Has("[Amount]", byEntity);
+    }
+
+    [Fact]
+    public void The_entity_and_the_batch_door_ask_the_hook_the_same_columns_in_the_same_order()
+    {
+        var entityDoor = new List<string>();
+        var batchDoor = new List<string>();
+        var aopEntity = new QuickSqlAop();
+        var aopBatch = new QuickSqlAop();
+
+        aopEntity.AuditValue = e => entityDoor.Add($"{e.OperationKind}/{e.Column.MemberName}");
+        aopBatch.AuditValue = e => batchDoor.Add($"{e.OperationKind}/{e.Column.MemberName}");
+
+        // 筛列的判据只有一把：主键、库里给值的列、并发列都不问。PaidAt 是 null 也照样被问过一遍
+        // ——钩子先跑、null 判在后，所以"补修改时间"的订阅方填上的那一格进得了 SET。
+        ormWith(aopEntity).Update(row(1));
+        ormWith(aopBatch).UpdateRange([row(1)]).Explain();
+
+        Assert.Equal(Written, entityDoor.Count);
+        Assert.Equal(batchDoor, entityDoor);
+    }
+
+    [Fact]
+    public void An_audit_filled_value_enters_the_SET_of_an_entity_update_and_replays()
+    {
+        var stamp = new DateTime(2026, 9, 21, 1, 2, 3, 456);
+        var aop = new QuickSqlAop();
+
+        aop.AuditValue = e =>
+        {
+            if (e.Column.MemberName == "PaidAt" && e.CurrentValue is null)
+                e.SetValue(stamp);
+        };
+
+        var order = row(1);
+        var plan = ormWith(aop).Update(order).Explain();
+
+        Assert.Equal(stamp, order.PaidAt);
+        Checks.Has("[PaidAt]", plan.ToSql());
+        Assert.Equal(stamp, plan.Sql.Parameters.Single(p => p.Hint?.MemberName == "PaidAt").Value);
+
+        // 取值段那一步排在发射段之前、步号从 0 起，与 UpdateRange 的 Explain() 同一份回放形状。
+        var trace = Assert.Single(plan.HookReplay);
+
+        Assert.Equal("AuditValue", trace.HookName);
+        Assert.Equal(0, trace.Step);
+    }
+
+    [Fact]
+    public void A_row_that_said_nothing_at_all_is_refused_because_an_empty_SET_is_not_a_statement()
+    {
+        // Customer 除主键以外全是可空列：一只只有 Id 的实体等于什么都没说。
+        var empty = Checks.Raised<QuickSqlException>(() => orm().Update(new Customer { Id = 7 }).ToSql());
+
+        Checks.Has("没有一列带值", empty.Message);
+        Checks.Has("orm.Update<Customer>()", empty.Message);
+    }
+
+    [Fact]
+    public void A_key_that_was_never_assigned_is_refused_before_anything_is_sent()
+    {
+        // Id 是自增主键，而 0 是它"还没被库给值"的那个形态：这一句定位不到任何行，
+        // 却会安静地报告 0 行。判据与 UpdateRange ∶ 一句 upsert 共用同一份（StatementEmitter.IsUnassignedKey）。
+        var unset = Checks.Raised<QuickSqlException>(() => orm().Update(new Order { Note = "改点什么" }).ToSql());
+
+        Checks.Has("没给值的那个默认形态", unset.Message);
+        Checks.Has("orm.Insert", unset.Message);
+
+        var deleted = Checks.Raised<QuickSqlException>(() => orm().Delete(new Order()).Explain());
+
+        Checks.Has("没给值的那个默认形态", deleted.Message);
+    }
+
+    [Fact]
+    public void A_batch_handed_to_a_single_row_entrance_is_pointed_at_the_range_chain()
+    {
+        // Insert 那一族记过的坑在这里长同一颗：集合递给收实体的门，T 会被推成 List<Order>
+        // 而去建一张不存在的表的契约。拦在入口而不是等契约解析层报出别的话。
+        var update = Checks.Raised<QuickSqlException>(() => orm().Update(rows(2)));
+
+        Checks.Has("UpdateRange(rows)", update.Message);
+
+        var delete = Checks.Raised<QuickSqlException>(() => orm().Delete(rows(2)));
+
+        Checks.Has("DeleteRange(rows)", delete.Message);
+
+        // 对照面要成立：整批那一档收同一批行是正常工作的，指路指过去不落空。
+        Checks.Has("[QuickSqlOrder]", orm().UpdateRange(rows(2)).Explain().ToLogSql());
+    }
+
+    [Fact]
+    public void A_composite_key_row_is_located_column_by_column_where_the_batch_door_refuses_it()
+    {
+        var ledger = new Ledger { Book = 1, Line = 2 };
+
+        Golden.Verify("delete-by-entity-composite-key", orm().Delete(ledger).ToSql());
+
+        var sql = orm().Delete(ledger).ToLogSql();
+
+        Checks.Has("[Book] = 1", sql);
+        Checks.Has("[Line] = 2", sql);
+
+        _ = orm().Delete(ledger).ToSql(out var keys);
+
+        Assert.Equal(2, keys.Count);
+        Assert.Equal(["Book", "Line"], keys.Select(p => p.Hint!.MemberName).ToArray());
+
+        // 两扇门对复合键的答案不同，而各有权衡：批量那句拒的是"IN 清单装不下元组"，
+        // 那一句在单行上根本不成立 —— 所以这里支持、那里拒，不是同一件事的两种写法。
+        Checks.Has("复合键", Checks.Raised<QuickSqlException>(() => orm().DeleteRange([ledger]).Explain()).Message);
+    }
+
+    [Fact]
+    public void A_split_entity_is_written_to_the_shard_its_own_key_names()
+    {
+        var entry = new ShardLog { Id = new Guid("11111111-1111-1111-1111-111111111111"), Level = 2, OccurredAt = Moment };
+
+        var sql = orm().Update(entry).ToSql();
+
+        Golden.Verify("update-by-entity-split-shard", sql);
+
+        // 片的换算抄插入链那份 Resolve：分片键在实体身上，所以这一档不需要 SplitTable。
+        Checks.Has("[QuickSqlShardLog_202603]", sql);
+
+        // 而批量那一档今天没有按片分组的账，拒的是同一件事的另一种现场。
+        Checks.Has("一批行会散在几张片上", Checks.Raised<QuickSqlException>(() => orm().UpdateRange([entry]).Explain()).Message);
+    }
+
+    [Fact]
+    public void An_entity_delete_still_buys_the_soft_delete_rewrite_and_the_global_filter()
+    {
+        var target = new QuickSqlOrm(new QuickSqlOrmOptions
+        {
+            Provider = SqlServer.Provider(SqlServer.NoDriverFactory.Instance),
+            ConnectionString = SqlServer.OfflineConnectionString,
+        });
+
+        target.Behaviors.SoftDelete<Ticket>(t => t.Deleted, t => t.DeletedAt, () => Moment);
+        target.Filters.Add<Ticket>(t => t.TenantId == 3);
+
+        var plan = target.Delete(ticket(7)).Explain();
+
+        Golden.Verify("delete-by-entity-soft", plan.ToSql());
+
+        // 改的是形状而不是命中范围：置位两列由规则给，WHERE 仍是主键 ∧ 过滤器。
+        Checks.Has("SET", plan.ToSql());
+        Checks.Has("Behaviors.SoftDelete", plan.Reason);
+        Checks.Has("全局过滤器", plan.Reason);
+        Checks.Has("[t0].[Id] = @p", plan.ToSql());
+        Checks.Has("[t0].[TenantId] = @p", plan.ToSql());
+
+        static Ticket ticket(int id) => new() { Id = id, Title = "工单" + id, TenantId = 3 };
+    }
+
+    [Fact]
+    public void The_entity_door_still_is_the_same_chain_so_a_second_condition_narrows_it()
+    {
+        // 交回的是 IUpdate<T>：主键已经在那儿，再叠一句 .Where 只是往末尾加 AND，不换门也收窄得了。
+        var sql = orm().Update(row(1)).Where(o => o.State != OrderState.Cancelled).ToLogSql();
+
+        Checks.Has("AND [t0].[State] <> 9", sql);
+
+        // 实体没带的那一列可以再点一句；PaidAt 在上面那行 row(1) 上是 null，所以 SET 里没有它。
+        var filled = orm().Update(row(1)).Set(o => o.PaidAt, Moment).ToLogSql();
+
+        Checks.Has("[PaidAt] = ", filled);
+
+        // 而实体带着值的那一列再点一次会被"设置了两次"那道守卫拦下：本家答案不是后写的覆盖先写的，
+        // 是让调用方说清哪个值算（要么改实体，要么整句改走链式）。混合现场（整只实体 + 一列在库里算）
+        // 在这一档不支持，那是链式的形状。
+        var twice = Checks.Raised<QuickSqlException>(() => orm().Update(row(1)).Set(o => o.Note, "再改一次").ToSql());
+
+        Checks.Has("被设置了两次", twice.Message);
+    }
+
     static string After(string text, string needle)
     {
         var at = text.IndexOf(needle, StringComparison.Ordinal);

@@ -1,4 +1,5 @@
 using System.Globalization;
+using QuickSql.Aop;
 using QuickSql.TestInfra;
 using QuickSql.Tracking;
 using Xunit;
@@ -98,6 +99,82 @@ public sealed class TrackingPathTests
         => await db.Set<Order>().Where(o => o.Note == note).OrderBy(o => o.Id).ToListAsync(ct);
 
     // ── Insert 档：回填键与身份登记 ───────────────────────────────────
+
+    /// <summary><c>QuickSqlAop.EntityWritten</c>（§10.1 观察类）：这一轮写出去的实体逐只点名，操作种类分三档。
+    ///
+    /// <para><b>它为什么是逐只而不是逐句</b>：一只实体在一轮里只被写一次，所以订阅者收到的事件与
+    /// 「这一轮改了几行」一一对应 —— 调用方据此发领域事件、发实体变更事件，不必自己去数。</para>
+    ///
+    /// <para><b>它在语句建出来之前发</b>：订阅者改得动实体，而那一格改出来的值会被紧接着建出来的语句带出去
+    /// （取值段读的是实体）。这一格是「改完就写出去」的那一半，与逐格的 <c>AuditValue</c> 分工。</para></summary>
+    [Fact]
+    public async Task The_written_hook_names_every_row_and_its_operation()
+    {
+        Database.Ready();
+
+        var seen = new List<(string Kind, string? Note)>();
+
+        var aop = new QuickSqlAop
+        {
+            EntityWritten = e => seen.Add((e.OperationKind, ((Order)e.Entity).Note)),
+        };
+
+        var db = new DbContext(Database.OrmWith(aop));
+        var note = tagged(1);
+        var order = row("甲公司", 12.3456m, note);
+
+        db.Add(order);
+        await db.SaveChangesAsync(ct);
+
+        db.Add(row("乙公司", 1m, tagged(2)));
+        await db.SaveChangesAsync(ct);
+
+        var changed = (await db.Set<Order>().Where(o => o.Note == note).ToListAsync(ct)).Single();
+        changed.Note = tagged(3);
+        await db.SaveChangesAsync(ct);
+
+        // 删之前要把明细捞进会话：Order 声明了到 OrderItem 的级联删除，而会话看不见子行时
+        // 那一档按裁决①当场拒（"可达才删"）——那一条与本用例判的那件事无关，先照它的规矩走。
+        // 顺序要紧：那一档是在 Remove 里面判的，先捞后删。
+        db.Set<Order>().Load(o => o.Items!);
+
+        db.Remove(changed);
+
+        await db.SaveChangesAsync(ct);
+        // 三档各一次，逐只点名；顺序是「先插的先被点到」。
+        Assert.Equal(
+            [("insert", tagged(1)), ("insert", tagged(2)), ("update", tagged(3)), ("delete", tagged(3))],
+            seen);
+    }
+
+    /// <summary>订阅者在那一格里改得动实体，而改出来的值会被紧接着建出来的语句带出去。</summary>
+    [Fact]
+    public async Task A_subscriber_can_change_the_row_before_the_statement_is_built()
+    {
+        Database.Ready();
+
+        // 改出来的那一格要带本次运行的标签：共享库上一轮留下的行还在，
+        // 而这一列若是常量，那一轮的行会被这一轮一起读回来（断言就分不出是谁写的）。
+        var rewritten = tagged(2);
+
+        var aop = new QuickSqlAop
+        {
+            EntityWritten = e =>
+            {
+                if (e.Entity is Order order && e.OperationKind == "insert")
+                    order.Note = rewritten;
+            },
+        };
+
+        var db = new DbContext(Database.OrmWith(aop));
+
+        db.Add(row("甲公司", 12.3456m, tagged(1)));
+
+        await db.SaveChangesAsync(ct);
+
+        // 那一格改出来的值真的随语句出去了（裁判连接读回，不是会话里读）。
+        Assert.Equal(rewritten, Assert.Single(Orders("[Note] = @n", ("@n", rewritten)))["Note"]);
+    }
 
     [Fact]
     public async Task SaveChanges_inserts_a_row_and_the_key_the_database_gives_back_is_what_gets_registered()

@@ -274,6 +274,9 @@ public sealed class QueryCompiler(IDbProvider provider)
 
     SqlExpression Aggregate(AggregateProjection aggregate)
     {
+        // AggregateKind.Any 自存在性探针落地起不再有任何调用方递进来（QueryEngine.AnyAsync 发的是
+        // 「SELECT 1 … 取第一行」，不经过聚合映射）。这一格留着 Any→COUNT 的映射只是把枚举语义配齐，
+        // 公开枚举面上那颗成员删不删是 §5.12 的裁决，不在实现侧顺手做。
         var countLike = aggregate.Kind is AggregateKind.Count or AggregateKind.LongCount or AggregateKind.Any;
 
         var key = (countLike, aggregate.Distinct) switch

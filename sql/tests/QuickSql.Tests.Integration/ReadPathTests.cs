@@ -408,9 +408,10 @@ public class ReadPathTests
     }
 
     /// <summary>存在性与 <c>long</c> 计数在真库上判对两边（v0.38 第十九笔）。方言册那一头只能钉
-    /// "打到了取连接那一层"，这一头钉的是句子真的对：<c>Any</c> 发的是 <c>COUNT(*) &gt; 0</c>，
-    /// 所以它的红会落在"有行答 false"或"空集答 true"，而不是"文本不好看"。带页那一档判的是
-    /// <em>那一页</em>有没有 —— 与 <c>Count</c> 同一条派生表咽喉，两颗新口在这里不该分岔。</summary>
+    /// "打到了取连接那一层"，这一头钉的是句子真的对：<c>Any</c> 发的是「<c>SELECT 1 … 取第一行</c>」
+    /// （存在性探针，读到一行即 true、空集交回 null），所以它的红会落在"有行答 false"或"空集答 true"，
+    /// 而不是"文本不好看"。带页那一档判的是 <em>那一页</em>有没有 —— <c>Offset</c> 原样保留，
+    /// 越过全部种子行即空，与 <c>Count</c> 走同一条分页咽喉，两颗口在这里不该分岔。</summary>
     [Fact]
     public async Task Any_and_LongCount_answer_on_the_same_rows_the_count_family_reads()
     {

@@ -1,4 +1,5 @@
 using System.Linq.Expressions;
+using QuickSql.Aop;
 using QuickSql.Metadata;
 using QuickSql.Sql.Ast;
 
@@ -214,7 +215,13 @@ public sealed class BehaviorRegistry
         /// 两格值都走 <see cref="ParameterValue"/> 而不是 <c>InlineLiteral</c>：它们与调用方
         /// <c>Set(o =&gt; o.列, 值)</c> 写进去的东西同级，因此同样要过 <c>ParameterBinding</c> 那颗钩子，
         /// 也只有参数化才让五族的字面量形状不需要在这里各写一份。</summary>
-        internal UpdateStatement Rewrite(EntityContract contract, TableRef table, SqlExpression where, DateTime? deletedAt = null)
+        internal UpdateStatement Rewrite(
+            EntityContract contract,
+            TableRef table,
+            SqlExpression where,
+            DateTime? deletedAt = null,
+            object? entity = null,
+            Action<SoftDeleteValuesEvent>? extraValues = null)
         {
             var (deleted, at) = Columns(contract);
 
@@ -222,6 +229,29 @@ public sealed class BehaviorRegistry
 
             if (at is not null)
                 sets.Add(new SetClause(at, new ParameterValue(deletedAt ?? Clock(), at)));
+
+            // 订阅者往上加的 SET 项（"谁删的"那一格是调用方的领域事实，库里替不了）。
+            // 逐行触发：链式 Delete<T>().Where(...) 那一档没有行可给，那一档不触发（entity 为 null）。
+            if (entity is not null && extraValues is { } hook)
+            {
+                var @event = new SoftDeleteValuesEvent(entity, contract.Table.Name);
+
+                hook(@event);
+
+                foreach (var (column, value) in @event.ExtraValues)
+                {
+                    // 与那两格同一把尺子：自增列不接受写，并发列只比较不书写。
+                    if (column.IsIdentity)
+                        throw new QuickSqlException(
+                            $"{contract.Table.Name} 的自增列 {column.MemberName} 当不了软删的额外列：那一列不接受写（与 UPDATE 链的 Set 同一把尺子）。");
+
+                    if (column.IsConcurrencyToken)
+                        throw new QuickSqlException(
+                            $"{contract.Table.Name} 的并发列 {column.MemberName} 只比较、不书写（§8.2）：把它当软删的额外列，产出的那句 UPDATE 在库里本来就执行不过。");
+
+                    sets.Add(new SetClause(column, new ParameterValue(value, column)));
+                }
+            }
 
             return new UpdateStatement
             {

@@ -1,10 +1,9 @@
-using System.Data.Common;
-using System.Diagnostics.CodeAnalysis;
 using QuickSql.Execution;
 using QuickSql.Metadata;
-using QuickSql.Query;
 using QuickSql.Tracking;
 using QuickSql.Write;
+using System.Data.Common;
+using System.Diagnostics.CodeAnalysis;
 
 namespace QuickSql;
 
@@ -63,7 +62,7 @@ public class DbContext(QuickSqlOrm orm) : IAsyncDisposable, IDisposable
     public DbSet<T> Set<T>() where T : class
     {
         if (_sets.TryGetValue(typeof(T), out var cached))
-            return (DbSet<T>) cached;
+            return (DbSet<T>)cached;
 
         // 注册会话连接工厂（§8.4）：只是挂一只 delegate，不建连接。
         // 连接在首条语句执行时由 AdoExecutor.OpenAsync 调工厂懒建。
@@ -223,7 +222,7 @@ public class DbContext(QuickSqlOrm orm) : IAsyncDisposable, IDisposable
             // 向外（裸 <c>throw;</c> 连堆栈都保真）：收口失败永远排在业务异常之后。
             // <c>RollbackQuiet</c> 只住具体类上（接口是公开面，上不去内部方法）；
             // BeginTransaction 造的恒是 <see cref="QuickSqlTransaction"/> 本尊。
-            ((QuickSqlTransaction) tran).RollbackQuiet();
+            ((QuickSqlTransaction)tran).RollbackQuiet();
 
             throw;
         }

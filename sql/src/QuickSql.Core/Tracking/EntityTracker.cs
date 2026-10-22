@@ -141,6 +141,12 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
         // 两档不重叠、合起来等于 _tokens 全集。
         // 应用自维护只认整型（int/long/short/byte）：非整型的并发列（如 datetime2 时间戳）即使 StoreFillsValue = false
         // 也走 OUTPUT/RETURNING 回读，因为对它们做 +1 没有语义。这是向后兼容：v0.18 之前所有并发列都走回读。
+        //
+        // 【v0.39.0-beta.28 记一笔】这一档的「非整型 ⇒ 回读」把**应用自维护的新值由应用给**那一族挡在外面了
+        // （ABP 的 string ConcurrencyStamp 就是那一族：应用重新生成一颗戳，库负责写它、拿旧值比）。
+        // 而「回读」那一档对那一族根本走不通 —— 应用给的戳库里没有，回读回来的还是旧值。
+        // 要开出来得给契约加一颗**显式的**旗标（默认这一族仍走回读，那是既有基线钉着的），
+        // 那属于契约与生成器那一笔，不是这一格能顺手带过的。
         var storeFilled = new List<int>();
         var appMaintained = new List<int>();
 
@@ -790,12 +796,51 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
     // ── 三档写入 ──────────────────────────────────────────────────────
 
     public async Task<IReadOnlyList<SaveChangesOp>> WritePhaseAsync(WriteOperation phase, List<HookTrace> traces, CancellationToken ct)
-        => phase switch
+    {
+        // 观察类钩子先发（§10.1 那一格）：它在语句建出来之前，于是订阅者改得动实体，
+        // 而那一格改出来的值会被紧接着建出来的语句带出去（取值段读的是实体）。
+        NotifyWritten(phase);
+
+        return phase switch
         {
             WriteOperation.Insert => await WriteInsertsAsync(traces, ct).ConfigureAwait(false),
             WriteOperation.Update => await WriteUpdatesAsync(traces, ct).ConfigureAwait(false),
             _ => await WriteDeletesAsync(traces, ct).ConfigureAwait(false),
         };
+    }
+
+    /// <summary>把这一档要写的实体逐只交给观察者（<c>QuickSqlAop.EntityWritten</c>）。
+    /// <para><b>逐只一次</b>：一只实体在一轮里只被写一次，所以订阅者收到的事件与「这一轮改了几行」一一对应。
+    /// <b>零成本</b>：没订阅就不构造事件对象，一个都不造。</para></summary>
+    void NotifyWritten(WriteOperation phase)
+    {
+        var written = _orm.Aop.EntityWritten;
+
+        if (written is null)
+            return;
+
+        var state = phase switch
+        {
+            WriteOperation.Insert => EntityState.Added,
+            WriteOperation.Update => EntityState.Modified,
+            _ => EntityState.Deleted,
+        };
+
+        var kind = phase switch
+        {
+            WriteOperation.Insert => "insert",
+            WriteOperation.Update => "update",
+            _ => "delete",
+        };
+
+        foreach (var node in _order)
+        {
+            if (node.State != state)
+                continue;
+
+            written(new EntityWrittenEvent(node.Entity, kind));
+        }
+    }
 
     /// <summary>把依赖方手里那些临时外键换成主端此刻的真实键（§8.2 的 <c>Tp</c> 回填）。
     ///
@@ -1283,7 +1328,7 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
             object?[] key = [.. _keyOrdinals.Select(ordinal => node.Snapshot[ordinal])];
             var where = WhereWithTokens(key, node.Snapshot);
             var ast = new DeleteStatement { Table = _table, Where = where };
-            var sql = Emit(ast, soft?.Rewrite(_contract, _table, where, stamp), key.Length + _tokens.Length, traces, ref step);
+            var sql = Emit(ast, soft?.Rewrite(_contract, _table, where, stamp, node.Entity, _orm.Aop.SoftDeleteValues), key.Length + _tokens.Length, traces, ref step);
 
             var affected = await _orm.Ado.NonQueryAsync(sql, deleteTag, ct).ConfigureAwait(false);
 
