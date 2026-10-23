@@ -42,6 +42,7 @@ public sealed class IntegrityClassificationTests
     [InlineData("23505", IntegrityKind.Unique)]
     [InlineData("23502", IntegrityKind.NotNull)]
     [InlineData("23503", IntegrityKind.ForeignKey)]
+    [InlineData("23001", IntegrityKind.ForeignKey)]
     [InlineData("23514", IntegrityKind.Check)]
     public void PG_codes_map_to_their_own_kind(string sqlState, IntegrityKind expected)
         => Assert.Equal(expected, Pg.ClassifyIntegrityError(Error(sqlState))!.Kind);

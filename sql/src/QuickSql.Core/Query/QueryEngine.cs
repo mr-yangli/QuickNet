@@ -1379,9 +1379,13 @@ sealed class QueryEngine
     /// <summary>「按一批键 IN 捞子行」的共用发射段（IncludeMany、拆分 Include 与 <c>DbSet.Load</c>
     /// 两条补载路，全仓四处调用）。<b>这一格回答的是参数预算</b>：IN 的值按 provider 的预算分块
     /// （公式与 Insert 链共用 <see cref="StatementEmitter.RowsPerStatement"/>，没声明预算的走同一颗
-    /// 保守值），每块一条子 SELECT，结果按块序串接。每行的参数个数是 IN 目标列的列数 ——
-    /// 复合键那一形每个条件各绑一遍同一批值，与 <see cref="StatementEmitter"/> 抬头
-    /// 「分母是每行几颗参数而不是几列」同一口径。
+    /// 保守值），每块一条子 SELECT，结果按块序串接。每行的参数个数是 IN 目标列的列数。
+    /// <para><b>复合键发逐行等值的 OR 链，不发"每列各一个 IN"</b>（v0.39 修的那格）：多列各自独立
+    /// <c>fk1 IN (…) AND fk2 IN (…)</c> 是值的叉积——<c>fk1=1, fk2=2</c> 的父会匹配 <c>fk1=1, fk2=9</c>
+    /// 的子行，缝合静默出错；且键值元素是 <c>object[]</c>，按标量绑定驱动必炸。可移植的
+    /// <c>(fk1=@0 AND fk2=@1) OR (fk1=@2 AND fk2=@3)</c> 语义与预算两颗都对上（每行仍是 N 颗参数，
+    /// 与 <see cref="StatementEmitter.RowsPerStatement"/> 的分母同一口径）；元组 IN
+    /// <c>(fk1,fk2) IN ((…),(…))</c> 要方言逐家声明支持形状，留给方言层立格。单列键保持 IN 原样。</para>
     /// <para><b>不分块的后果不是慢，是整条子查询在驱动侧失败</b>：SQL Server 的参数上限是 2100、
     /// Oracle 的 IN 列表上限是 1000 项，而"父集合有多大"由调用方的上一趟查询决定 ——
     /// <c>Take(int.MaxValue)</c> 的"取全部"档不是假想（<c>AdoExecutor</c> 预容量那一格的抬头记过
@@ -1409,21 +1413,45 @@ sealed class QueryEngine
         var dialect = Orm.Provider.Dialect;
         var result = new List<object>();
 
+        var composite = inColumns.Count > 1;
+        var inTarget = composite ? null : new ColumnExpression(targetTable, inColumns[0]);
+
         for (var first = 0; first < keyValues.Count; first += perChunk)
         {
             var width = Math.Min(perChunk, keyValues.Count - first);
 
-            var inValues = new List<SqlExpression>(width);
-
-            for (var i = 0; i < width; i++)
-                inValues.Add(new ParameterValue(keyValues[first + i], null));
-
             SqlExpression? where = null;
 
-            foreach (var column in inColumns)
+            if (composite)
             {
-                var condition = new InExpression(new ColumnExpression(targetTable, column), inValues);
-                where = where is null ? condition : new SqlBinaryExpression(BinaryOperator.And, where, condition);
+                // 逐行等值的 OR 链：(fk1=@0 AND fk2=@1) OR (fk1=@2 AND fk2=@3)。
+                // 发射侧对混嵌 AND/OR 自动加括号（DialectBase.EmitLogical），链条右倾拼接即得人手写的形状。
+                for (var i = 0; i < width; i++)
+                {
+                    var key = (object[])keyValues[first + i]!;
+
+                    SqlExpression? row = null;
+
+                    for (var c = 0; c < inColumns.Count; c++)
+                    {
+                        var equality = new SqlBinaryExpression(BinaryOperator.Equal,
+                            new ColumnExpression(targetTable, inColumns[c]),
+                            new ParameterValue(key[c], null));
+
+                        row = row is null ? equality : new SqlBinaryExpression(BinaryOperator.And, row, equality);
+                    }
+
+                    where = where is null ? row : new SqlBinaryExpression(BinaryOperator.Or, where, row!);
+                }
+            }
+            else
+            {
+                var inValues = new List<SqlExpression>(width);
+
+                for (var i = 0; i < width; i++)
+                    inValues.Add(new ParameterValue(keyValues[first + i], null));
+
+                where = new InExpression(inTarget!, inValues);
             }
 
             var ast = new SelectStatement

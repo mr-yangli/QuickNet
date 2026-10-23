@@ -352,6 +352,30 @@ sealed class UpdateBulkEngine<T> : IUpdateBulk<T> where T : class
         var step = traces.Count;
         var commands = new List<DialectSql>((_rows.Length + width - 1) / width);
 
+        // 过滤器与调用方点名的条件都只翻一次（v0.39 修的那格）：此前这两步在行循环里逐行重付 ——
+        // 1000 行 × 2 条过滤器 = 2000 次完整的表达式树归约，而同一趟 Build 里对同一张表翻译结果不变
+        // （谓词是构建期闭包常量，与行无关）。翻译出来的 SqlExpression 树是不可变的，行循环里只是
+        // 把同一棵子树接到不同的键谓词上。链式路每条语句只翻一次，这一档对齐同一条纪律。
+        SqlExpression[] filterSql;
+
+        {
+            var registrations = _orm.Filters.For(_table);
+            filterSql = new SqlExpression[registrations.Count];
+
+            for (var i = 0; i < registrations.Count; i++)
+                filterSql[i] = _orm.Filters.Translate(registrations[i], _table);
+        }
+
+        SqlExpression[]? extraSql = null;
+
+        if (_extra is not null)
+        {
+            extraSql = new SqlExpression[_extra.Count];
+
+            for (var i = 0; i < _extra.Count; i++)
+                extraSql[i] = _orm.Filters.TranslateFree(_extra[i], _table);
+        }
+
         for (var first = 0; first < _rows.Length; first += width)
         {
             var count = Math.Min(width, _rows.Length - first);
@@ -386,12 +410,18 @@ sealed class UpdateBulkEngine<T> : IUpdateBulk<T> where T : class
                 }
 
                 // 调用方点名的条件排在主键之后、全局过滤器之前：形状与读侧同一条纪律（往末尾追加 AND），
-                // 而翻译走 FilterRegistry 那一份实现，与过滤器同一个翻译器（§10.7 约束 4）。
-                if (_extra is not null)
-                    foreach (var predicate in _extra)
-                        where = new SqlBinaryExpression(BinaryOperator.And, where!, _orm.Filters.TranslateFree(predicate, _table));
+                // 而翻译在行循环外只做一次（见上面那一段），这里只做树拼接。
+                if (extraSql is not null)
+                    foreach (var predicate in extraSql)
+                        where = new SqlBinaryExpression(BinaryOperator.And, where!, predicate);
 
-                var ast = new UpdateStatement { Table = _table, Sets = sets, Where = _orm.Filters.ApplyTo(_table, where!) };
+                var finalWhere = where!;
+
+                if (filterSql.Length > 0)
+                    foreach (var filter in filterSql)
+                        finalWhere = new SqlBinaryExpression(BinaryOperator.And, finalWhere, filter);
+
+                var ast = new UpdateStatement { Table = _table, Sets = sets, Where = finalWhere };
 
                 var writer = new SqlWriter(new StringBuilder(256), parameters, dialect.ParameterPrefix);
                 dialect.Emit(in ast, writer);

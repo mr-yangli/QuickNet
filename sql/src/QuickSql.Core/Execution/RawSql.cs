@@ -62,6 +62,13 @@ public static class RawSql
             parameters.Add(new AdoParameter(parameterPrefix + property.Name, value, System.Data.DbType.Object, 0));
         }
 
+        // 索引器不算参数：唯一"属性"是索引器的对象在这里会交回一张空参数表、语句照发，而库侧等到
+        // 绑参时才炸"少参数"。判空必须在过滤之后，而不是沿用上面那颗"没有公共实例属性"的原始检查。
+        if (parameters.Count == 0)
+            throw new QuickSqlException(
+                $"原生 SQL 的参数对象 {args.GetType().Name} 上没有可用的公共实例属性（索引器不算）：参数是从属性名取名字的，" +
+                "所以这里要么给一个匿名对象（new { id = 1 }），要么干脆不传参数。");
+
         return new DialectSql(sql, parameters);
     }
 

@@ -187,7 +187,7 @@ public abstract class MySqlProviderBase : IDbProvider
     /// 走 §16.22 ② 那条"按名字回契约查"的路。</para>
     /// <para>本家的叶子是 TiDB 与 OceanBase：线协议一致，号也沿用 MySQL，但"沿用"在本仓库里从来不是判据
     /// （§8.4 那条 DuckDB 的教训），各叶子在真库上撞过一次之前，这一格对它们算推断。</para></summary>
-    public IntegrityViolation? ClassifyIntegrityError(DbException error)
+    public virtual IntegrityViolation? ClassifyIntegrityError(DbException error)
     {
         if (!string.Equals(error.SqlState, "23000", StringComparison.OrdinalIgnoreCase))
             return null;

@@ -286,7 +286,9 @@ public static class StructureDiff
 
         foreach (var index in read)
         {
-            readByKey[names.Join(index.Columns)] = index;
+            // 匹配键带唯一性（v0.39 修的那格）：只比列序列的话，契约里的非唯一索引会与库里
+            // 同列序的唯一索引判成"已存在"，唯一性差异静默放过（反向同理）。
+            readByKey[IndexKey(names.Join(index.Columns), index.IsUnique)] = index;
             readByName[names.Key(index.Name)] = index;
         }
 
@@ -296,9 +298,18 @@ public static class StructureDiff
         {
             var key = names.Join(wanted.ColumnNames);
 
-            if (readByKey.TryGetValue(key, out var same))
+            if (readByKey.TryGetValue(IndexKey(key, Unique(wanted)), out var same))
             {
                 matched.Add(names.Key(same.Name));
+                continue;
+            }
+
+            // 列序列相同、唯一性相反：既不判"已存在"也不盲建一条同列索引（同一组列两颗索引只是双倍写放大），
+            // 改唯一性要走 DROP + CREATE，点名要人工。
+            if (readByKey.TryGetValue(IndexKey(key, !Unique(wanted)), out var flipped))
+            {
+                matched.Add(names.Key(flipped.Name));
+                refused.Add($"索引 {wanted.Name} 在库里已有同列序但唯一性相反的那一条（{flipped.Name}）：改唯一性不是补一条索引能解决的（要人工）");
                 continue;
             }
 
@@ -334,6 +345,13 @@ public static class StructureDiff
         }
     }
 
+    /// <summary>索引匹配键：列序列 + 唯一性。唯一性进键是 v0.39 修的那格 ——
+    /// 同列序的唯一/非唯一两条索引不是同一个约束形状。</summary>
+    static string IndexKey(string columns, bool unique) => unique ? "u:" + columns : "n:" + columns;
+
+    /// <summary>契约侧的唯一性读法：IndexKind.Unique 即唯一；唯一约束（Unique 约束档）在
+    /// <see cref="SchemaIndex.IsConstraint"/> 那一侧记账，不进这里。</summary>
+    static bool Unique(IndexContract index) => index.Kind == IndexKind.Unique;
 }
 
 /// <summary>名字在这家库里的配法（§9.2 的大小写那一格在 diff 侧的读数）。</summary>

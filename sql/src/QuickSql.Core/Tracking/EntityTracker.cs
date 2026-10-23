@@ -509,7 +509,12 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
     public EntityState? StateOf(object entity)
         => _byRef.TryGetValue(entity, out var node) ? node.State : null;
 
-    public object?[] KeyValuesOf(object entity) => KeyValues((T) entity);
+    public object?[] KeyValuesOf(object entity)
+    {
+        ArgumentNullException.ThrowIfNull(entity);
+
+        return KeyValues((T) entity);
+    }
 
     /// <summary>级联落键：把父那一串的键值写进本档这几列外键。<b>先换型再写</b> —— schema 的 setter
     /// 是强转的装箱写入，主端 <c>bigint</c> 配子端 <c>int</c> 是合法 DDL，不換就是现场一次
@@ -558,6 +563,10 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
     /// §8.2 的"精确控制"会变成一句写不出来的话（名字笔误也要等到运行期才现形）。</summary>
     public EntityEntry<T> Entry(object entity)
     {
+        // 与 Add/Attach/Remove 同一款守卫：null 落到下面的型别判断会以一句 NRE 收场，
+        // 而"传了 null"是调用方的错，要按调用方的错报。
+        ArgumentNullException.ThrowIfNull(entity);
+
         if (entity is not T typed)
             throw new QuickSqlException($"{_contract.Table.Name} 的跟踪器收到的不是 {typeof(T).Name} 而是 {entity.GetType().Name}：派生实例要按<em>基类</em>取档（Set<{typeof(T).Name}>().Entry(...)），" +
                 "各占一份契约是继承映射的事，P2/P3 才接线（§8.2 的按类型切开）。");
@@ -646,8 +655,10 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
 
             for (var ordinal = 0; ordinal < _columns.Length; ordinal++)
             {
-                var differs = !Equals(_schema.GetValue(entity, ordinal), node.Snapshot[ordinal]);
-                var dirty = node.Overrides[ordinal] ?? differs;
+                // 覆盖位先问：显式标脏（State = Modified 的 MarkAllWritable）与显式标不脏的列，
+                // 那次 GetValue（装箱）+ Equals 的结果根本没人消费 —— 求值序调换后，这一列
+                // 从"读+比"降为一次数组读，显式 Modified 的实体在每轮侦测里为每列省一笔。
+                var dirty = node.Overrides[ordinal] ?? !Equals(_schema.GetValue(entity, ordinal), node.Snapshot[ordinal]);
 
                 node.Dirty[ordinal] = dirty;
                 any |= dirty;
@@ -1326,6 +1337,16 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
                     throw Unwritable(ordinal, node);
 
             object?[] key = [.. _keyOrdinals.Select(ordinal => node.Snapshot[ordinal])];
+
+            // <b>其余写路都过了 <see cref="RequireDefinite"/> 那把尺子，唯独"已跟踪节点标删 → 发删除语句"
+            // 这条路此前只查了"有没有主键列"（<see cref="RequireKey"/>）</b>：快照里躺着 0 / Guid.Empty 的键
+            // 会发出一句 <c>WHERE [Id] = 0</c> —— 命中 0 行、无并发列时连冲突判据都不触发，
+            // 删除意图静默丢失而报告只说「0 行」（§12.2 的静默丢写）。发射前最后一道闸，覆盖所有到达路径。
+            if (!IsDefinite(key))
+                throw new QuickSqlException($"{_contract.Table.Name} 的这一行快照里主键没有可定位的值（{Text(key)}），而删除要按主键定位行：" +
+                    "一句按 0 / 空键写的 WHERE 只会命中 0 行，报告却照样说「0 行」——删除意图就这么静默丢了。" +
+                    "库递出来的行本来就该有键；客户端给键的表请先把值填上再标删。");
+
             var where = WhereWithTokens(key, node.Snapshot);
             var ast = new DeleteStatement { Table = _table, Where = where };
             var sql = Emit(ast, soft?.Rewrite(_contract, _table, where, stamp, node.Entity, _orm.Aop.SoftDeleteValues), key.Length + _tokens.Length, traces, ref step);

@@ -28,6 +28,18 @@ public sealed class GeneratedEntitySchemaRegistry : IEntitySchemaRegistry
     readonly TypeTable<object> _schemas = new();
     readonly TypeTable<object> _validators = new();
     readonly TypeTable<Func<DbDataReader, ReadPlan, object>> _readers = new();
+
+    /// <summary>G1 侧"解析过哪些实体"的账。<see cref="RegisteredTypes"/> 过去只透传
+    /// <see cref="_fallback"/> 那一份，而 G1 命中的实体从不触碰兜底注册表 ——
+    /// 纯 G1 库上 <see cref="SchemaSyncer"/> 枚举不到任何一张生成表，
+    /// <c>SyncStructureAsync</c> 静默交回 Empty（启动期"先 Sync 后写"的顺序下症状是运行期"表不存在"）。
+    /// 登记放在只跑一次的工厂里（<see cref="BuildContract"/> 等），命中路径零额外成本。</summary>
+    readonly TypeTable<byte> _g1Types = new();
+
+    public IReadOnlyCollection<Type> RegisteredTypes
+        => _g1Types.Count == 0
+            ? _fallback.RegisteredTypes
+            : [.. _g1Types.Keys, .. _fallback.RegisteredTypes];
     readonly bool _integralPrimaryKeyAutoIncrement;
 
     public GeneratedEntitySchemaRegistry(IDbProvider provider, GeneratedEntityLookup lookup, EntitySchemaOptions? options = null, ModelConfiguration? model = null,
@@ -48,8 +60,6 @@ public sealed class GeneratedEntitySchemaRegistry : IEntitySchemaRegistry
     public ContractResolver Resolver { get; }
 
     public EntitySchemaOptions Options { get; }
-
-    public IReadOnlyCollection<Type> RegisteredTypes => _fallback.RegisteredTypes;
 
     public EntityContract Contract(Type clrType)
         => Find(clrType) is null
@@ -87,6 +97,8 @@ public sealed class GeneratedEntitySchemaRegistry : IEntitySchemaRegistry
     /// 所以「生成路径与反射路径逐字段相等」（§13.11）不是巧合，而是同一段代码的两个输入。</summary>
     EntityContract BuildContract(Type clrType)
     {
+        _g1Types.Add(clrType, 0);
+
         var metadata = Find(clrType)!;
 
         return EntityContractFactory.Build(metadata.ClrType, metadata.Table, metadata.Columns, metadata.Indexes,
@@ -95,6 +107,8 @@ public sealed class GeneratedEntitySchemaRegistry : IEntitySchemaRegistry
 
     object BuildSchema(Type clrType)
     {
+        _g1Types.Add(clrType, 0);
+
         var metadata = Find(clrType)!;
 
         return metadata.CreateSchema(Contract(metadata.ClrType));
@@ -102,6 +116,8 @@ public sealed class GeneratedEntitySchemaRegistry : IEntitySchemaRegistry
 
     object BuildValidator(Type clrType)
     {
+        _g1Types.Add(clrType, 0);
+
         var metadata = Find(clrType)!;
 
         return metadata.CreateValidator!(Contract(metadata.ClrType));

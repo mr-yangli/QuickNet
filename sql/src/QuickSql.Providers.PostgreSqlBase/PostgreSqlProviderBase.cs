@@ -125,7 +125,8 @@ public abstract class PostgreSqlProviderBase : IDbProvider
     {
         "23505" => new IntegrityViolation(IntegrityKind.Unique, PgConstraintName(error)),
         "23502" => new IntegrityViolation(IntegrityKind.NotNull),
-        "23503" => new IntegrityViolation(IntegrityKind.ForeignKey, PgConstraintName(error)),
+        // 23001 是 ON DELETE RESTRICT 那一档的外键违例（restrict_violation），与 23503 同一处置。
+        "23503" or "23001" => new IntegrityViolation(IntegrityKind.ForeignKey, PgConstraintName(error)),
         "23514" => new IntegrityViolation(IntegrityKind.Check, PgConstraintName(error)),
         _ => null,
     };

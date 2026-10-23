@@ -12,7 +12,11 @@ namespace QuickSql.Tracking;
 ///
 /// <b>值本身就是装箱的</b>：<c>IEntityTypeSchema&lt;T&gt;.GetValue</c> 返回 <see cref="object"/>，
 /// 所以键这一路的装箱发生在取值那一步，不是这里加的。消除它要给 schema 加一份非装箱的主键读取口，
-/// 记在 §14 的 P1 余项里。</summary>
+/// 记在 §14 的 P1 余项里。
+///
+/// <b><c>byte[]</c> 特判按内容判</b>（v0.39 修的那格）：varbinary 主键是合法 DDL，而 <c>object.Equals</c>
+/// 对数组是引用相等 —— 两次物化的同键行判不成同一身份，<c>Find(new byte[]{…})</c> 永远不中。
+/// 哈希用前 4 字节 + 长度折进去，相等用 <see cref="MemoryExtensions.SequenceEqual"/>：免分配、不定长数组全扫。</summary>
 readonly struct IdentityKey(object?[] values) : IEquatable<IdentityKey>
 {
     readonly object?[] _values = values;
@@ -27,8 +31,21 @@ readonly struct IdentityKey(object?[] values) : IEquatable<IdentityKey>
             return false;
 
         for (var i = 0; i < values.Length; i++)
-            if (!Equals(values[i], other._values[i]))
+        {
+            var left = values[i];
+            var right = other._values[i];
+
+            if (left is byte[] bytes && right is byte[] otherBytes)
+            {
+                if (!bytes.AsSpan().SequenceEqual(otherBytes))
+                    return false;
+
+                continue;
+            }
+
+            if (!Equals(left, right))
                 return false;
+        }
 
         return true;
     }
@@ -44,7 +61,21 @@ readonly struct IdentityKey(object?[] values) : IEquatable<IdentityKey>
         var hash = new HashCode();
 
         foreach (var value in values)
+        {
+            // byte[] 的哈希按内容算：System.Collections.HashCode 对数组走引用哈希（object.GetHashCode），
+            // 与上面的内容相等判据必须同源，否则同键两实例哈希不同、字典永远查不中。
+            if (value is byte[] bytes)
+            {
+                hash.Add(bytes.Length);
+
+                for (var i = 0; i < bytes.Length && i < 8; i++)
+                    hash.Add(bytes[i]);
+
+                continue;
+            }
+
             hash.Add(value);
+        }
 
         return hash.ToHashCode();
     }

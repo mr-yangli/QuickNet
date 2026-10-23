@@ -29,8 +29,8 @@ public sealed class QuickSqlTransaction : IQuickSqlTransaction
     // ── 嵌套（SAVEPOINT）──────────────────────────────────────────────
     // 保存点事务共享外层的连接与 DbTransaction，不独占地占有它们。
     // _parent 非 null = 这是一只保存点事务，Commit/Rollback 走保存点路径而不是真提交/回滚。
-
-    readonly QuickSqlTransaction? _parent;
+    // internal：BeginTransaction 发保存点名之前要沿它解析到根的计数器（三级嵌套重名那一格）。
+    internal readonly QuickSqlTransaction? _parent;
     readonly string? _savepointName;
 
     /// <summary>这只保存点事务走的是<em>文本</em>那一条路（而不是驱动 <c>DbTransaction.Save</c>）。
@@ -53,8 +53,10 @@ public sealed class QuickSqlTransaction : IQuickSqlTransaction
     /// 只有根事务会拿到 <c>true</c>：保存点事务共用外层的连接与归属，不重复钉。</summary>
     internal bool SessionScoped;
 
-    /// <summary>保存点发号器：每在这条事务上创建一个嵌套保存点就 +1。只根事务持有它，
-    /// 保存点事务共享外层的计数器（通过 <c>parent._nextSavepointId++</c>）。
+    /// <summary>保存点发号器：每在这条事务上创建一个嵌套保存点就 +1。<b>只有根事务上的这份是权威的</b>：
+    /// 保存点事务各持自己的实例字段（初值 0），发号前由 <see cref="AdoExecutor.BeginTransaction"/> 先解析到根
+    /// （<c>while (ambient._parent is { } p) ambient = p;</c>）再递增根的这份 —— 否则二级嵌套会再发一个
+    /// 与父同名的保存点，MySQL 血统上同名删旧的，中层 Commit 的 RELEASE 撤的就是最里层。
     /// 单调递增不回退：即使保存点被回滚了，那个号码也不再使用，避免名称碰撞。</summary>
     internal int _nextSavepointId;
 
@@ -144,8 +146,16 @@ public sealed class QuickSqlTransaction : IQuickSqlTransaction
         }
         else
         {
-            _transaction.Commit();
-            Finish();
+            // Commit 抛（连接断、锁超时）也要收敛：Completed 置位、环境槽位摘掉、连接归还 ——
+            // 否则槽里挂着一场"回不去也用不了"的已死事务，同流后续语句继续往死连接上撞。
+            try
+            {
+                _transaction.Commit();
+            }
+            finally
+            {
+                Finish();
+            }
         }
     }
 

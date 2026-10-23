@@ -43,7 +43,8 @@ public interface IDbProvider
     /// 「provider 编译期不认识驱动」打架，判据是一张纯码表。</para>
     /// <para><b>默认 null = 判不出，收口点原样抛驱动那颗，不包装、不猜</b>。这不是兜底而是这一格的主要
     /// 安全属性：误分类会把外键冲突说成"重复提交"，用户照着提示再点一次而库里根本没有那一行；
-    /// 不分类只是消费者拿到今天同样的裸异常。§8.4 首批四家，其余十七家交在这一格上。</para></summary>
+    /// 不分类只是消费者拿到今天同样的裸异常。§8.4 首批四家；18 颗叶子里 11 家有实现
+    /// （PG 系 6 + MySQL 系 3 + SqlServer + Sqlite）、DuckDb 显式退回"判不出"，其余 7 家交在这一格上。</para></summary>
     /// <param name="error">驱动抛回来的那一颗（已经是 <see cref="DbException"/> 才进得来这条口子）。</param>
     IntegrityViolation? ClassifyIntegrityError(DbException error) => null;
 

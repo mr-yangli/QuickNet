@@ -373,15 +373,21 @@ sealed class InsertEngine<T> : IInsert<T> where T : class
         var count = ordinals?.Length ?? preparation.Cells.Length;
         var payload = new object?[count][];
 
+        // 名字按列物化一次：名字在这一趟里是白花的（装载通道不接 DbParameter），但类型归一只长在这颗门上，
+        // 另起一条"不带名字的转换"就是第七份 Normalize（§12.1 那句"同一条插入在几家参数化形状不同"的第二个出处）。
+        // 此前 $"c{column}" 在 row × column 双层循环里逐格插值 —— 百万行宽表的 COPY 预处理就是上百万次字符串分配。
+        var names = new string[columns.Length];
+
+        for (var column = 0; column < names.Length; column++)
+            names[column] = $"c{column}";
+
         for (var row = 0; row < payload.Length; row++)
         {
             var source = preparation.Cells[ordinals is null ? row : ordinals[row]];
             var cells = new object?[columns.Length];
 
-            // 名字在这一趟里是白花的（装载通道不接 DbParameter），但类型归一只长在这颗门上：
-            // 另起一条"不带名字的转换"就是第七份 Normalize（§12.1 那句"同一条插入在几家参数化形状不同"的第二个出处）。
             for (var column = 0; column < columns.Length; column++)
-                cells[column] = binder.CreateParameter($"c{column}", source[column], columns[column]).Value;
+                cells[column] = binder.CreateParameter(names[column], source[column], columns[column]).Value;
 
             payload[row] = cells;
         }

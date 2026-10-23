@@ -54,7 +54,17 @@ public static class ValueConverter
         var underlying = Nullable.GetUnderlyingType(target) ?? target;
 
         if (underlying.IsEnum)
+        {
+            // 整数那一半是七族约定（枚举存整数），字符串那一半接的是两支真实来路：
+            // [Column(TypeName=…)] 强制字符串列与遗留库。此前字符串直接 FormatException，
+            // 说不出是哪一列哪个枚举；现在认得出就收，认不出给可读的错。
+            if (value is string text)
+                return Enum.TryParse(underlying, text, ignoreCase: true, out var parsed)
+                    ? (T)parsed!
+                    : throw new QuickSqlException($"无法把字符串 \"{text}\" 读成枚举 {underlying.Name}：列值与枚举成员名对不上（枚举按约定存整数，字符串列要么是列型强制、要么是遗留库）。");
+
             return (T)Enum.ToObject(underlying, Convert.ToInt64(value, CultureInfo.InvariantCulture));
+        }
 
         if (underlying == typeof(Guid))
             return (T)(object)ToGuid(value);
@@ -107,6 +117,13 @@ public static class ValueConverter
     {
         bool flag => flag,
         byte bit => bit != 0,
+
+        // 类头注释自宣的"金仓 boolean 可能回 t/f"这一形此前接不住：string 走 Convert 抛
+        // FormatException，char 走 Convert.ToInt64 —— 'f' 是 102，≠0，被读成 true。
+        // 潜伏格（当前 PG 血统驱动交回真 bool），但 Oracle 兼容模式那颗"连接串换方言"的口子一开就现形。
+        "t" or "T" or "true" or "True" or "TRUE" or "1" or "y" or "Y" or "yes" => true,
+        "f" or "F" or "false" or "False" or "FALSE" or "0" or "n" or "N" or "no" => false,
+        char c => c is 't' or 'T' or '1' or 'y' or 'Y',
         _ => Convert.ToInt64(value, CultureInfo.InvariantCulture) != 0,
     };
 
@@ -329,6 +346,11 @@ public static class Materializer
                 ?? throw new QuickSqlException($"Include 目标表 {node.TargetTable.Alias} 没有实体契约");
 
             var read = registry.ReadDelegate(contract.ClrType);
+
+            // 与跟踪器侧的 RequireKey 同一口的可读拒绝：空数组直接取 [0] 是一句裸下标异常，
+            // 说不出是"这个实体没有主键所以 Include 不了"。
+            if (contract.PrimaryKey.Length == 0)
+                throw new QuickSqlException($"Include 目标实体 {contract.ClrType.Name} 没有主键：Include 靠主键判\"这一行是不是 NULL 行\"，无主键的实体接不上（§8.2 的无 PK 自动不跟踪同一裁决）。");
 
             var firstPk = contract.PrimaryKey[0];
             var firstPkIndex = Array.IndexOf(contract.Columns, firstPk);

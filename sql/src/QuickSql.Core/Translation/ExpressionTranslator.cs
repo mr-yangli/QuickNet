@@ -2,6 +2,7 @@ using System.Collections;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using QuickSql.Metadata;
 using QuickSql.Providers;
 using QuickSql.Schema;
@@ -9,6 +10,7 @@ using QuickSql.Query;
 using QuickSql.Query.Model;
 using QuickSql.Sql;
 using QuickSql.Sql.Ast;
+using QuickSql.Write;
 using System.Linq.Expressions;
 
 namespace QuickSql.Translation;
@@ -126,7 +128,15 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
         };
 
     /// <summary>求值「不引用任何查询参数」的子表达式。先走常数/字段/属性这条无代码生成的快路，
-    /// 只有真正需要执行用户算术时才付 <c>Compile()</c> 的成本。</summary>
+    /// 只有真正需要执行用户算术时才付 <c>Compile()</c> 的成本。
+    ///
+    /// <para><b>编译产物按节点缓存</b>（<see cref="ConditionalWeakTable{TKey,TValue}"/>，键随节点回收）：
+    /// 链式对象复用时（§5.11）<c>Where(o =&gt; …)</c> 交回来的是同一棵 lambda 子树，第 N 次执行若每次都
+    /// 为每颗不可约子表达式重新 Compile，那是数十微秒级的每次执行固定税。节点的求值只依赖节点自身
+    /// （闭包已捕获在里面），与 <see cref="Scope"/> 无关，所以这份缓存是安全的；整句翻译的缓存要过
+    /// "别名/参数位随查询模型变"那一关，没在这里一起做。</para></summary>
+    static readonly ConditionalWeakTable<Expression, StrongBox<Func<object>>> CompiledEvaluators = new();
+
     public static object? Evaluate(Expression node) => node switch
     {
         ConstantExpression c => c.Value,
@@ -141,10 +151,13 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
         // 编译成 Func<object> 直接调用，不走 DynamicInvoke：后者每次调用多一层运行期参数封送与装箱，
         // 而这颗退路在谓词翻译里按"每颗不可约子表达式"付 —— 同一次编译的产物，调用形状没有理由更贵。
         // void 子表达式（原 DynamicInvoke 对它是 null）在 Convert 处编不出来，单独按 null 交回，语义逐字保留。
-        _ => node.Type == typeof(void)
-            ? null
-            : Expression.Lambda<Func<object>>(Expression.Convert(node, typeof(object))).Compile()(),
+        _ => node.Type == typeof(void) ? null : CompiledEvaluator(node)(),
     };
+
+    static Func<object> CompiledEvaluator(Expression node)
+        => CompiledEvaluators.GetValue(node,
+            static n => new StrongBox<Func<object>>(
+                Expression.Lambda<Func<object>>(Expression.Convert(n, typeof(object))).Compile())).Value!;
 
     static object? Coerce(object? value, Type target)
     {
@@ -351,11 +364,28 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
         var lhs = Visit(node.Left, scope, leftColumn ?? hint);
         var rhs = Visit(node.Right, scope, rightColumn ?? hint);
 
-        if (node.NodeType is ExpressionType.Equal or ExpressionType.NotEqual && rhs is ParameterValue { Value: null })
-            return new SqlUnaryExpression(node.NodeType == ExpressionType.Equal ? UnaryOperator.IsNull : UnaryOperator.IsNotNull, lhs);
+        // null / bool 两侧都判（Yoda 条件也要走同一口折叠）：折叠只看右的那一版，
+        // `null == o.Name` 会落成 `WHERE @p0 = [Name]`——语法对、结果错，任何行都是 UNKNOWN（§5.8）。
+        // 列侧在哪边就折哪边。
+        if (node.NodeType is ExpressionType.Equal or ExpressionType.NotEqual)
+        {
+            var isEqual = node.NodeType == ExpressionType.Equal;
 
-        if (node.NodeType == ExpressionType.Equal && rhs is ParameterValue { Value: bool flag })
-            return new SqlUnaryExpression(flag ? UnaryOperator.IsTrue : UnaryOperator.IsFalse, lhs);
+            if (rhs is ParameterValue { Value: null })
+                return new SqlUnaryExpression(isEqual ? UnaryOperator.IsNull : UnaryOperator.IsNotNull, lhs);
+
+            if (lhs is ParameterValue { Value: null })
+                return new SqlUnaryExpression(isEqual ? UnaryOperator.IsNull : UnaryOperator.IsNotNull, rhs);
+        }
+
+        if (node.NodeType == ExpressionType.Equal)
+        {
+            if (rhs is ParameterValue { Value: bool flag })
+                return new SqlUnaryExpression(flag ? UnaryOperator.IsTrue : UnaryOperator.IsFalse, lhs);
+
+            if (lhs is ParameterValue { Value: bool yodaFlag })
+                return new SqlUnaryExpression(yodaFlag ? UnaryOperator.IsTrue : UnaryOperator.IsFalse, rhs);
+        }
 
         // C# 的 "a + b" 把 null 当空串，而 T-SQL/Oracle 的 + 会把整个表达式变成 NULL：
         // 不折成 CONCAT，== "xy" 这类查询在库里会悄悄少行（§5.8 的「绝不静默生成错 SQL」）。
@@ -682,7 +712,27 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
             // 空集合特化成恒假（§5.7 的 Contains 条目），恒假的写法由方言决定。
             return new InlineLiteral(Provider.Dialect.EmptySetPredicate);
 
-        return new InExpression(target, [.. values]);
+        // 按 provider 预算分块（v0.39 修的那格）：整条 IN 一次发出，SQL Server 的 2100 参数上限、
+        // Oracle 的 1000 项 IN 列表上限会让大集合直接在驱动侧炸——Include 衼条路早就按预算分块了，
+        // 唯独用户谓词这条最高频的 IN 是漏网的。超预算发 `x IN (…) OR x IN (…)`：
+        // 发射侧对混嵌 AND/OR 自动加括号（EmitLogical / EmitBooleanOperand），NOT 包整个链条也括得对。
+        var budget = Provider.Bulk?.ParameterBudget ?? StatementEmitter.ConservativeParameterBudget;
+        var perChunk = Math.Max(1, StatementEmitter.RowsPerStatement(budget, 1));
+
+        if (values.Count <= perChunk)
+            return new InExpression(target, [.. values]);
+
+        SqlExpression? chain = null;
+
+        for (var first = 0; first < values.Count; first += perChunk)
+        {
+            var width = Math.Min(perChunk, values.Count - first);
+            var condition = new InExpression(target, values.GetRange(first, width));
+
+            chain = chain is null ? condition : new SqlBinaryExpression(BinaryOperator.Or, chain, condition);
+        }
+
+        return chain!;
     }
 
     // ── 分组链上的聚合（§5.3） ────────────────────────────────────────
