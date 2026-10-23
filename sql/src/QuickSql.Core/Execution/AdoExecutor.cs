@@ -1,8 +1,10 @@
+using System.Collections.Concurrent;
 using System.Data;
 using System.Data.Common;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
+using System.Runtime.ExceptionServices;
 using System.Text;
 using QuickSql.Aop;
 using QuickSql.Metadata;
@@ -163,10 +165,13 @@ public sealed partial class AdoExecutor
         var started = Stopwatch.GetTimestamp();
 
         await using var session = await OpenAsync(sql, tag, ct).ConfigureAwait(false);
-        await using var reader = await session.Command.ExecuteReaderAsync(ct).ConfigureAwait(false);
 
         try
         {
+            // reader 的获取在 try 之内：驱动在 ExecuteReader 当场抛（SELECT 语法错、连接断）也进 Failed，
+            // 与消费段同一口出——否则观察钩子与完整性分类对"发送阶段"的失败集体失明。
+            await using var reader = await session.Command.ExecuteReaderAsync(ct).ConfigureAwait(false);
+
             var list = new List<T>(expectedRows is > 0 and var wanted ? Math.Min(wanted, MaxPreallocatedRows) : 0);
 
             if (Aop.Materialized is { } materialized)
@@ -191,8 +196,7 @@ public sealed partial class AdoExecutor
         }
         catch (Exception ex)
         {
-            Failed(ex, sql, started);
-            throw;
+            throw Rethrow(ex, Failed(ex, sql, started));
         }
     }
 
@@ -203,10 +207,12 @@ public sealed partial class AdoExecutor
         var started = Stopwatch.GetTimestamp();
 
         await using var session = await OpenAsync(sql, tag, ct).ConfigureAwait(false);
-        await using var reader = await session.Command.ExecuteReaderAsync(ct).ConfigureAwait(false);
 
         try
         {
+            // 同 QueryAsync：reader 获取在 try 之内（发送阶段失败也进 Failed）。
+            await using var reader = await session.Command.ExecuteReaderAsync(ct).ConfigureAwait(false);
+
             if (!await reader.ReadAsync(ct).ConfigureAwait(false))
             {
                 Succeeded(sql, tag, started, 0, session.Route);
@@ -220,34 +226,70 @@ public sealed partial class AdoExecutor
         }
         catch (Exception ex)
         {
-            Failed(ex, sql, started);
-            throw;
+            throw Rethrow(ex, Failed(ex, sql, started));
         }
     }
 
-    /// <summary>流式读取：连接活在整个枚举期间，调用方中途 <c>break</c> 时由 <c>DisposeAsync</c> 归还。</summary>
+    /// <summary>流式读取：连接活在整个枚举期间，调用方中途 <c>break</c> 时由 <c>DisposeAsync</c> 归还。
+    /// <para><b>失败也要报失败</b>：取数与映射两步包在带 catch 的内层 try 里（yield 不许进带 catch 的 try，
+    /// 所以把所有会抛的工作都挪到 <c>yield return</c> 之前），失败走 <see cref="Failed"/> 分类与
+    /// <see cref="QuickSqlAop.Error"/> 播报；正常走完 <see cref="Succeeded"/> 记全量行，中途
+    /// <c>break</c> 由 finally 记"实际读到的行数"——三种去向各报各的，不再把失败播成成功。</para></summary>
     public async IAsyncEnumerable<T> StreamAsync<T>(DialectSql sql, Func<DbDataReader, T> map, ExecutionTag tag, [EnumeratorCancellation] CancellationToken ct = default)
     {
         BeforeExecute(sql, tag);
 
         var started = Stopwatch.GetTimestamp();
         var rows = 0;
+        var failed = false;
 
         await using var session = await OpenAsync(sql, tag, ct).ConfigureAwait(false);
-        await using var reader = await session.Command.ExecuteReaderAsync(ct).ConfigureAwait(false);
+
+        DbDataReader readerSource;
 
         try
         {
-            while (await reader.ReadAsync(ct).ConfigureAwait(false))
+            readerSource = await session.Command.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            failed = true;
+            Failed(ex, sql, started);
+            throw;
+        }
+
+        await using var reader = readerSource;
+
+        try
+        {
+            while (true)
             {
+                T current;
+
+                try
+                {
+                    if (!await reader.ReadAsync(ct).ConfigureAwait(false))
+                        break;
+
+                    current = map(reader);
+                }
+                catch (Exception ex)
+                {
+                    failed = true;
+                    Failed(ex, sql, started);
+                    throw;
+                }
+
                 rows++;
-                yield return map(reader);
+                yield return current;
             }
         }
         finally
         {
-            // 提前 break 不算错误，但行数必须是"实际读到的行数"，不能报成完整结果集。
-            Succeeded(sql, tag, started, rows, session.Route);
+            // 正常走完记全量行；提前 break 不算错误，但行数必须是"实际读到的行数"，不能报成完整结果集；
+            // 失败那一格在 Failed 里报过，这里不重复。
+            if (!failed)
+                Succeeded(sql, tag, started, rows, session.Route);
         }
     }
 
@@ -274,8 +316,7 @@ public sealed partial class AdoExecutor
         }
         catch (Exception ex)
         {
-            Failed(ex, sql, started);
-            throw;
+            throw Rethrow(ex, Failed(ex, sql, started));
         }
     }
 
@@ -294,10 +335,13 @@ public sealed partial class AdoExecutor
         var started = Stopwatch.GetTimestamp();
 
         await using var session = await OpenAsync(sql, tag, RouteIntent.Write, ct).ConfigureAwait(false);
-        await using var reader = await session.Command.ExecuteReaderAsync(ct).ConfigureAwait(false);
 
         try
         {
+            // reader 的获取在 try 之内：完整性违例（FK/唯一键）恰恰是在 ExecuteReader 当场抛的 ——
+            // 这是 OUTPUT/RETURNING 写路径的常态，挪进来之后分类漏斗才真正盖住这条最高频的写出口。
+            await using var reader = await session.Command.ExecuteReaderAsync(ct).ConfigureAwait(false);
+
             // 跳到第一个"带列"的结果集：见上一段 doc 的那一停。空回包（虚谷旧 RETURNING 档的 FIELDS=0）
             // 在这里同样是"没有下一结果集"，落回 0 行由调用方的 0/N 守卫接住 —— 不在此处另立判据。
             while (reader.FieldCount == 0 && await reader.NextResultAsync(ct).ConfigureAwait(false))
@@ -318,8 +362,7 @@ public sealed partial class AdoExecutor
         }
         catch (Exception ex)
         {
-            Failed(ex, sql, started);
-            throw;
+            throw Rethrow(ex, Failed(ex, sql, started));
         }
     }
 
@@ -374,8 +417,7 @@ public sealed partial class AdoExecutor
         }
         catch (Exception ex)
         {
-            Failed(ex, descriptor, started);
-            throw;
+            throw Rethrow(ex, Failed(ex, descriptor, started));
         }
     }
 
@@ -426,7 +468,10 @@ public sealed partial class AdoExecutor
                 "这一家的事务要么驱动不理解、要么服务端默认不开（如 ClickHouse 的多语句事务是实验档且驱动 BeginDbTransaction 本地抛）：" +
                 "不要在这里开事务——内核写路径已经按这一位改走逐句 autocommit 直发；要一次整批落库，请在库侧用单条语句表达（§6）。");
 
-        var ambient = QuickSqlTransaction.Ambient;
+        // 形态 (4) 那一格与 <see cref="QuickSqlTransaction.For"/> 同一判据：帧里没有时回退读本实例钉着的那场。
+        // 不回退的结局是：ABP 工作单元在别的帧开的会话事务还在位，用户在仓储里再调 BeginTransaction，
+        // 这里看不见它，就在新连接上开出第二场互不相干的独立事务——内层 Commit 即落库，外层 Rollback 撤不掉。
+        var ambient = QuickSqlTransaction.Ambient ?? SessionTransaction;
 
         // Requires：外层事务在位时，创建保存点而不是新开事务。
         // 隔离级别在保存点路径上被忽略（SAVEPOINT 继承外层事务的隔离级别，这是 SQL 标准行为）。
@@ -440,7 +485,15 @@ public sealed partial class AdoExecutor
             if (!string.Equals(ambient.Cluster, cluster, StringComparison.Ordinal))
                 throw new QuickSqlException($"当前环境事务钉在集群 {ambient.Cluster} 上，又要为集群 {cluster} 开事务：同一座集群里嵌套才是保存点，跨集群的嵌套不是一场事务。请按集群分别开事务、各自提交。");
 
-            var savepointName = $"quicksql_sp_{ambient._nextSavepointId++}";
+            // 计数器解析到根再用（v0.39 第三笔修的三级重名）：保存点事务各持自己的 _nextSavepointId 实例字段，
+            // 二级嵌套时 ambient 已是保存点事务，就地递增会再发一个 quicksql_sp_0 与父同名——
+            // MySQL 血统上同名 SAVEPOINT 删旧的，中层 Commit 的 RELEASE 撤的是最里层，外层保存点从此不存在。
+            var root = ambient;
+
+            while (root._parent is { } parent)
+                root = parent;
+
+            var savepointName = $"quicksql_sp_{root._nextSavepointId++}";
 
             // 两条路做的是同一件事，差别只在"这句话由驱动发还是由我们发"（§4 那颗 SupportsDriverSavepoints）。
             // 走哪条路在这里定一次，并把答案带进那只保存点事务 —— 创建它的那条路决定拆除它的那条路，
@@ -461,12 +514,14 @@ public sealed partial class AdoExecutor
 
         // RequiresNew：挂起当前环境事务（如果有），新开一条独立事务。
         // 跨 executor 的 RequiresNew 允许：新事务用新连接，与被挂起的那条互不干扰。
+        // <b>挂起不提前生效</b>（v0.39 修的那格）：这里只把引用接住，槽位的清除交给下面
+        // <see cref="QuickSqlTransaction.Install"/> 的覆写 —— 若提前 ClearAmbient，新事务一旦开不出来
+        // （驱动加载失败、连接开不出、BeginTransaction 抛），被挂起的那条就永远回不到槽位，
+        // 外层事务句柄还在调用方手里，后续语句却按"无环境事务"各自走池连接自动提交。
         QuickSqlTransaction? suspended = null;
+
         if (ambient is not null)
-        {
             suspended = ambient;
-            QuickSqlTransaction.ClearAmbient();
-        }
 
         var connectors = Provider.Connectors;
 
@@ -577,8 +632,22 @@ public sealed partial class AdoExecutor
     {
         var rented = await RentAsync(tag, intent, ct).ConfigureAwait(false);
 
+        DbCommand command;
+
+        try
+        {
+            command = Prepare(rented.Connection, rented.Transaction, sql);
+        }
+        catch
+        {
+            // 自有的连接还没装进 Session、await using 接不到手，Prepare 炸了就地还掉，否则泄漏一条；
+            // 借用支的 DisposeAsync 是空操作，照调无害。
+            await rented.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
+
         // 借来的那一条不在这里 dispose：所有权随 Session 走，命令与连接同一个借用周期。
-        return new Session(rented, Prepare(rented.Connection, rented.Transaction, sql));
+        return new Session(rented, command);
     }
 
     /// <summary>连接的四支来路，按"谁已经占着它"的优先级排：<b>环境事务 → 会话连接 → 会话工厂 → 新建并打开</b>。
@@ -725,11 +794,55 @@ public sealed partial class AdoExecutor
             Aop.Observe(() => slow(new SlowCommandEvent(sql, elapsed, Aop.SlowQueryThresholdMilliseconds)));
     }
 
-    void Failed(Exception exception, DialectSql sql, long started)
+    Exception Failed(Exception exception, DialectSql sql, long started)
     {
         // 硬规则 3：钩子自己炸了不许盖掉业务异常，所以走 Observe 的吞-and-转投边界。
         if (Aop.Error is { } error)
             Aop.Observe(() => error(new CommandErrorEvent(exception, sql.Text, Elapsed(started))));
+
+        // 分类排在播报之后，这个先后是这一格的全部裁决：挂在 Error 上的日志与告警要看见的是
+        // **库的回答**（驱动原话），换成包装后的就等于把"哪家库报了什么"这一问题从现场抹掉。
+        // 而往上抛的那一颗换成"哪一档完整性违例"（§8.4），判不出就原样交回——不包装、不猜。
+        return exception is DbException driverError
+               && Provider.ClassifyIntegrityError(driverError) is { } violation
+            ? IntegrityException(violation, driverError, sql.Text)
+            : exception;
+    }
+
+    /// <summary>收口之后的重抛。<b>判不出分类（<see cref="Failed"/> 原样交回）时用
+    /// <see cref="ExceptionDispatchInfo"/> 重抛</b>：<c>throw 原异常</c> 会把 StackTrace 重写到这一行，
+    /// 驱动侧的原始抛出点与完整调用栈整体丢失；包装了新异常的（新堆栈本来就是收口点的）走
+    /// <c>throw 表达式</c> 原样返回。六个出口的 catch 统一写 <c>throw Rethrow(ex, Failed(...))</c>。</summary>
+    static Exception Rethrow(Exception original, Exception mapped)
+    {
+        if (!ReferenceEquals(mapped, original))
+            return mapped;
+
+        ExceptionDispatchInfo.Capture(original).Throw();
+
+        throw new UnreachableException("ExceptionDispatchInfo.Throw 不会返回。");
+    }
+
+    /// <summary>按档选类型。<b>不给 default 分支留活路</b>：将来 <see cref="IntegrityKind"/> 添一档而这里没跟上，
+    /// 要的是当场响，而不是悄悄落进某一颗现有异常里、三个月后在某个消费者的 <c>catch</c> 里现形。</summary>
+    static DbUpdateException IntegrityException(IntegrityViolation violation, DbException error, string sql)
+    {
+        string? constraint = violation.ConstraintName;
+        string suffix = constraint is { Length: > 0 } ? $"约束 {constraint}。" : string.Empty;
+
+        return violation.Kind switch
+        {
+            IntegrityKind.Unique => new UniqueConstraintException(
+                $"唯一键冲突：库里已有另一行占着同一组键值。{suffix}", sql, constraint, error),
+            IntegrityKind.NotNull => new NotNullConstraintException(
+                $"这一列不许为空，而语句给它写了空值。{suffix}", sql, constraint, error),
+            IntegrityKind.ForeignKey => new ForeignKeyConstraintException(
+                $"外键对不上：引用不到那一行，或那一行还被别处引用着。{suffix}", sql, constraint, error),
+            IntegrityKind.Check => new CheckConstraintException(
+                $"值不满足库上的检查约束。{suffix}", sql, constraint, error),
+            var kind => throw new ArgumentOutOfRangeException(
+                nameof(violation), kind, $"{nameof(IntegrityKind)} 添了新一档而 {nameof(IntegrityException)} 没跟上"),
+        };
     }
 
     static long Elapsed(long started) => Stopwatch.GetElapsedTime(started).Ticks / TimeSpan.TicksPerMillisecond;
@@ -799,17 +912,30 @@ public sealed partial class AdoExecutor
 
         public async ValueTask DisposeAsync()
         {
-            await Command.DisposeAsync().ConfigureAwait(false);
-            await rental.DisposeAsync().ConfigureAwait(false);
+            // 各自 try/finally：命令释放失败（驱动在 Dispose 里也抛过）不能连累连接归还，
+            // 否则自有连接泄漏一格、借用连接少一次还点。
+            try
+            {
+                await Command.DisposeAsync().ConfigureAwait(false);
+            }
+            finally
+            {
+                await rental.DisposeAsync().ConfigureAwait(false);
+            }
         }
     }
 
     /// <summary>一次会话持有的连接：<b>按 (集群, 角色) 一格一条</b>。
     /// 它是会话级连接复用在读写分离之后唯一还成立的说法 —— 说"会话有一条连接"从这一版起不成立了，
-    /// 而"会话对同一格只有一条"仍然成立，事务、装载通道与写后读那一档都靠这一条。</summary>
+    /// 而"会话对同一格只有一条"仍然成立，事务、装载通道与写后读那一档都靠这一条。
+    ///
+    /// <para><b>并发写要设闸</b>：AsyncLocal 存的是同一个对象引用，父帧 <c>Task.WhenAll</c> 扇出的两个
+    /// 分支共享同一只账本；两个分支同时首用同一格（TryGet 双双落空后同时 Set）就是对非线程安全字典的
+    /// 并发写——字典内部结构损坏级别的竞态。同文件 <see cref="FlowWrites"/> 已经上锁，这里同一纪律，
+    /// 换 <see cref="ConcurrentDictionary{TKey,TValue}"/>：每句至多一读一写，无锁路径零额外成本。</para></summary>
     internal sealed class SessionConnections
     {
-        readonly Dictionary<(string, ConnectionRole), DbConnection> _bySlot = [];
+        readonly ConcurrentDictionary<(string, ConnectionRole), DbConnection> _bySlot = [];
 
         public bool TryGet(string cluster, ConnectionRole role, out DbConnection connection)
         {
@@ -829,7 +955,7 @@ public sealed partial class AdoExecutor
         public void Remove(DbConnection connection)
         {
             foreach (var slot in _bySlot.Where(kv => ReferenceEquals(kv.Value, connection)).Select(kv => kv.Key).ToArray())
-                _bySlot.Remove(slot);
+                _bySlot.TryRemove(slot, out _);
         }
 
         public IReadOnlyList<DbConnection> Connections => [.. _bySlot.Values];

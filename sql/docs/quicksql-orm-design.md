@@ -534,11 +534,11 @@ C# 编译器把上面这段降级为 `SelectMany / Join / GroupJoin / OrderBy / 
 
 还有一条是**反过来的**，别和上面那五条混：`OrderBy`/`Skip` 之后再 `Where` 是**允许的、不报错的**（§16.15 已决），但它不表示"先跳再筛" —— 见 §5.8 的"书写顺序"条。
 
-**落地记录（v0.38 第十九笔∶ 计数一族补的是口，不是能力）**。`IQuery<T>` 上多四颗：`AnyAsync`（`IQuery.cs:184`）、`LongCountAsync`（`:190`）、`Any`（`:204`）、`LongCount`（`:207`），实现各一行转发（`QuickSqlQuery.cs:135,137,153,155`），后面接的是 `QueryEngine` 里早就写好的那三行 `AggregateAsync(countLike)`。**句子一颗都不新**：`QueryCompiler.Aggregate`（`:259`）把 `Any` 与 `Count/LongCount` 同归 `Fn.Count`，所以 `Any` 发出去的仍是 `COUNT(*)`，`> 0` 在 CLR 侧判。这笔账为什么不遮：可预期的代价是"大表上 `Any` 慢"，不可接受的是"`Any` 返回错结果"，而 `WHERE EXISTS(…)` 的反形要改投影计划（`ExistsExpression` 今天只有 `TryNavigationSubquery` 那一个生产者），记在 P1。触发点不在库里而在应用侧 —— SqlSugar 替换的门面要用存在性判据 21 处、分页总数 19 处，全落在这四颗上。
+**落地记录（v0.38 第十九笔∶ 计数一族补的是口，不是能力）**。`IQuery<T>` 上多四颗：`AnyAsync`（`IQuery.cs:184`）、`LongCountAsync`（`:190`）、`Any`（`:204`）、`LongCount`（`:207`），实现各一行转发（`QuickSqlQuery.cs:135,137,153,155`），后面接的是 `QueryEngine` 里早就写好的那三行 `AggregateAsync(countLike)`。**句子一颗都不新**：`QueryCompiler.Aggregate`（`:259`）把 `Any` 与 `Count/LongCount` 同归 `Fn.Count`，所以 `Any` 发出去的仍是 `COUNT(*)`，`> 0` 在 CLR 侧判。这笔账为什么不遮：可预期的代价是"大表上 `Any` 慢"，不可接受的是"`Any` 返回错结果"，而 `WHERE EXISTS(…)` 的反形要改投影计划（`ExistsExpression` 今天只有 `TryNavigationSubquery` 那一个生产者），记在 P1。触发点不在库里而在应用侧 —— SqlSugar 替换的门面要用存在性判据 21 处、分页总数 19 处，全落在这四颗上。**【0.39.0-beta.29∶ 上面那笔 P1 结了——`Any`/`AnyAsync` 从这一段聚合路改道成存在性探针】**入口不再经 `AggregateAsync`：`QueryEngine.AnyAsync` 把生效模型就地换成「投影 = 常量 1 的值档 ∶ `Limit = 1` ∶ 序剥掉（`Ordering = []`）∶ `Offset` 原样保留」（`Skip(n).Any()` 问的还是"跳过 n 行之后有没有"，与旧谱同一个答案；剥序省的是排序，T-SQL 那族分页要的 `ORDER BY` 由方言占位序补），投影换成值档之后 Include 机器按"值档"判据整体旁路——一条 JOIN 不改变存在性，一条子查询都不多发。读到一行即 true、空集 false；COUNT 在大表上是全量计数，存在性拿到第一行就收口，最坏（空集）才与 COUNT 同阶。分组与 `HAVING` 天然成立（`SELECT 1 … GROUP BY k LIMIT 1` 交回一行 ⟺ 至少有一组），与旧版派生表 COUNT 同一个答案、只是不再数完。`QuickSqlQuery.Any()` 与 `AnyAsync` 同一咽喉。**公开枚举面**：`AggregateKind.Any` 的聚合映射槽留着不删、调用归零（`QueryCompiler.cs:277` 那条注释点名"自存在性探针落地起不再有任何调用方递进来"），删不删归 §5.12 那格裁决。见证两半：离线 `tests/QuickSql.Tests.Dialects/AnyProbeTests.cs` 钉文本（量具与 §5.7 那次同族——无驱动的桩炸在 `Aop.Executing` 播报之后，所以那句话已经进了账本；断 `SELECT 1 ` 起句、句内无 `COUNT`）；真库行为钉在 `ReadPathTests.Any_and_LongCount_answer_on_the_same_rows_the_count_family_reads`（有行/空集/偏移/带序四档，该用例 doc 注释已随探针翻案）。门禁读数（离线 1 394 ∶ 集成 221∶0 五家活库）随 0.39.0-beta.29 那笔的账，本注不复述。
 
 **这一行今天才被重数过一次，而重数读出的第一件事实是文档比仓库慢**。上面 §5.7 那格原文写「`Sum/Average/Min/Max/Any/All/LongCount` 在链式侧从来没有入口」，而按 `IQuery.cs` 逐颗数下来，`Sum/Max/Min/Average` 那八颗（同步 `:225-234`、异步 `:236-`）早就在链上 —— 那句话一直在原地，没有一笔改过它。重数命令一条：`grep -n "TResult Sum\|TResult Max\|TResult Min\|TResult Average\|AnyAsync\|LongCount" src/QuickSql.Abstractions/Query/IQuery.cs`。按同一把尺子，这一格从今天起剩下的只有 `All` 一颗（它没有口，而 §5.12 底下那颗"`AggregateKind.All` 走默认分支被当 `COUNT(key)` 发出去"的地雷照旧在）。
 
-**这一格今天不给的三件事，别读成有**：① 不开 `All` —— 开它的第一步是先把那颗地雷从"发出去"改成"拒"，那是另一笔账；② 不给 EXISTS 反形（上面那句 P1）；③ 不动 `Single/SingleOrDefault` —— 它们仍写在下一行"保证做 P1"里，`LIMIT 2` 判重那一档到今天没有消费方，而本笔的形状是"把现成的能力接出现成的口"，不是"顺手开一颗没量过的"。
+**这一格今天不给的三件事，别读成有**：① 不开 `All` —— 开它的第一步是先把那颗地雷从"发出去"改成"拒"，那是另一笔账；② 不给 EXISTS 反形（上面那句 P1）——【0.39.0-beta.29∶ 这一项结了，`Any` 改发「`SELECT 1 …`」存在性探针，账记上段末注】；③ 不动 `Single/SingleOrDefault` —— 它们仍写在下一行"保证做 P1"里，`LIMIT 2` 判重那一档到今天没有消费方，而本笔的形状是"把现成的能力接出现成的口"，不是"顺手开一颗没量过的"。
 
 **见证、门，以及一次单破读不出来的探针**。离线方言册 `DerivedTableTests` **+2 颗**（异步与同步各一颗，判据都是"打到第 5 层没有驱动"而不是"抛了个异常"，所以接成 `Deferred` 那种 `QuickSqlException` 时这里同样红）；集成册 `ReadPathTests` **+1 条用例**（`Any_and_LongCount_answer_on_the_same_rows_the_count_family_reads`：有行 / 空集 / 偏移越过全部种子行 / 带序链四档，末尾再拿同步口对照同一批行）。故意破坏六场的读数，一颗对一颗：`v38-19-probe-1.log`（`AnyAsync` 改成立即返回 `false`）方言 1 红 + `v38-19-probe-1-mysql.log` 集成 1 红；`v38-19-probe-2.log`（只破同步 `Any()`）红的只有同步那颗而异步那颗原样绿；`v38-19-probe-3.log`（`LongCountAsync`/`LongCount` 同时改成常量）方言 2 红 + `v38-19-probe-3-mysql.log` 1 红 —— **四颗新口各自红在各自那条断言上，归属是清楚的**。第 4、5、6 场问的是那条用例里"带序链上剥序"那三行（照 §13.1 第 9 项"开出口那天这条断言原样套用"补的）：**单破任一处剥序都读不出来** —— 破 `AggregateModel` 里那句 `Ordering = []` 后集成 21 条全绿（`v38-19-probe-4-sqlserver.log`），破 `AggregateProjection.UsesOrdering` 后方言 1 154 条全绿（`v38-19-probe-5-dialects.log`）；**两把一起破才红**（`v38-19-probe-6-sqlserver.log` 集成 3 红），而新用例红的位置就是 `ReadPathTests.cs:315` 那颗 `ordered.AnyAsync`，异常本体是 T-SQL 的「ORDER BY 子句中的列 "QuickSqlOrder.CreatedAt" 无效，因为该列没有包含在聚合函数或 GROUP BY 子句中」，另有既有的 `Count_strips_the_ordering_a_page_needs` 与 `Paged_query_pays_for_the_total_only_from_the_second_page` 同场红。所以这一格的结论要按两句读：那三行断言**是有牙的**（双破必红），而"聚合剥序"今天由两处各自独立实现（`AggregateModel:1236` 清序、`Derived:1249-1256` 清内层与外层，编译器 `QueryCompiler.cs:40,183` 那一问 `StripsOrdering` 在两条路上都排在清序之后），**任何一处单独摘掉都不改变今天任何一条产出** —— 第十八笔那句"跑绿证明的是用例没写崩，不是判据有效"在这里反过来用：那两场绿证的是冗余，不是无效。**落档**：方言整批 1 152 → **1 154**（`v38-19-dialects-5.log`，0 红 0 跳）∶ Release 全解 0 警告 0 错误（`v38-19-release-3.log`，`-p:XuguHostPlatform=none`）∶ `hygiene.mjs --worktree --ext .cs --ext .md` **305 份 0 颗违规**（`v38-19-hygiene-3.log`，本笔没添新文件所以份数不动）∶ 集成 `ReadPathTests` sqlserver / mysql / sqlite 各 21 条 0 红 0 跳（`v38-19-sqlserver-read-final.log`、`v38-19-mysql-read-final.log`、`v38-19-sqlite-read-final.log`）。**没跑的那一格要说清**：本笔只重跑了 `ReadPathTests` 一族（新用例住在这一族），集成整册按三家各一遍没做，所以下一位不要把 21 读成集成总数。
 
@@ -700,7 +700,7 @@ var rows  = await iq.OrderBy(o => o.CreatedAt).Skip(offset).Take(size).ToListAsy
 
 `SELECT COUNT(*) FROM "T_ORDER" ORDER BY "Created" DESC` 在金仓 / openGauss / 瀚高 / GBase 8c 上报 `column "T_ORDER.Created" must appear in the GROUP BY clause`；SQL Server 同样报错；MySQL 默认容忍。也就是说"先 Count 再取页"这种写法，**只要复用了带 `OrderBy` 的 `iq`，在 PG 血统的国产库上必然炸**。
 
-→ 归约规则：`QueryEngine.AggregateModel` 在换投影计划的同时把 `Ordering` 清空（实现名与这张表逐行对得上；`PagedOptions.StripOrderingForCount = false` 直接抛，因为没有一种库接受那个形态）。§16.16 之前这条规则的证据是"链式与 LINQ 两条路径同时生效"，现在只有一条路径，**表里可达的行也只剩 `Count` 一行**（`Any/LongCount` 有实现无出口、`Exists` 不在 `AggregateKind` 里、`Sum/Avg/Min/Max` 缺值选择器入口，§5.7 缺口行）。**【v0.38 第十九笔∶ 括号里那三句按现状改判】**`Any`/`LongCount` 今天有四颗公共口（`IQuery.cs:184,190,204,207`，账记 §5.7 末），而"缺值选择器入口"那一句从来没成立过 —— `Sum/Max/Min/Average` 的八颗带的就是选择器（`IQuery.cs:225-234` 与 `:236-`），只是 §5.7 那一行一直没改。所以这句"只剩 `Count` 一行"从今天起读作「COUNT 一族四颗 + 四颗带选择器的聚合」，`Exists` 那半句照旧。**同一批探针还量出一件本行原来没写的**：上面那句"把 `Ordering` 清空"今天有**三处各自独立的实现**（`AggregateModel:1236` 清模型、`Derived:1249-1256` 清内层与外层、编译器 `QueryCompiler.cs:40,183` 问 `StripsOrdering`），**单破任一处产出逐字不变**，两把一起破才在 T-SQL 上炸出「ORDER BY 子句中的列 … 无效」；六场读数与用例名记 §5.7 末那段落地记录，别在这里重述一遍就不去复核。**一处地雷**：`AggregateKind.All` 目前会走 `AggregateModel` 的默认分支、被当成 `AggregateProjection` 发出去（那是 `COUNT(key)`，不是"全部满足"），今天不可达所以无害，**开 `All` 的出口之前必须先给它自己的发射形态**。下面这张表是设计意图与实现的对照，不是全部可达：
+→ 归约规则：`QueryEngine.AggregateModel` 在换投影计划的同时把 `Ordering` 清空（实现名与这张表逐行对得上；`PagedOptions.StripOrderingForCount = false` 直接抛，因为没有一种库接受那个形态）。§16.16 之前这条规则的证据是"链式与 LINQ 两条路径同时生效"，现在只有一条路径，**表里可达的行也只剩 `Count` 一行**（`Any/LongCount` 有实现无出口、`Exists` 不在 `AggregateKind` 里、`Sum/Avg/Min/Max` 缺值选择器入口，§5.7 缺口行）。**【v0.38 第十九笔∶ 括号里那三句按现状改判】**`Any`/`LongCount` 今天有四颗公共口（`IQuery.cs:184,190,204,207`，账记 §5.7 末），而"缺值选择器入口"那一句从来没成立过 —— `Sum/Max/Min/Average` 的八颗带的就是选择器（`IQuery.cs:225-234` 与 `:236-`），只是 §5.7 那一行一直没改。所以这句"只剩 `Count` 一行"从今天起读作「COUNT 一族四颗 + 四颗带选择器的聚合」，`Exists` 那半句照旧。**【0.39.0-beta.29∶ 再一句改道——`Any` 从这张归约表整体离场**：`Any`/`AnyAsync` 不再经 `AggregateModel`/`Derived`，`QueryEngine.AnyAsync` 就地换模型（常量 1 值档 ∶ `Limit = 1` ∶ `Ordering = []` 直清 ∶ `Offset` 原样保留），分组与 `HAVING` 靠 `SELECT 1 … GROUP BY k LIMIT 1` 交回一行 ⟺ 至少有一组天然成立；今天这张表可达的只剩 COUNT 一族四颗与带选择器的八颗，`AggregateKind.Any` 的映射槽留位、调用归零（判据挂在 `QueryCompiler.cs:277` 注释）。**剥序在这一格多出第四处实现**：探针把序直清在模型上，与下文那三处各管各的账——三把锁管聚合路、这一把管探针路，单破互不顶账；"单破各自读不读得出"的读数留到真有人破的那天再记。账细记 §5.7 末段末注。】**同一批探针还量出一件本行原来没写的**：上面那句"把 `Ordering` 清空"今天有**三处各自独立的实现**（`AggregateModel:1236` 清模型、`Derived:1249-1256` 清内层与外层、编译器 `QueryCompiler.cs:40,183` 问 `StripsOrdering`），**单破任一处产出逐字不变**，两把一起破才在 T-SQL 上炸出「ORDER BY 子句中的列 … 无效」；六场读数与用例名记 §5.7 末那段落地记录，别在这里重述一遍就不去复核。**一处地雷**：`AggregateKind.All` 目前会走 `AggregateModel` 的默认分支、被当成 `AggregateProjection` 发出去（那是 `COUNT(key)`，不是"全部满足"），今天不可达所以无害，**开 `All` 的出口之前必须先给它自己的发射形态**。下面这张表是设计意图与实现的对照，不是全部可达：
 
 | 操作 | 是否剥 ORDER BY | 原因 |
 |---|---|---|
@@ -980,6 +980,91 @@ db.Attach(order);  db.Entry(order).State = EntityState.Modified;
 前两行只差一个跟踪器，第三行是同一个性质的另一种写法。`IQuery<T>` 与 `ITrackedSet<T>` 共用同一个 `QueryEngine` 与同一份 `QueryModel`（§5.5），切来切去不需要重建查询——v0.5 在这里还有一句"这也是 §14 P0 那条等价性测试要断言的东西"，指的是"链式与 LINQ 两种写法 `Explain()` 逐字节相等"。那条测试随 §16.16 失去对象；**现在的等价性断言换成了跨入口的另一对**：`orm.Select<T>()` 与 `db.Set<T>().AsNoTracking()` 在无跟踪时必须产出同一份 `ModelText`（§13.1 第 2 项）。
 
 **这一版要把这三行的性质说准，因为它们现在是断言而不是愿望。** 跟踪与否在 v0.16 之后**不在模型上**（§8.1 那段"标记位在查询引擎上"），所以第三行与第一行差的是 `QueryEngine` 里那一个 `ChangeTracker?` 槽位，模型文本里没有任何一行能区分它们——于是上面那句"逐字节相等"是**结构上成立的**，不是靠打印时省略一行撑起来的。反过来，`AsNoTracking()` 的返回类型是 `IQuery<T>` 而不是 `ITrackedSet<T>`：一条不跟踪的链上没有 `Local` 可看，把类型收窄掉比留一个永远为空的属性诚实（§8.2 那句"跳过快照分配"在实现里就是引擎上松手，物化路径与 `orm.Select<T>()` 是同一段代码，不是两份各自优化过的版本）。第三档 `InsertRaw` 与前两行的不对称要记住：它会改库里的行，而**会话里已经读过同一行的话它不知道**，快照就此是旧的——要么别混用，要么写完 `Clear()`。
+
+### 8.4 完整性冲突：把库的回答翻成一种可 catch 的形状（**部分落地，见本节末那份记录**）
+
+**这一格补的是 §8.2 的另一半。** 并发那一半已经有类型、有现值、有 `RowIsGone`；完整性这一半今天**根本没有形状**——驱动抛什么就出什么，`src/` 全树 grep 不到一处 `23505 / Duplicate entry / UNIQUE constraint failed / ORA-00001 / 2627` 的判据。消费者能写的三种形态都错过：① 按厂商类型名判（`ex.GetType().Name == "PostgresException"`），换一颗方言当场失效；② 按消息文本判（`message.Contains("UNIQUE")` / `Contains("重复")`），任何一条消息里带这几个字的异常都算命中，包括那句恰好把 UNIQUE 写在标识符里的 SQL 自己的报错；③ `catch (Exception) { continue; }` 把"唯一键撞了"与"连不上库"揉成同一件事再重试一轮。§8.2 立那颗异常时用过的理由在这里逐字成立：**"缺位只表现为一个看不懂的错误"不该由消费者脑补**。
+
+**形状**：
+
+```csharp
+public abstract class DbUpdateException(string message, string sql, Exception inner)
+    : QuickSqlException(message, inner)
+{
+    /// 最终执行的那一份文本，与 §8.2 那颗同一口径（CudBuilding 改写之后的）。
+    public string Sql { get; }
+    public string? ConstraintName { get; protected init; }
+    public IReadOnlyList<string>? Columns { get; protected init; }
+}
+
+public sealed class UniqueConstraintException(...)       // 唯一键 / 唯一索引撞了
+public sealed class NotNullConstraintException(...)      // 23502 / 515 / 1048 / ORA-01400
+public sealed class ForeignKeyConstraintException(...)   // 23503·23504 / 547 / 1452·1216·1217 / ORA-02291·02292
+public sealed class CheckConstraintException(...)        // 23514 / 3819 / ORA-02290
+
+// DbUpdateConcurrencyException 的基类从 QuickSqlException 换成 DbUpdateException：
+// 它自己的成员一个不动，换的只是"保存失败"有一处能 catch 住整族
+```
+
+按类分而不给「一颗 `IntegrityKind` 枚举 + 一颗类型」的理由：**枚举把判错的机会留给消费者**（`catch (DbUpdateException e) when (e.Kind == Unique)` 与漏写那一档在编译期同形，而漏写的是"把外键冲突当重复提交回给用户"这种看得见的错），而 §8.2 已经先立了"一种成因一颗类"的风格——`RowIsGone` 那一格证明的正是「两种成因在行数上一模一样，只能靠类型分开」。
+
+**判据必须在方言，而且判不出就说判不出。** SPI 上开一个槽位，形状照 §8.2 已经在跑的 `IDbProvider.Concurrency.BuildPredicate`，理由也是同一句：只有本家知道 `rowversion` 该按二进制比还是按字面比；在这里换成**只有本家知道重复键报的是 SQLSTATE 还是错误号、以及那个号在达梦与 Oracle 之间是不是同一个数**。
+
+```csharp
+// IDbProvider 新增（与 Concurrency 同格挂 Integrity）
+IntegrityViolation? ClassifyIntegrityError(Exception driverError);   // null = 判不出 ⇒ 原样抛，不包装、不猜
+
+public sealed record IntegrityViolation(
+    IntegrityKind Kind, string? ConstraintName, IReadOnlyList<string>? Columns);
+```
+
+`null` 那条路径不是兜底，是这一格的主要安全属性：§12.2 那句「不接受静默降级」在错误分类上的对偶形式是**也不接受静默误分类**。首批四颗 PostgreSql / SqlServer / MySql / Sqlite（前两颗今天已落，见本节末那份记录），其余十七颗交 `null`，消费者的表现与今天一模一样——不会因为"这颗 provider 存在"就拿到一个假的 `UniqueConstraintException`。
+
+| 族 | 唯一 | 非空 | 外键 | 检查 | 这一行的来路 |
+|---|---|---|---|---|---|
+| PostgreSQL | 23505 | 23502 | 23503（插入侧与删除侧同一个码，靠消息分） | 23514 | **实测**（2026-10-23，PG 18.6，`pg_temp` 夹具里五种违例各撞一次，一条语句没留在 public） |
+| 金仓 / 瀚高 / Gauss / GBase 那一族 | 照 PG 抄**不算验过** | | | | 待逐颗验真码再挂，不许按"PG 血统"猜 |
+| MySQL / TiDB / OceanBase | 1062 | 1048 | 1452·1216·1217 | 3819 | **1062 实测**（本机 MySQL 靶），其余三个号厂商文档、未撞过。要点：<c>SqlState</c> 只到 <c>23000</c> 那一整档，**分档必须看厂商号**，而号在基类字典 <c>Data["Server Error Code"]</c> 里（驱动专有成员 <c>Number</c> 不能碰） |
+| SQL Server | 2601·2627 | 515 | 547 | 2627（check） | **2601 与 2627 实测**（`Data["HelpLink.EvtID"]`，且必须认 `EvtSrc=MSSQLServer`）；`SqlState` 在这家是 `ERROR_STATE()` 不是 SQLSTATE，实测 **null**；**547 故意不分类**（一码盖三档） |
+| SQLite | `UNIQUE constraint failed`（**文案**） | 不分类 | 不分类 | 不分类 | **实测**：基类面上全空（<c>SqlState</c> null、<c>Data</c> 空、<c>ErrorCode</c> 是 HRESULT），两颗号（19 / 2067）只在驱动专有成员上——够不着（§1.2 原则 3）。今天只押撞过的那一句，其余三档交 <c>null</c> |
+| Oracle 系 | ORA-00001 | ORA-01400 | ORA-02291·02292 | ORA-02290 | 同上，未验 |
+
+**写这张表时先犯的错正好证明这一格必须在方言。** PG 那一行我最初按记忆写成"外键 23503·23504"，实测 23504 是 `invalid_toast_reference`，与外键无关；而删除被外键挡与插入被外键挡**同报 23503**，两者要分开只能读消息。凭"大概是这个数"往通用层塞一张码表，结果就是外键冲突被翻译成"重复提交"回给用户。
+
+**能取到什么，各家不一样，而这一格决定 `ConstraintName` / `Columns` 填不填得满**（PG 实测，2026-10-23，Npgsql 10.0.3，五种违例各撞一次；`Data` 那一列指的是 `DbException.Data`，是 **ADO.NET 基类**上的字典，不是驱动专有成员——这一句是整个形状的前提）：
+
+| 违例 | `DbException.SqlState`（基类直读） | `Data` 里的键 | 备注 |
+|---|---|---|---|
+| 唯一 | 23505 | `Severity,InvariantSeverity,SqlState,MessageText,Detail,SchemaName,TableName,ConstraintName,File,Line,Routine` | `ConstraintName` = `ix_probe_k_no`；`ColumnName` **不在**这张字典里 |
+| 非空 | 23502 | 同上 + `ColumnName`，**没有** `ConstraintName` | 那一档没有命名约束；`ColumnName` = `no`、`TableName` = `probe_k` |
+| 检查 | 23514 | 带 `ConstraintName`（`probe_k_kind_check`） | |
+| 外键 | 23503 | 带 `ConstraintName`（`probe_k_pid_fkey`） | **插入侧与删除侧同一个码**，只能靠 `MessageText` 分（`insert or update on table …` vs `update or delete on table …`） |
+
+三条要写死的结论：① **分类根本不需要驱动类型**——`SqlState` 是 `DbException` 的虚属性，基类面直读就够（实测 `是 DbException? = True`），所以方言侧那段判据可以写成一张纯码表，与 §9.5「驱动靠反射加载、provider 不引用驱动」那条原则不打架。② **坏掉的键值与键列不在任何结构化字段里**，PG 把它写在 DETAIL 一句人话里（`Key (no)=(5) already exists.`）——而 **DETAIL 默认拿不到**：Npgsql 在连接串没写 `Include Error Detail` 时把它整段换成一句「Detail redacted as it may contain sensitive data」，实测五种违例全部是那句涂改。于是"解析 DETAIL 取键列"这条路在生产连接串上是**空的**，不是不可靠，是根本没有材料。③ 因此 `Columns` 的正确来路是**回到契约查**：库里本来就知道 `ix_probe_k_no` 覆盖哪一列（§10.3 那份 `ColumnContract` 与索引清单），拿到 `ConstraintName` 就按名字查回列集合；查不到（方言不给约束名、或者那颗索引不在本会话的契约里）就留 `null`。这一支比解析文案多了一个好处：**误报的方向是安全的**——查不到只降级成一句较粗的提示，而解析 DETAIL 一旦碰上某家改了文案，可能把列名解析成半句人话再摆到用户面前。
+
+SQL Server 那一行点着一个必须写死的坑：`SqlException.SqlState` 放的是 `ERROR_STATE()`，**不是 SQLSTATE**，所以「读 `DbException.SqlState` 就能通吃各家」这句话在它身上不成立——这就是判据不能长在通用层的实证理由（消费者侧今天正有一颗按 SQLSTATE 判的实现，账记在下面）。
+
+**收口点已经在那儿，不用新造。** `AdoExecutor` 每一条出口都是 `catch (Exception ex) { Failed(ex, sql, started); throw; }`——一处漏斗，同时握着最终 SQL 与驱动原话。翻译挂在同一个位置：`Failed` 派发 `Aop.Error`（§10.1 那一格）时**继续给驱动原话**，挂在 Error 上的日志与告警要看到的是库的回答，包装不能把它换掉；而往上抛的那一颗换成分类后的类型，`InnerException` 留原话。两条边界：**DDL 不进这一格**，它已有 `SchemaSyncFailedException`，而且不走 `Aop.Executing`（§10.1 的落地记录写着这件事），两套包装撞在一起只会让"失败的到底是哪一句、前面已经落库了几句"重新变成猜；**§8.2 那一颗不在这里抛**，并发冲突的成因是"命中 0 行"而驱动根本没报错，两条路径没有交集。
+
+**验收形状**（§13）：分类表**离线逐码钉死**——不连库就能断言"23505 → `UniqueConstraintException` 且 `ConstraintName` 取到 `IX_...`"，造一颗假 `DbException` 覆写 `SqlState` 即可；这也是判据写成"读 SQLSTATE / 读错误号"而不是"认类型"的附带好处：**可测**（认类型的判据在离线册里一条都写不出来，只能真库见一次算一次）。`null` 那条路要有用例，否则"其余十七颗退化"这件事从来没被验证过。真库档接在 §13 现有那颗已经会建唯一索引的夹具（`RowSwapOrderingPathTests`）上补一条"插重复 ⇒ 拿到 `UniqueConstraintException`"，并带一句反向自查：**先断言夹具里那条索引真是 UNIQUE**——§9.2 那类"只看名字在场就判通过"的教训在这里同样成立，索引建歪成非唯一时这条用例照样红，而失败会被读成"分类没生效"。
+
+**消费者那边等着替换的东西**（记在这里是让它们有处可去，不是库的承诺）：一处按厂商类型名判的（ABP 表示层，2026-10-23 落地，SQLSTATE 默认判据 + DI 扩展口，正是上面说的那颗"按 SQLSTATE 通吃"的赌注）；一处按消息文本判的（`FileChunkRepository.IsUniqueConstraintViolation`，认 `"UNIQUE"` / `"duplicate"` / `"重复"`）；一处 `catch (Exception) { continue; }` 而注释写着"唯一索引冲突或瞬时异常"的（`SerialManager` 的重试环，两种成因现在共用一轮重试）。另有并发那一半的一处重复：ABP 侧自己拼 `WHERE stamp=@old` 再判 `affected<=0`，同一逻辑在整行更新与变更跟踪两处各写一遍，抛出去的 `AbpDbConcurrencyException` 把 `DatabaseValues` / `RowIsGone` 全丢了——这一格落地时应当同一次改掉，那两处换成吃库的 `DbUpdateConcurrencyException`，因为"这一行被人删了"与"被人改了"的处置相反（§8.2 v0.18 记录第四条），而现在的表示层只能给同一句话。
+
+#### 落地记录（2026-10-23：分类漏斗 + 两颗方言）
+
+**落了什么**：`DbUpdateException` 那一族（四颗完整性子类，并发那颗改挂同一底座）、`IDbProvider.ClassifyIntegrityError` 的默认实现（交回 `null`）、收口点（`AdoExecutor.Failed` 从今天起**返回**要抛的那一颗：分类成功给包装后的，判不出原样交回），以及 PG 与 SQL Server 两份码表。出口仍然只有那一个漏斗，五处 `catch` 一处没多。
+
+**"播报哪一颗"与"抛哪一颗"是两颗不同的异常，这个先后是本格的全部裁决。** `Aop.Error` 拿到的必须是**驱动原话**——挂在它上面的日志与告警要看见的是库的回答，包装一次就把"哪家库报了什么"从现场抹掉；往上抛的那一颗才是分类后的类型。落地形式是 `Failed` 从 `void` 换成"返回要抛的那一颗"，于是 `catch { Failed(...); throw; }` 整批变成 `catch { throw Failed(...); }`：五处逐字同形，不留"记得抛"这种口头约定。
+
+**SQL Server 那一行是被实测改写的，不是照文档抄的。** 原稿写的是"读那颗驱动的 `Number`"，落地前先撞了一次真库：`SqlState` 在这家直接是 **null**（"SQL Server 的 SqlState 不是 SQLSTATE"这一句第一次有了本机读数，而不只是转述厂商行为），`ErrorCode` 给的是 `-2146232060`（一颗 HRESULT，不是号），而号在**基类的 `Data` 字典**里——`HelpLink.EvtID = 2601`、`HelpLink.EvtSrc = MSSQLServer`。于是判据既不碰驱动类型、也不反射调成员（§1.2 原则 3 那句"加载可以反射，调用不行"在这一格守住了）。代价是**必须认 `EvtSrc`**：那根槽位是 ADO.NET 给帮助链接用的，别家驱动照样会填，不点名来源就认领等于把别人的一句普通错误翻成"唯一键冲突"——离线册 `SqlServer_does_not_claim_a_number_that_does_not_come_from_itself` 钉的就是这一句。`2627`（主键/唯一约束）随后被集成册"插同一个主键第二行"那条从厂商文档转成实测；**`547` 至今不分类**：它同时覆盖外键、检查与命名唯一约束，分开只能读文案，而 §8.4 的判据写死了"误分类比不分类坏"。
+
+**MySQL 与 SQLite 同批落地，因为它们把"基类面到底够不够"这个问题问到了两端。** MySQL（MySqlConnector）是**够用但不够细**：`SqlState` 填了，可填的是 `23000` 那一整档——唯一、非空、外键、检查四件事挤在同一个值上，所以分档只能看厂商号，而那颗号除了驱动的 `Number` 之外还躺在基类字典 `Data["Server Error Code"]` 里（实测 `1062`，同字典另带 `SqlState`）；于是判据是"先认 `SqlState == 23000` 再认号"，与 SQL Server 那格认 `EvtSrc` 同一条理由——不点名来源就照号翻，等于替别家猜一个号。SQLite 是**不够用**：`SqlState` 为 `null`、`Data` 是空字典、`ErrorCode` 给 HRESULT，两颗真正的号（19 与 2067 = `SQLITE_CONSTRAINT_UNIQUE`）只在驱动专有成员上，而 §1.2 原则 3 写着"加载可以反射，调用不行"。剩下唯一能读的是那句固定文案 `SQLite Error 19: 'UNIQUE constraint failed: 表.列, 表.列'.`——**这是首批四家里唯一一颗读文案的方言**，所以只押撞过的这一句，`NOT NULL` / `FOREIGN KEY` / `CHECK` 那三句在本台没撞过就交 `null`。附带一条：这句文案里带着列名清单，是四家里唯一不用回契约就报得出"坏在哪几列"的形态，§16.22 ② 动工时本家的取法与别家不同一条，先记在这里不偷偷统一。
+
+**虚谷（Xugu）今天做不到，而且卡的不是码表，是这一格的入参。** 实测一颗重复键违例：驱动抛回来的那颗**不是 `DbException`，是 `System.Exception`**（`InnerException` 为空，消息 `[E34501]:System.CommandExecuteException:sqlexecute err: [E13001] 违反唯一值约束`，号在文案里）。而 §8.4 设计的入参是 `DbException`，收口点也按 `exception is DbException` 收——这一族因此连"看一眼"都看不到，不是判不出，是**根本不进这一格**。两条出路：① 把 SPI 入参与收口点的判据放宽到 `Exception`，虚谷本家用消息里那颗 `E13001` 分类（读文案，与 SQLite 同一档脆弱度）；② 维持现状，虚谷消费者拿到的仍是今天那颗裸异常。①改的是公开形状与整族的入参口径（别家方言也会开始收到非 `DbException` 的东西），所以记在这里等拍板，不自决。**这一格也顺手暴露了一件通用事实**：`DbException` 这一层不是所有驱动都守的，§8.4 说"分类只需要基类面"时默认了这一点，现在有了一个反例。
+
+**首批四家都过了真库的漏斗**（SQL Server 缺省靶、PG 以 `QUICKSQL_TEST_PROVIDER=postgresql`、MySQL 与 SQLite 同）。PG 那一行的五个数取自一台可达的 PG 18.6，探的是 `DbException` 基类面（约束名在 `Data["ConstraintName"]`、非空那一档不给名字、外键两侧同报 23503、DETAIL 在默认连接串上被驱动整段涂掉）；随后同一台跑过集成册那三条（2026-10-23，`Total: 3, Failed: 0, Skipped: 0`），所以"从本库的写出口撞一次"在四家两侧都不再是推断。顺带记两笔跑法上的坑：族名只认 `sqlserver / xugu / sqlite / postgresql / mysql`，写 `postgres` 会按 `Database.Family` 那句"认不出来直接抛"得到一片红与跳过（本笔先踩过一次），而缺省是 SQL Server —— 换族跑必须显式给环境变量，别把"这一跑连的是哪家"当成当然。
+
+**DuckDB 显式退回"判不出"，而这一格暴露的是血统继承的一般缺口。** 它挂在 `PostgreSqlBase` 上，于是免费继承了一份谁都没在它身上验过的码表——离线册那句"未覆写的方言交回 null"第一次跑就把它响了。线协议是 PG 的不等于约束违例的号是 PG 的。取向按 §8.4 的判据：未验一律 `null`，翻它的条件（那条集成用例在本家跑绿）写在覆写的注释里。顺带一句写在明处的：`Types` 与 `CodeFirst` 两格是"本家换掉"，这一格是"本家退掉"——§9.1 那张能力表量的是"能不能做"，而"继承来的判据对不对"不在里面，今后给任何一族加码表都要先问一句"这一族的叶子撞过吗"。
 
 ---
 
@@ -2197,6 +2282,8 @@ PR 附件那一份长这样（`-j short --filter "*"`，1001 行）。**两套�
    **v0.19 给这一项加了一个新的对照对象，也加了一处故意的不等价，两句都得写在明处**：合并档与逐条档现在跑的是同一批实体，而本节第 1 句"两条路径产出的结果可观察一致"（§12.4 的立身前提）在这一对上只成立一半 —— **落到库里的值两档一致**（`The_guard_leaves_out_the_row_that_already_held_the_value_and_the_count_says_so` 连"被守卫挡掉那一行读回什么"一起断，`Same_shaped_changes_on_two_rows_collapse_into_one_merged_statement` 逐行断回读），**报告里的 `Rows` 两档不同口径**（合并档 = 真变化数、逐条档 = 命中数）。所以写这条等价性断言的人**不能整条套用本项**：把它套在 `Rows` 上会假红（三行同改，合并档给 2、逐条档给 3，两个数各自都是对的），套在"读回的库值"上才是这一对在 §12.4 语境下的正确对象。这一处不写成缺陷，是因为守卫存在的意义**就是**把"命中数"变成"变化数"（§12.4 第 2 项点名的那个高频真实 bug），把它按等价性拉平等于把守卫删掉；两档口径与代价同在 §12.5 第 1 项 ③④。**这一项仍然判不到的三件**：`FallbackPolicy.Never` 那条 CI 守卫仍然 0 处；"同一数据集分别走每一级"那张表仍然没有对象；合并 UPDATE 到底算不算退回链的一级（它现在完全不过 `IBulkStrategy`，块大小只是借了 §12.3 那一式）要等 §12.1 那台预算机器接上写侧一起判。
 8. **不可变复用回归**（§5.11）：同一个 `iq` 连续 `CountAsync` → `ToListAsync` → `ToPagedAsync`，断言三次 `Explain()` 输出的条件部分完全一致（证明没人改写过它）；`orm.Select<T>()` 版 `iq` 用 `Task.WhenAll` 并发枚举必须安全；`db.Set<T>()` 版跨异步流使用必须抛 `ContextAffinityException`（不能静默错）。
 9. **聚合剥序**（§5.12）：v0.5 这条写的是"带 `OrderBy` 的 `iq` 上做 `Count/Any/Sum`"，§16.16 之后**只有 `Count` 可达**（`Any/Sum` 有实现无公共出口，§5.7 缺口行——开出口那天这条断言原样套用，不用重新设计）。**【v0.38 第十九笔∶ 那句"开出口那天"到了，而套用是真的套用**：`Any`/`LongCount` 各在同一条带序链上补了同一组断言，位置在集成用例 `Any_and_LongCount_answer_on_the_same_rows_the_count_family_reads` 末段（`ReadPathTests.cs:312-316`：先 `ToSql()` 里**有** `ORDER BY`，再在同一条链上问两颗出口），sqlserver / mysql / sqlite 三家各跑一遍。这一格买到的第一条读数是一次落空：**单破任一处剥序，三家全绿**，两把一起破才红，而红的正是 `:315` 那颗 `ordered.AnyAsync`，异常本体是 T-SQL 的「ORDER BY 子句中的列 "QuickSqlOrder.CreatedAt" 无效」；六场读数与三处冗余实现的名字都记在 §5.7 末那段落地记录里。**本项开头那句"每个 provider 的黄金样本里各出现一次现在达不到"照旧成立**：本笔这两颗同样没有离线 SQL 出口，所以卡点还是那一个，不是新加的一个。】现在这一条的落地形态是集成用例 `Count_strips_the_ordering_a_page_needs`：先断言同一条查询的 `ToSql()` 里**有** `ORDER BY`，再真库执行 `CountAsync()` 拿到正确行数——剥不干净就是 T-SQL 运行期语法错，而不是文本不好看。**每个 provider 的黄金样本里各出现一次**的原始要求**现在达不到，而且不是懒**：聚合没有离线 SQL 出口 —— `Count()/CountAsync()` 直接执行，`ToSql()/Explain()` 走的永远是行投影那条发射路径（`QueryEngine.AggregateModel` 是内部的，且它剥序发生在换投影计划那一刻）。所以"文本里没有 `ORDER BY`"这件事在 SQL Server 上目前只有真库的行为见证，没有基线文件。要补它得先给聚合开一个离线口（`Explain(聚合形态)` 之类），那是公开签名变更，列在 §14 的 P0 未完项里等你定；**在它有出口之前，PG 系/达梦上"先 Count 再取页必炸"这条只能靠集成层守**。另一处顺带修正：`SqlServerPagingTests` 里原先那条叫 `…_kept_through_paging_but_not_through_aggregates` 的用例**从来没断言后半句**（它能拿到的只有分页 SQL），名字已在 2026-09-21 改成它真正证明的 `Ordering_from_the_entity_survives_paging`。
+
+**【0.39.0-beta.29∶ 上面括号里那句"`Any`/`LongCount` 同样没有离线 SQL 出口"翻了一半**：`Any` 这一支改道存在性探针后，那一句在离线是钉得住的——`tests/QuickSql.Tests.Dialects/AnyProbeTests.cs` 借 `Aop.Executing` 播报位取句（无驱动的桩炸在播报之后），断 `SELECT 1 ` 起句、句内无 `COUNT`。但 gold 基线文件那档没动：探针的钉子是方言册里的断言，不是 `golden/` 下的一份基线，`Explain(聚合形态)` 那格欠账照旧——`LongCount`/Count 的"黄金样本各一份"缺口不变，PG 系/达梦上"先 Count 再取页必炸"仍只有集成层守着。账细记 §5.7 末段末注。】
 10. **分页阶梯**（§5.12）：`CountMethod` 五值 × provider 能力矩阵；`Auto` 每次降级必须给出非空 `Reason`；Q4 的 `HasNext` 判定用 `size+1` 行的边界（正好一页 / 差一行 / 空表）各一条。
 11. **注解解析链**（§10.2）：对同一属性叠加 Fluent + DataAnnotations + 自研属性，断言优先级与 `OriginTrace` 记录；再造**同层冲突**用例（两条互斥注解、两条同层 Fluent 规则），断言**启动期抛异常**而不是"取更严的那条"——这条是防 §10.2 的冲突策略在实现压力下退化成静默规则的护栏。再加一条覆盖测试：同一个实体，一套只写注解（零 Fluent）、一套写了 Fluent，两者解析出的 `ColumnContract` 集合必须逐字段相等（证明"默认可用"不是文档口号）。
 
@@ -2392,7 +2479,7 @@ PR 附件那一份长这样（`-j short --filter "*"`，1001 行）。**两套�
 
 ---
 
-## 16. 决策清单（21 项：v0.7 那份 17 项里已决 11 项、余 6 项仍待你拍板，§16.17 那条的判据到 v0.10 已经跑完并给出"不进"、见本节末；**v0.12 落地写侧与事务时又添 18~20 三条待拍**：事务的公开形状 / 写侧三个出口的命名 / `AdoParameter.Hint` 留不留；**v0.13 落地两条写链时没有新增待决项**，只给 19 与 20 各补了一段实测 —— 19 的命名面从一条链变成三条链，20 的 `Hint` 覆盖面被量出来只有常量档那一半；**v0.14 落地"物化单一取数口"时添 21 一条待拍**：零装箱剩下的那一半（类型探测提升到每场次 + 落到原始访问器），它要改的是 G1 生成委托的入参形状，所以与 17 同属"改公开形状"那一类；**v0.30 没有给这一节添新待决项** —— 那一族接出来撞见的三处"归你定"都落在 §14 的格子里而没有编号：`IExpressionRules.LikeEscapeCharacter` 要不要从 `char` 改成 `string`、连接串参数（`DATABASE()` / `GuidFormat` / `sql_mode`）要不要在同一族里再切一刀、Oracle 血统与 MySQL 共用那颗自增键 SPI 槽位先做哪一半。三处都是公开形状、与 17 / 21 同一类，本版不给它们编号的理由是**判据还没收成一句"选 A 还是选 B"**（各自都还挂着一条"等真库"或"等消费者"的前置），而 §14 那三格把触发条件写死了 —— 编号等到它可被回答的那一天再立，不为了表头那个数好看而先占一格）
+## 16. 决策清单（22 项（22 是 §8.4 完整性冲突那一格新立的，两颗待拍都在里面）：v0.7 那份 17 项里已决 11 项、余 6 项仍待你拍板，§16.17 那条的判据到 v0.10 已经跑完并给出"不进"、见本节末；**v0.12 落地写侧与事务时又添 18~20 三条待拍**：事务的公开形状 / 写侧三个出口的命名 / `AdoParameter.Hint` 留不留；**v0.13 落地两条写链时没有新增待决项**，只给 19 与 20 各补了一段实测 —— 19 的命名面从一条链变成三条链，20 的 `Hint` 覆盖面被量出来只有常量档那一半；**v0.14 落地"物化单一取数口"时添 21 一条待拍**：零装箱剩下的那一半（类型探测提升到每场次 + 落到原始访问器），它要改的是 G1 生成委托的入参形状，所以与 17 同属"改公开形状"那一类；**v0.30 没有给这一节添新待决项** —— 那一族接出来撞见的三处"归你定"都落在 §14 的格子里而没有编号：`IExpressionRules.LikeEscapeCharacter` 要不要从 `char` 改成 `string`、连接串参数（`DATABASE()` / `GuidFormat` / `sql_mode`）要不要在同一族里再切一刀、Oracle 血统与 MySQL 共用那颗自增键 SPI 槽位先做哪一半。三处都是公开形状、与 17 / 21 同一类，本版不给它们编号的理由是**判据还没收成一句"选 A 还是选 B"**（各自都还挂着一条"等真库"或"等消费者"的前置），而 §14 那三格把触发条件写死了 —— 编号等到它可被回答的那一天再立，不为了表头那个数好看而先占一格）
 
 1. ~~**产品名**是否用 `QuickSql`~~ —— ✅ **已决**（2026-09-20）：就用 `QuickSql`。命名空间、程序集名、目录名三者一致，不再改名。
 2. ~~是否保留 .NET Framework / netstandard2.0~~ —— ✅ **已决**：只打 `net10.0`，不留兼容层（唯一例外是源生成器必须 netstandard2.0，那是 Roslyn 主机约束）。留下的**待确认**事项是 §15.5：目标客户现场是否装得了 .NET 10（麒麟/统信适配清单要逐个核）。
@@ -2482,7 +2569,7 @@ PR 附件那一份长这样（`-j short --filter "*"`，1001 行）。**两套�
 
     1. **没有第三方互通口**。`IQuery<T>` 喂不进任何签名要 `IQueryable<T>` 的组件：AutoMapper 的 `ProjectTo<T>`、`System.Linq.Dynamic.Core` 的字符串过滤、各类表格/导出/规约模式库。曾建议把 `AsQueryable()` 做成 `QuickSql.Core` 上的扩展方法（Domain 契约干净、脏东西留实现侧），**你定的是先不做**；真要补时它只能落在 Core，不许回到 Abstractions（§2）。
     2. **CROSS JOIN 没有入口了**。它原本只有 LINQ 的第二个 `from` 走得到（链式 arity 递增不带 CROSS）。`JoinKind.Cross` 与方言发射保留，现状与 `Right`/`Full` 同一档：AST 有、无生产者、无黄金样本。要 CROSS 就得在链式面开方法（公开签名变更）。
-    3. **聚合出口两头都不接**。`Any/All/LongCount/Sum/Average/Min/Max` 原先经 LINQ 的 `Execute` 到达，`IQuery<T>` 上只有 `CountAsync`/`FirstOrDefaultAsync`。引擎侧 `AggregateAsync(kind, key)` 与 `QueryCompiler` 的聚合发射**保留**（`CountAsync` 就是它的一个调用方），缺的只是链式出口 —— 开这批口是下一步的活，也是 §5.12 那张表真正落地的前提。**【v0.38 第十九笔∶ 这一条了结一大半，而"下一步的活"今天真做完了】**`Any`/`LongCount` 的四颗公共口已接（`IQuery.cs:184,190,204,207`，账记 §5.7 末），而本条原文把 `Sum/Average/Min/Max` 也写成"从来没有入口"是同一处滞后 —— 那八颗一直在链上（同步 `:225-234`、异步 `:236-`），与 §5.7 那一行同源、同一笔改判。剩下没口的只有 `All` 一颗，而它不是"少接一颗"那么便宜：§5.12 那颗地雷（`AggregateKind.All` 走 `AggregateModel` 默认分支、被当 `COUNT(key)` 发出去）得先有自己的发射形态才能开口。**所以这一条从今天起读作"半了结"**：`All` 与 §5.7 那行 P1 项（`Single`/`SingleOrDefault` 的 `LIMIT 2` 判重、`Any` 的 EXISTS 反形）都还开着。
+    3. **聚合出口两头都不接**。`Any/All/LongCount/Sum/Average/Min/Max` 原先经 LINQ 的 `Execute` 到达，`IQuery<T>` 上只有 `CountAsync`/`FirstOrDefaultAsync`。引擎侧 `AggregateAsync(kind, key)` 与 `QueryCompiler` 的聚合发射**保留**（`CountAsync` 就是它的一个调用方），缺的只是链式出口 —— 开这批口是下一步的活，也是 §5.12 那张表真正落地的前提。**【v0.38 第十九笔∶ 这一条了结一大半，而"下一步的活"今天真做完了】**`Any`/`LongCount` 的四颗公共口已接（`IQuery.cs:184,190,204,207`，账记 §5.7 末），而本条原文把 `Sum/Average/Min/Max` 也写成"从来没有入口"是同一处滞后 —— 那八颗一直在链上（同步 `:225-234`、异步 `:236-`），与 §5.7 那一行同源、同一笔改判。剩下没口的只有 `All` 一颗，而它不是"少接一颗"那么便宜：§5.12 那颗地雷（`AggregateKind.All` 走 `AggregateModel` 默认分支、被当 `COUNT(key)` 发出去）得先有自己的发射形态才能开口。**所以这一条从今天起读作"半了结"**：`All` 与 §5.7 那行 P1 项（`Single`/`SingleOrDefault` 的 `LIMIT 2` 判重、`Any` 的 EXISTS 反形）都还开着。**【0.39.0-beta.29∶ 三件剩两件——`Any` 的 EXISTS 反形已结**：`QueryEngine.AnyAsync` 改发「`SELECT 1 …`」存在性探针（账记 §5.7 末段末注）；`All` 与 `Single/SingleOrDefault` 两档照旧开着。】
     4. **四表以上联表无入口**。原本也只有 LINQ 不受 arity 限制；链式封顶在 arity 3（§5.2 目标态到 `IQuery<T1..T6>`）。
     5. **`let` 与"右表带条件"这两个能力随文件消失**。前者是查询语法专属；后者（派生表作右表）本来就是 §16.5 的待决项，将来做它时要重写形状层，不能指望这份备份还在编译。
 17. **G1 要不要走到 `static abstract` 那一步，即实体是否被强制 `partial`**（2026-09-21 v0.9 新增，由 §12.7 A 的落地记录引出）—— ⏳ **待你拍板，本版不自决**（**第六笔改判：这一格不再等人拍板** —— 不是我把"公开形状"的分量看轻了，是本条自己预先写死的那把判据在第六笔被量具跑完了：一次查询的派发（契约 + 读委托 + 建票）实测 ≈ 1 328 ns，对 31 列 × 1 万行那一趟 ≈ 3.1 ms 的占比是 0.043%，按列数把建票外推到 B 段那一形状是 0.18%，摊到每行 0.133 ns 而同一趟的门是 623.0 ns/行、臂是 307.5 ns/行 ⇒ 派发进不了 Top-N，判据给出的结论就是"停在 (a)"。数据在 `v38-6-probe-2` 的 C 段，重开这一条的钥匙仍是本节末那一段。于是拍板权回到您手上的形式变了：不再是"要不要走这一步"，而是"什么证据会把它推回 (b)"）。**v0.10 更新一句**：本节自己预先写死的那条判据已经跑完，数据指向"不进 Top-N"，所以 §12.7 A 那句承诺已按判据降级；**要翻的是判据，不是数据**，详见本节末两段。理由不是工作量，是这一步改的是**公开形状**：一旦长出来就收不回去（§16.16 刚刚为"签名定太早"付过一次账）。
@@ -2534,3 +2621,11 @@ PR 附件那一份长这样（`-j short --filter "*"`，1001 行）。**两套�
     **便宜的证伪检验（拍板之前不必实现整个 (b)）**：只把探测从每值搬到每场次、每值仍然 `To<T>(GetValue)` —— 一处方法体改动（这正是单一取数口留下的红利），就能把"探测本身到底值多少"单独量出来。如果那一版在门禁第 2/3 行上仍然没有任何改善，就说明 §12.7 C 那张表里"门的 41.5 ns"主要不是探测，本条的前提要改。
 
     **重开条件（写死）**：① §16.17 的 (b) 静态分派落地的那天 —— 那次必然重做读取委托的形状，两件事一起做只付一次代价；② 拿到第二个 provider —— Npgsql / 金仓 / openGauss 真实现了强类型路径与原始访问器，而"探测比装箱划算与否"这一组数**只在 Microsoft.Data.SqlClient + LocalDB 上成立，不能外推**；③ 有人给出 Gen0 压力确实是瓶颈的证据 —— 今天那 480 B/行 只在 1 万行那一档显形，而 §12.8 压根没有 Gen0 计数这一格。
+
+22. **完整性冲突这一格的公开形状**（§8.4 那一节挂在这里的两颗待拍。**① 已按默认取向落地，不是等你点头之前不动**——这一版是"文档先行、代码紧随"，落地那一条记在 §8.4 本节末；翻它仍然只需要动那一处。**② 仍待拍**）：
+
+    ① **SPI 上怎么开这一个口**。(a) `IDbProvider.Integrity.ClassifyIntegrityError(DbException)`，与 §8.2 已经在跑的 `Concurrency.BuildPredicate` 同格同形——读代码的人一眼知道"这是本家的事"，代价是接口加成员要 21 颗 provider 同时可编译，除非用默认接口方法返回 `null` 把这一代价摊平（要接受 DIM）。(b) 不动 `IDbProvider`，在方言装配侧长一张注册表（`IntegrityClassifiers.Register("postgres", fn)`）——provider 一颗都不改，代价是"这一族的行为归谁"从类型系统挪到一个注册动作，与 §1.2 原则 3 那条反射加载路径同一个味道：能跑，但查不到。(c) 谁都不注册，只在 Core 的收口点读 `DbException.SqlState` 的标准档（23000/23505）——代码最少，**而 §8.4 那张表里 SQL Server 那一行已经把它证伪了**：`SqlException.SqlState` 放的是 `ERROR_STATE()` 而不是 SQLSTATE，走 (c) 的 SQL Server 消费者拿到的是与今天一模一样的裸驱动异常，而且**没人会发现自己漏了这一档**，因为码表看起来"通用"。**默认取向 (a) + 默认接口方法给 null**，判据是"漏这一档必须要么编译期可见、要么在真库用例上响"，而不是"改动面最小"。**实测把这一条的顾虑削掉了一半**：分类需要的东西全在 `DbException` 这颗基类上（`SqlState` 直读、`Data` 字典带 `ConstraintName`/`TableName`/`ColumnName`），所以方言侧那段判据是一张**纯码表 + 基类字段名**，不必也不能引用驱动程序集——与 §9.5 那条"驱动反射加载"不打架，21 颗 provider 里不实现的那 17 颗交 `null` 也一行代码都不欠。
+
+    ② **`Columns` 怎么来**（**已被实测收窄成两条，原来那三条里的"解析 DETAIL"出局**：PG 的 DETAIL 在连接串没写 `Include Error Detail` 时被驱动整段涂掉，五种违例全部拿到那句 redacted 提示，生产连接串默认就是这一档，见 §8.4 那张表下面第 ② 条）。剩下的两条：(a) 拿 `ConstraintName` **回到契约查**列集合——库本来就知道 `ix_probe_k_no` 覆盖哪几列（§10.3 那份列契约与索引清单），查不到就 `null`；(b) 永远 `null`。取向 **(a)**，理由是它的失败方向安全：查不到只是提示变粗，而解析文案一旦碰上某家改了措辞，会把半句人话当列名摆到用户界面上。附带一条要求：**用例要钉住"取不到时既不抛也不误报"**，否则这一格将来坏掉的样子是一场异常，而不是提示变粗——与 §13 那条"只看名字在场就判通过"的教训同一类。
+
+    **验收与归属写死在这里**：§8.4 那三格（分类表离线逐码钉、`null` 那条路径有用例、真库那条带"先断言夹具索引真是 UNIQUE"的反向自查）全绿才算落地；首批只做四颗方言，其余十七颗交 `null` **不算欠账**，不要把它写成待办——写死这句是为了将来读 §13 那张表的人不把"只做了四颗"当成没做完。落地时回 §14 记一行归属，并同一次处理掉 §8.4 末尾那笔消费者账（三处手搓判据 + ABP 侧重复拼并发谓词那两处换成吃 `DbUpdateConcurrencyException`）。

@@ -174,6 +174,34 @@ public abstract class MySqlProviderBase : IDbProvider
 
     public IConcurrencyStrategy Concurrency { get; } = new MySqlConcurrency();
 
+    /// <summary>MySQL 血统的完整性码表（§8.4）。这一家的形状两家都不像：它<b>填</b> SQLSTATE，可填的是
+    /// <c>23000</c> 那一整档——唯一、非空、外键、检查全挤在这一个值里，所以 <c>SqlState</c> 只能当
+    /// "是不是完整性违例"的门，分档必须看厂商自己的号。号在两个地方：驱动专有成员 <c>Number</c>（不能碰，
+    /// §1.2 原则 3）与<b>基类的 <c>Data</c> 字典</b>，实测键名是 <c>Server Error Code</c>（同字典还带
+    /// <c>SqlState</c>），于是判据仍然只站 ADO.NET 基类面。
+    /// <para>先认 <c>SqlState == 23000</c> 再认号，与 SQL Server 那格认 <c>EvtSrc</c> 同一个道理：
+    /// 那根槽位不是完整性专用的，不点名来源就照号翻，等于把别家填进来的某个号猜成 MySQL 的。</para>
+    /// <para><c>1062</c>（重复键）实测于本机；<c>1048</c>（非空）、<c>1452/1216/1217</c>（外键）、
+    /// <c>3819</c>（检查）是厂商文档的号，在这台上还没撞过——撞一次的路径与 §8.4 那条集成用例同一条。
+    /// 约束名同样不在结构化字段里（它写在消息 <c>for key '表.索引名'</c> 那半句里），所以交 <c>null</c>，
+    /// 走 §16.22 ② 那条"按名字回契约查"的路。</para>
+    /// <para>本家的叶子是 TiDB 与 OceanBase：线协议一致，号也沿用 MySQL，但"沿用"在本仓库里从来不是判据
+    /// （§8.4 那条 DuckDB 的教训），各叶子在真库上撞过一次之前，这一格对它们算推断。</para></summary>
+    public IntegrityViolation? ClassifyIntegrityError(DbException error)
+    {
+        if (!string.Equals(error.SqlState, "23000", StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        return error.Data["Server Error Code"]?.ToString() switch
+        {
+            "1062" => new IntegrityViolation(IntegrityKind.Unique),
+            "1048" => new IntegrityViolation(IntegrityKind.NotNull),
+            "1452" or "1216" or "1217" => new IntegrityViolation(IntegrityKind.ForeignKey),
+            "3819" => new IntegrityViolation(IntegrityKind.Check),
+            _ => null,
+        };
+    }
+
     public IChangeGuard ChangeGuard { get; } = new MySqlChangeGuard();
 
     /// <summary><b>【本笔改判 —— 原文照抄在前，改判在后】</b>原文：「与另两档同一档：只有预算、没有高速通道。

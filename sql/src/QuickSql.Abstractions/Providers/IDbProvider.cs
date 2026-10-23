@@ -34,6 +34,19 @@ public interface IDbProvider
 
     IConcurrencyStrategy Concurrency { get; }
 
+    /// <summary>把驱动抛回来的完整性违例翻成「哪一档」（§8.4）——与 <see cref="Concurrency" /> 同一家的事：
+    /// 只有本家知道自己报的是 SQLSTATE 还是错误号，也只有本家知道那个号在这家是不是"唯一键"
+    /// （SQL Server 的 <c>SqlException.SqlState</c> 放的是 <c>ERROR_STATE()</c> 而不是 SQLSTATE，
+    /// 照 "通用层读 SqlState" 写就会漏掉那一整家，§8.4 那张表记的就是这条岔口）。
+    /// <para><b>只需要 <see cref="DbException"/> 基类上的面</b>：<c>SqlState</c> 是它的虚属性，
+    /// 约束名在 <c>Data["ConstraintName"]</c>（PG 实测，2026-10-23）——所以这一格不与 §1.2 原则 3
+    /// 「provider 编译期不认识驱动」打架，判据是一张纯码表。</para>
+    /// <para><b>默认 null = 判不出，收口点原样抛驱动那颗，不包装、不猜</b>。这不是兜底而是这一格的主要
+    /// 安全属性：误分类会把外键冲突说成"重复提交"，用户照着提示再点一次而库里根本没有那一行；
+    /// 不分类只是消费者拿到今天同样的裸异常。§8.4 首批四家，其余十七家交在这一格上。</para></summary>
+    /// <param name="error">驱动抛回来的那一颗（已经是 <see cref="DbException"/> 才进得来这条口子）。</param>
+    IntegrityViolation? ClassifyIntegrityError(DbException error) => null;
+
     /// <summary>变更守卫的比较形状（§12.4 第 2 项）。合并语句靠它把「一行都没变的行」挡在 <c>UPDATE</c> 之外，
     /// 而"怎么挡"只有两形（一句 <c>IS DISTINCT FROM</c> 对三段 <c>OR</c>），今天的分布是 <b>1∶4</b>
     /// （金仓那一族一句，T-SQL、Oracle 血统、MySQL 血统与虚谷四家三段；第四家落进来的理由与前三家不同一条，

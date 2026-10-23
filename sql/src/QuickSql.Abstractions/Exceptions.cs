@@ -191,6 +191,85 @@ public sealed class SchemaSyncFailedException(
     static string SingleLine(string sql) => sql.Replace("\r", " ").Replace("\n", " ").Trim();
 }
 
+/// <summary>完整性违例的四档（§8.4）。分成四档而不是留给消费者读一个枚举字段，是因为
+/// <c>catch</c> 的写法要跟着"这一档的处置"走：唯一键通常是重复提交（回一句"已经提交过了"），
+/// 外键与检查是数据本身不合法（该点名的字段要点名），非空常常是漏填——三件事的文案与状态码都不一样，
+/// 用一颗类型加一个字段表达就等于把分流推给了调用方。</summary>
+public enum IntegrityKind
+{
+    Unique,
+    NotNull,
+    ForeignKey,
+    Check,
+}
+
+/// <summary>方言判出来的那一格"这是哪一种完整性违例"（§8.4）。判不出就返回 <c>null</c>，
+/// 收口点于是原样抛驱动那颗——<b>误分类比不分类坏得多</b>：把外键冲突报成"重复提交"，
+/// 用户会照着提示再点一次，而库里根本还没有那一行。</summary>
+/// <param name="Kind">那一档。</param>
+/// <param name="ConstraintName">库给回的约束/索引名。方言给不出就是 <c>null</c>——
+/// PG 实测只有非空那一档不给（那一档本来就没有命名约束），其余三档都给。</param>
+public sealed record IntegrityViolation(IntegrityKind Kind, string? ConstraintName = null);
+
+/// <summary>写路径被库拒绝的共同底座（§8.4）。并发冲突与完整性违例是它的两个分支，
+/// 之所以要在这一格合到一个基类下，是因为消费者普遍要写的那句是"这一整族都记一笔再往上抛"——
+/// 没有这个底座就得列五颗类型名，而漏一颗的后果是那条路径悄悄绕过日志。</summary>
+/// <param name="message">说清楚"哪一格被拒"的中文文本。</param>
+/// <param name="sql">最终执行的那一份文本，口径与 <see cref="DbUpdateConcurrencyException"/> 相同：
+/// <c>CudBuilding</c> 改写之后的，不是改写之前的。</param>
+/// <param name="constraintName">库给回的约束名，拿不到就 <c>null</c>。</param>
+/// <param name="inner">驱动那一颗原话，留在 <see cref="Exception.InnerException"/> 里，不在文本中重说。</param>
+public abstract class DbUpdateException(
+    string message,
+    string sql,
+    string? constraintName,
+    Exception? inner)
+    : QuickSqlException(message, inner)
+{
+    public string Sql { get; } = sql;
+
+    public string? ConstraintName { get; } = constraintName;
+
+    // 键列不在任何驱动的结构化字段里（§8.4：PG 的 DETAIL 在默认连接串上被驱动整段涂掉，连"能不能拿到"
+    // 都不是方言说了算的事），正解是拿 ConstraintName 回到契约查——那一步要 ExecutionTag 进到这一格，
+    // 还没有接，所以这里没有 Columns 这一颗：没有实现的东西不进契约（§16.22 ②）。
+}
+
+/// <summary>唯一键 / 唯一索引撞了（§8.4）。今天唯一的真实消费者是"同一笔被提交了两次"，
+/// 所以这一颗单独存在而不是并进 <see cref="DbUpdateException"/> 的一个字段。</summary>
+public sealed class UniqueConstraintException(
+    string message,
+    string sql,
+    string? constraintName,
+    Exception inner)
+    : DbUpdateException(message, sql, constraintName, inner);
+
+/// <summary>非空违例（§8.4）。库在这一档不给约束名，给的是列名与表名——而列名要走契约回填，
+/// 所以今天这一颗手上比其余三颗少一格。</summary>
+public sealed class NotNullConstraintException(
+    string message,
+    string sql,
+    string? constraintName,
+    Exception inner)
+    : DbUpdateException(message, sql, constraintName, inner);
+
+/// <summary>外键违例（§8.4）。<b>插入侧与删除侧同码</b>（PG 实测两侧都是 23503，只有文案分岔），
+/// 所以这一颗不区分"引用不存在"与"被引用不许删"——那是文案的事，不是类型的事。</summary>
+public sealed class ForeignKeyConstraintException(
+    string message,
+    string sql,
+    string? constraintName,
+    Exception inner)
+    : DbUpdateException(message, sql, constraintName, inner);
+
+/// <summary>检查约束违例（§8.4）。</summary>
+public sealed class CheckConstraintException(
+    string message,
+    string sql,
+    string? constraintName,
+    Exception inner)
+    : DbUpdateException(message, sql, constraintName, inner);
+
 /// <summary>乐观并发冲突（§8.2 那句「冲突时逐个给出 <c>DbUpdateConcurrencyException</c>」）。
 /// 触发条件只有一个：<b>带着并发谓词的那一句 <c>UPDATE</c>/<c>DELETE</c> 影响了 0 行</b>。
 ///
@@ -214,7 +293,7 @@ public sealed class DbUpdateConcurrencyException(
     string operation,
     string sql,
     IReadOnlyDictionary<string, object?> currentValues,
-    IReadOnlyDictionary<string, object?>? databaseValues) : QuickSqlException(message)
+    IReadOnlyDictionary<string, object?>? databaseValues) : DbUpdateException(message, sql, null, null)
 {
     /// <summary>冲突的那一只实体实例。它<em>仍然</em>留在会话里、状态仍然欠着那一句 ——
     /// 抛出时整批已经回滚，会话没有结算（§8.2 落地记录第一条）。</summary>
@@ -222,8 +301,6 @@ public sealed class DbUpdateConcurrencyException(
 
     /// <summary>引发冲突的那一档：<c>update</c> 或 <c>delete</c>，与 <c>ExecutionTag</c> 同一个词。</summary>
     public string Operation { get; } = operation;
-
-    public string Sql { get; } = sql;
 
     /// <summary>实体此刻手里的那些值（<b>不是</b>物化时的快照 —— 那一版是 <c>WHERE</c> 里的那几颗参数，
     /// 消息文本按列把两者并排写出来了）。用户手里本来就拿着这一只实例，这半字典是给 catch 里那句

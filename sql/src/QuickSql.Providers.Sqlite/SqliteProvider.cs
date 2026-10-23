@@ -220,6 +220,25 @@ public sealed class SqliteProvider : IDbProvider
 
     public IConcurrencyStrategy Concurrency { get; } = new SqliteConcurrency();
 
+    /// <summary>SQLite 的完整性判据（§8.4），也是首批四家里唯一一颗<b>读文案</b>的：这一家在 ADO.NET 的
+    /// 基类面上什么都给不出来——本机实测一颗重复键违例，<c>SqlState</c> 是 <c>null</c>、<c>Data</c> 是
+    /// <em>空字典</em>、<c>ErrorCode</c> 给的是一颗 HRESULT；真正那两颗号（<c>SqliteErrorCode</c> 19 与
+    /// <c>SqliteExtendedErrorCode</c> 2067 = <c>SQLITE_CONSTRAINT_UNIQUE</c>）只挂在驱动专有成员上，
+    /// 而 §1.2 原则 3 明写"加载可以反射，调用不行"，所以够不着。剩下的只有 SQLite 自己那句固定文案：
+    /// 实测原文 <c>SQLite Error 19: 'UNIQUE constraint failed: 表.列, 表.列'.</c></summary>
+    /// <remarks><b>今天只认这一句，其余三档交回 <c>null</c></b>：SQLite 另外三句
+    /// （<c>NOT NULL constraint failed:</c> / <c>FOREIGN KEY constraint failed</c> /
+    /// <c>CHECK constraint failed:</c>）在本台上还没撞过，而 §8.4 的判据写着"没撞过的号不算数"——
+    /// 文案比号更脆，一次只押一句已实测的。附带一条好处：这一句里带着<em>列名清单</em>
+    /// （<c>表.列, 表.列</c>），是四家里唯一不需要回契约就能报出坏在哪几列的形态，
+    /// 等 §16.22 ② 那一格（按约束名回契约查列）动工时，本家的取法与别家不同一条，先记在这里。
+    /// <para>用 <c>Contains</c> 而不是 <c>StartsWith</c>：整句开头是 <c>SQLite Error 19:</c> 那颗号的壳，
+    /// 而"是不是唯一违例"这件事只由那半句决定。</para></remarks>
+    public IntegrityViolation? ClassifyIntegrityError(DbException error) =>
+        error.Message.Contains("UNIQUE constraint failed", StringComparison.OrdinalIgnoreCase)
+            ? new IntegrityViolation(IntegrityKind.Unique)
+            : null;
+
     public IChangeGuard ChangeGuard { get; } = new SqliteChangeGuard();
 
     /// <summary>没有批量策略（类注释倒数第二条）。这一格与 <c>XuguProvider</c>、<c>Gbase8sProvider</c>

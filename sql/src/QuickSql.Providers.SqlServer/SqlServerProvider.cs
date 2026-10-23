@@ -68,6 +68,34 @@ public sealed class SqlServerProvider : IDbProvider
 
     public IConcurrencyStrategy Concurrency { get; } = new SqlServerConcurrency();
 
+    /// <summary>SQL Server 的完整性码表（§8.4）。这一家的形状与 PG 差在两处，两处都是本机实测出来的
+    /// （2026-10-23，集成目标实例上撞一次唯一索引）：<b><c>SqlState</c> 是空的</b>——
+    /// <c>SqlException.SqlState</c> 在这家放的是 <c>ERROR_STATE()</c> 而不是 SQLSTATE，实测直接 <c>null</c>，
+    /// 所以"通用层读 SqlState 就通吃"这一句在这里当场不成立（§8.4 那条待拍举的就是这一家）；
+    /// 号在<b>基类的 <c>Data</c> 字典</b>里（<c>HelpLink.EvtID</c> = <c>2601</c>、
+    /// <c>HelpLink.EvtSrc</c> = <c>MSSQLServer</c>），于是仍然不需要反射调驱动成员——
+    /// §1.2 原则 3「加载可以反射，调用不行」在这一格守得住。</summary>
+    /// <para><b>547 故意不分类</b>：那一颗号同时覆盖外键冲突、检查约束与命名唯一约束，
+    /// 分开只能读文案。而 §8.4 的判据是"误分类比不分类坏"——把外键冲突说成"重复提交"，
+    /// 用户会照着提示再点一次而库里根本没有那一行。所以 547 交回 <c>null</c>（驱动原样出洞），
+    /// 等一家愿意按文案分档的时机再说，而不是今天赌一把。</para>
+    /// <para><c>2601</c> 实测；<c>2627</c>（唯一约束/主键）与 <c>515</c>（非空）是厂商文档的号，
+    /// 前者已被集成册那条"插同一个主键第二行"的用例转成实测，后者仍未在本机撞过。</para>
+    public IntegrityViolation? ClassifyIntegrityError(System.Data.Common.DbException error)
+    {
+        // EvtSrc 那一格不是装饰：这根字典槽位是 ADO.NET 给"帮助链接"用的，别家驱动也可能填，
+        // 所以按它点名的来源收口，认错了家就什么都别翻。
+        if (!string.Equals(error.Data["HelpLink.EvtSrc"] as string, "MSSQLServer", StringComparison.Ordinal))
+            return null;
+
+        return error.Data["HelpLink.EvtID"] switch
+        {
+            "2601" or "2627" => new IntegrityViolation(IntegrityKind.Unique),
+            "515" => new IntegrityViolation(IntegrityKind.NotNull),
+            _ => null,
+        };
+    }
+
     public IChangeGuard ChangeGuard { get; } = new SqlServerChangeGuard();
 
     /// <summary>L1 有通道了（<c>SqlServerBulk.ResolveCopyChannel()</c> → <see cref="DbCapabilities.Bulk_Copy"/> 那颗位从此有对象），

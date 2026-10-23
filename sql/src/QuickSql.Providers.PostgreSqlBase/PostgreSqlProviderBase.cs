@@ -110,6 +110,30 @@ public abstract class PostgreSqlProviderBase : IDbProvider
 
     public IConcurrencyStrategy Concurrency { get; } = new PostgreSqlConcurrency();
 
+    /// <summary>PG 血统的完整性码表（§8.4）。每一个数都取自 2026-10-23 在一台可达的 PG 18.6 上的实测：
+    /// <c>pg_temp</c> 里一张带齐四种约束的夹具，五种违例各撞一次，取值全程只碰
+    /// <see cref="DbException"/> 这颗基类面（<c>SqlState</c> 与 <c>Data["ConstraintName"]</c>），
+    /// 一个 Npgsql 的类型都没引用——所以这一格与 §1.2 原则 3「provider 编译期不认识驱动」不打架。
+    /// <para>三条实测口径：<b>非空那一档库不给约束名</b>（那一档本来就没有命名约束，给的是列名与表名）；
+    /// <b>外键的插入侧与删除侧同报 23503</b>，分岔只在文案；<b>DETAIL 在默认连接串上被驱动整段涂掉</b>
+    /// （"Specify 'Include Error Detail'"），于是"从文案里取键列"这条路在生产连接串上不是不可靠、
+    /// 而是根本没有材料——键列要么按约束名回契约查（§16.22 ②，还没接），要么就不给。</para>
+    /// <para><b>金仓 / openGauss / 瀚高 / GBase 那几颗叶子今天跟着这一份走</b>，依据是它们自己声明继承
+    /// 本家；这句不等于"验过"。各叶在真库上跑一遍 §13 那条分类用例才算数，跑出错就在叶子上覆写这一格——
+    /// 这也是它写成 <see langword="virtual"/> 而不是封死在本家的原因。</para></summary>
+    public virtual IntegrityViolation? ClassifyIntegrityError(DbException error) => error.SqlState switch
+    {
+        "23505" => new IntegrityViolation(IntegrityKind.Unique, PgConstraintName(error)),
+        "23502" => new IntegrityViolation(IntegrityKind.NotNull),
+        "23503" => new IntegrityViolation(IntegrityKind.ForeignKey, PgConstraintName(error)),
+        "23514" => new IntegrityViolation(IntegrityKind.Check, PgConstraintName(error)),
+        _ => null,
+    };
+
+    /// <summary>PG 把约束名放在 ADO.NET 的 <c>Data</c> 字典里（实测键名就是 <c>ConstraintName</c>），
+    /// 所以这一格不需要驱动类型。非空那一档没有这个键，取到 <c>null</c> 是正常形状而不是失败。</summary>
+    static string? PgConstraintName(DbException error) => error.Data["ConstraintName"] as string;
+
     public IChangeGuard ChangeGuard { get; } = new PostgreSqlChangeGuard();
 
     /// <summary><b>【本笔改判 —— 原文照抄在前，改判在后】</b>原文：「只有预算、没有高速通道：这一家的高速层是

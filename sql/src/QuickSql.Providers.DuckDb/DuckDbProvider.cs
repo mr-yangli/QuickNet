@@ -48,6 +48,15 @@ public sealed class DuckDbProvider : PostgreSqlProviderBase
     /// <see cref="PostgreSqlProviderBase"/> 的 <c>Types</c> 抬头里写全了（CAST 那条路读的是属性）。</summary>
     public override ITypeMap Types => DuckDbTypes.Instance;
 
+    /// <summary>血统那道缝的又一行，方向与前两格相反：<b>把 PG 那份完整性码表退回"判不出"</b>。
+    /// DuckDB 说的是 PG 的线协议，可约束违例在它自己那一侧报的不是 PG 的 SQLSTATE 家数
+    /// （23505 / 23502 / 23503 / 23514 这一套是服务端的行为，不是协议规定的），
+    /// 而本家到今天没有一条真库用例撞过其中任何一颗。§8.4 的判据是"误分类比不分类坏"——
+    /// 拿别人的码表猜自己家，猜中的结果是用户把一句约束错误读成"重复提交"再点一次。
+    /// 翻这一格的条件写在这里：集成册那条 <c>IntegrityErrorTranslationPathTests</c> 在本家跑绿
+    /// （它今天跑在 SQL Server 与 PG 上），就把这一行删掉跟着血统走。</summary>
+    public override IntegrityViolation? ClassifyIntegrityError(DbException error) => null;
+
     public DuckDbProvider(DbProviderFactory driverFactory)
         : base(DbKind.DuckDb, driverFactory)
     {
