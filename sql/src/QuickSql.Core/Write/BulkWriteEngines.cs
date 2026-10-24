@@ -75,7 +75,8 @@ sealed class UpdateBulkEngine<T> : IUpdateBulk<T> where T : class
 
             // 主键进 WHERE 不进 SET；库里给值的列（自增/计算列）与并发列不接受书写——三条判据与
             // UpdateEngine.ColumnOf 逐字同源，那里拦调用方点名的列，这里拦契约整行的列。
-            if (column.IsPrimary || column.ValueFromStore || column.IsConcurrencyToken)
+            // 应用给值的并发列（AppSetsValue）例外：新值在实体上，随整行写出去（WHERE 仍比快照）。
+            if (column.IsPrimary || column.ValueFromStore || (column.IsConcurrencyToken && !column.AppSetsValue))
                 continue;
 
             settable.Add(column);

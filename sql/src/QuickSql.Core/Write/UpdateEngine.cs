@@ -93,7 +93,8 @@ sealed class UpdateEngine<T> : IUpdate<T> where T : class
             var column = contract.Columns[ordinal];
 
             // 三道筛与 UpdateBulkEngine 构造函数逐字同源：主键进 WHERE 不进 SET，库里给值的列与并发列不接受书写。
-            if (column.IsPrimary || column.ValueFromStore || column.IsConcurrencyToken)
+            // 应用给值的并发列（AppSetsValue）例外：新值在实体上、由应用生成，必须随整行写出去（WHERE 仍比快照）。
+            if (column.IsPrimary || column.ValueFromStore || (column.IsConcurrencyToken && !column.AppSetsValue))
                 continue;
 
             var value = schema.GetValue(entity, ordinal);
@@ -238,10 +239,10 @@ sealed class UpdateEngine<T> : IUpdate<T> where T : class
         if (column.IsIdentity)
             throw new QuickSqlException($"{_contract.Table.Name} 的自增列 {column.MemberName} 不接受写：那是 IDENTITY_INSERT 那条路（IKeyStrategy.IdentityInsertToggle），本版本未接。");
 
-        if (column.IsConcurrencyToken)
+        if (column.IsConcurrencyToken && !column.AppSetsValue)
             throw new QuickSqlException($"{_contract.Table.Name} 的并发列 {column.MemberName} 只比较、不书写（§8.2）：那一列的值归库给，" +
                 "而这一句在库里也执行不过（SQL Server 的 rowversion 不可赋值）。要改版本号得直连库；" +
-                "要应用自己维护版本列（<c>int Version</c> 那一派），那是另一格，本版本未接（§14 的 P1 余项）。");
+                "应用自己给值的并发列（AppSetsValue 那一族）不在这一格，点它写它是合法的。");
 
         return column;
     }

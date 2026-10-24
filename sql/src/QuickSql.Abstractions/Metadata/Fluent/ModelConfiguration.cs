@@ -48,13 +48,18 @@ public sealed class FluentMember
     /// <summary>并发列（§8.2 的乐观锁，只比较不书写）。与 <c>[ConcurrencyToken]</c> 同一格，优先级链上 Fluent 在上。</summary>
     public bool? IsConcurrencyToken { get; private set; }
 
+    /// <summary>应用给值那一族（<c>[ConcurrencyToken(AppSetsValue = true)]</c> 的 Fluent 等价物）：
+    /// 新值由应用在保存前生成，库拿快照比 WHERE、把现值写进 SET。要先用 <see cref="PropertyBuilder.IsConcurrencyToken"/>
+    /// 或特性把这一列声明成并发列，这一格才被采信。</summary>
+    public bool? AppSetsValue { get; private set; }
+
     public string? StoreTypeName { get; private set; }
 
     public string? Comment { get; private set; }
 
     internal bool IsEmpty => ColumnName is null && MaxLength is null && Precision is null && Scale is null
                              && Required is null && IsKey is null && IsIdentity is null && IsIgnored is null
-                             && IsConcurrencyToken is null && StoreTypeName is null && Comment is null;
+                             && IsConcurrencyToken is null && AppSetsValue is null && StoreTypeName is null && Comment is null;
 
     public sealed class PropertyBuilder(FluentMember member)
     {
@@ -127,6 +132,17 @@ public sealed class FluentMember
         {
             member._facts.Record(nameof(IsConcurrencyToken), isConcurrencyToken);
             member.IsConcurrencyToken = isConcurrencyToken;
+            return this;
+        }
+
+        /// <summary>
+        /// 把并发列声明成应用给值那一族（<c>[ConcurrencyToken(AppSetsValue = true)]</c> 的等价物）：
+        /// 新值由应用生成，列进 SET 与 INSERT 列清单，WHERE 仍比快照。
+        /// </summary>
+        public PropertyBuilder AppSetsValue(bool appSetsValue = true)
+        {
+            member._facts.Record(nameof(AppSetsValue), appSetsValue);
+            member.AppSetsValue = appSetsValue;
             return this;
         }
     }

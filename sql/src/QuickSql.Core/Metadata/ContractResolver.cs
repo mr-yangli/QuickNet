@@ -390,10 +390,22 @@ public sealed class ContractResolver(IDbProvider provider, ModelConfiguration? c
         var display = property.GetCustomAttribute<Da.DisplayAttribute>();
         var comment = fluentMember?.Comment ?? description ?? display?.Description ?? display?.Name;
 
-        // 并发列只有两个来源：自研属性与 Fluent（DataAnnotations 那一层没有等价注解 —— 带这个语义的
-        // TimestampAttribute/ConcurrencyCheckAttribute 住在 EF Core 的程序集里，引它等于引 EF Core）。
+        // 并发列的来源：自研属性与 Fluent（DataAnnotations 那一层没有等价注解 —— 带这个语义的
+        // TimestampAttribute/ConcurrencyCheckAttribute 住在 EF Core 的程序集里，引它等于引 EF Core），
+        // 再加一条成员名约定 —— ConcurrencyStamp 就是 ABP/IHasConcurrencyStamp 那一族的现成拼写，
+        // 约定直接把它认成应用给值的并发列，那一族实体一个注解都不用加。
+        // 显式声明压在约定之上：打了 [ConcurrencyToken] 的列按声明那一档算（默认只比较不书写），
+        // 要第三族就明说（AppSetsValue 参数 / Fluent 同名口）。
+        var tokenAttribute = property.GetCustomAttribute<ConcurrencyTokenAttribute>();
         var token = fluentMember?.IsConcurrencyToken
-                    ?? (property.GetCustomAttribute<ConcurrencyTokenAttribute>() is null ? (bool?) null : true);
+                    ?? (tokenAttribute is null ? (bool?) null : true)
+                    ?? (name == "ConcurrencyStamp" ? (bool?) true : null);
+
+        // 应用给值那一族（第三族）：显式声明（特性的 AppSetsValue 参数或 Fluent 的同名口）优先；
+        // 没显式说过时按同一条名字约定 —— 约定认出来的那一列就是应用给值的那一族。
+        var appSets = fluentMember?.AppSetsValue
+                      ?? tokenAttribute?.AppSetsValue
+                      ?? (name == "ConcurrencyStamp" ? (bool?) true : null);
 
         return new ColumnFacts
         {
@@ -415,6 +427,7 @@ public sealed class ContractResolver(IDbProvider provider, ModelConfiguration? c
             StoreTypeName = storeType,
             Comment = comment,
             IsConcurrencyToken = token == true,
+            AppSetsValue = token == true && appSets == true,
             ConcurrencyNote = token == true
                 ? fluentMember?.IsConcurrencyToken == true ? "Fluent IsConcurrencyToken" : "[ConcurrencyToken]"
                 : null,

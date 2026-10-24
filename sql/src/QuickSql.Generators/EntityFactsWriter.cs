@@ -214,6 +214,7 @@ static class EntityFactsWriter
              .AppendLine("                StoreTypeName = " + Lit(column.StoreType) + ",")
              .AppendLine("                Comment = " + Lit(column.Comment) + ",")
              .AppendLine("                IsConcurrencyToken = " + Bool(column.IsConcurrencyToken) + ",")
+             .AppendLine("                AppSetsValue = " + Bool(column.AppSetsValue) + ",")
              .AppendLine("                ConcurrencyNote = " + Lit(column.ConcurrencyNote) + ",")
              .AppendLine("            },");
         }

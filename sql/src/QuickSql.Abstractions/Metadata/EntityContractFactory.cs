@@ -53,6 +53,10 @@ public sealed record ColumnFacts
     /// （不像自增 —— 那一个要等 provider 定完类型才能判），而两侧漏产出的后果由 §13.11 的逐字段对拍兜住。</summary>
     public bool IsConcurrencyToken { get; init; }
 
+    /// <summary>应用给值那一族（<see cref="ColumnContract.AppSetsValue"/> 的声明侧）。
+    /// 缺省 <c>false</c>；只有 <see cref="IsConcurrencyToken"/> 为真时才被采信。</summary>
+    public bool AppSetsValue { get; init; }
+
     /// <summary>并发标记来自哪一层，只用于拼 <see cref="ColumnContract.Origin"/>（打了标记才拼进去，
     /// 于是没打标记的实体那串文本一字不动 —— 黄金样本与 <c>Explain()</c> 的既有断言不该为这一格重抄）。</summary>
     public string? ConcurrencyNote { get; init; }
@@ -79,6 +83,7 @@ public sealed record ColumnFacts
         IsPrimary = IsPrimary,
         IsIdentity = false,
         IsConcurrencyToken = IsConcurrencyToken,
+        AppSetsValue = IsConcurrencyToken && AppSetsValue,
         MaxChars = MaxChars > 0 ? MaxChars : null,
         MaxBytes = null,
         Precision = Precision,

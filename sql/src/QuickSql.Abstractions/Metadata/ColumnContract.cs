@@ -35,6 +35,17 @@ public sealed record ColumnContract
     /// 但进 <c>WHERE</c> 与回填集。判据只有这一格，跟踪器与写入引擎都不再去读 attribute（§10.3）。</summary>
     public bool IsConcurrencyToken { get; init; }
 
+    /// <summary>应用给值的应用自维护并发列（<b>ABP 的 <c>string ConcurrencyStamp</c> 那一族</b>）：
+    /// 新值由应用在保存前生成好，库负责拿<em>快照旧值</em>去比（WHERE）、把<em>实体当前值</em>写出去
+    /// （进 <c>SET</c>、进 INSERT 列清单），不回读、也不自动 +1。只有 <see cref="IsConcurrencyToken"/>
+    /// 为真的列允许置位 —— 三个来源（<c>[ConcurrencyToken(AppSetsValue = true)]</c>、Fluent 的
+    /// <c>AppSetsValue()</c>、成员名叫 <c>ConcurrencyStamp</c> 的约定）都只在这一格落地。</summary>
+    /// <remarks>与另外两族分住：库维护的（<see cref="StoreFillsValue"/>，rowversion 那一派靠回读）与
+    /// 整型自增的（<c>SET Version = Version + 1</c>）都<b>不进 SET</b>，而这一族必须进 ——
+    /// 它的 WHERE 是快照、SET 是现值，两半合起来才是「我读到的那一版还在不在，在就换成我这一版」。
+    /// 判据同样只有这一格（§10.3），分类住在跟踪器的构造里。</remarks>
+    public bool AppSetsValue { get; init; }
+
     /// <summary>provider 说"这一型由库自己给值、且永不为空"（<b>输入</b>，不是结论）。今天只有 SQL Server 的
     /// <c>rowversion</c> 一型，由本家的 <c>ITypeMap.ApplyStorageDefaults</c> 落 —— 哪一型算"库自动递增"是
     /// 存储类型的事实，共用层不去猜，而猜得到那一半的（自增列）已经另有 <see cref="IsIdentity"/>。</summary>

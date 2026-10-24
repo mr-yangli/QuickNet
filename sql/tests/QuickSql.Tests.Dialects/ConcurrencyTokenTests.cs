@@ -301,6 +301,128 @@ public sealed class ConcurrencyTokenTests
         Assert.True(db.Entry(item).IsModified);
         Assert.True(db.ChangeTracker.HasChanges);
     }
+
+    // ── 第三族：应用给值（AppSetsValue，ABP 的 string ConcurrencyStamp 那一族）────
+
+    [Fact]
+    public void A_ConcurrencyStamp_member_is_a_token_the_app_fills_by_convention()
+    {
+        var column = orm().Schemas.Contract<StampedDoc>().Columns.Single(c => c.MemberName == nameof(StampedDoc.ConcurrencyStamp));
+
+        // 名字约定只把第三族认出来（进 SET、比快照），不把一列凭空升成并发列：
+        // 普通列、以及打标但没开 AppSetsValue 的并发列，那一格都是 false。
+        Assert.True(column.IsConcurrencyToken);
+        Assert.True(column.AppSetsValue);
+
+        var plain = orm().Schemas.Contract<StampedDoc>().Columns.Single(c => c.MemberName == nameof(StampedDoc.Note));
+        Assert.False(plain.IsConcurrencyToken);
+        Assert.False(plain.AppSetsValue);
+
+        var storeFilled = orm().Schemas.Contract<InventoryItem>().Columns.Single(c => c.MemberName == nameof(InventoryItem.RowVersion));
+        Assert.True(storeFilled.IsConcurrencyToken);
+        Assert.False(storeFilled.AppSetsValue);
+    }
+
+    [Fact]
+    public void The_attribute_and_the_fluent_surface_declare_the_third_family_explicitly()
+    {
+        var attributed = orm().Schemas.Contract<ExplicitStamped>().Columns.Single(c => c.MemberName == nameof(ExplicitStamped.Stamp));
+
+        Assert.True(attributed.IsConcurrencyToken);
+        Assert.True(attributed.AppSetsValue);
+
+        var model = new ModelConfiguration();
+
+        model.Entity<Order>().Property(o => o.PaidAt).IsConcurrencyToken().AppSetsValue();
+
+        var fluent = ormWith(model).Schemas.Contract<Order>().Columns.Single(c => c.MemberName == nameof(Order.PaidAt));
+
+        Assert.True(fluent.IsConcurrencyToken);
+        Assert.True(fluent.AppSetsValue);
+    }
+
+    [Fact]
+    public void An_app_set_token_enters_the_insert_column_list_and_the_SET()
+    {
+        // 与「不进列清单」那两族相对：这一族的新值在实体上、由应用生成，必须随行写出去。
+        var sql = orm().Insert(new StampedDoc { Id = 3, Title = "t", ConcurrencyStamp = "s1" }).ToSql();
+
+        Checks.Has("([Title], [ConcurrencyStamp], [Note]) VALUES", sql);
+
+        var db = session2();
+        var doc = new StampedDoc { Id = 3, Title = "t", ConcurrencyStamp = "s1" };
+
+        db.Attach(doc);
+        doc.ConcurrencyStamp = "s2";
+
+        Assert.Equal(1, db.ChangeTracker.DetectChanges());
+
+        // 与 int Version 那一族也不同：那一族是"库替我 +1"（实体不用先改），
+        // 这一族是"我自己已换好值"—— 脏判定认得它，SET 里带的就是实体手里的新值。
+        Assert.Equal(["ConcurrencyStamp"], db.Entry(doc).ModifiedMembers);
+
+        // State = Modified 的整行写也含这一族（可写位图放行了它），同样不进 +1 改写 ——
+        // 整行的口径是"可写列全脏"，所以普通列 Note 也在；对照 InventoryItem 那两颗用例，
+        // 差的就是并发列这一格从"跳过"变"包含"。
+        var whole = new StampedDoc { Id = 4, Title = "t", ConcurrencyStamp = "s1" };
+
+        db.Update(whole);
+        Assert.Equal(["Title", "ConcurrencyStamp", "Note"], db.Entry(whole).ModifiedMembers);
+    }
+
+    [Fact]
+    public void An_app_set_token_does_not_break_the_other_two_families()
+    {
+        // 三族并排对账：库维护（RowVersion）照旧不进 SET/列清单；应用自维护整型（Count 那一族用显式声明验证分类）与
+        // 应用给值（ConcurrencyStamp）进 SET。这里只判离线判得出的那一半：可写位图与列清单。
+        var stamped = orm().Schemas.Contract<StampedDoc>().Columns;
+
+        Assert.Equal(
+            ["Id"],
+            stamped.Where(c => !WritableWithThirdFamily(c)).Select(c => c.MemberName).ToArray());
+
+        // 整型 + AppSetsValue 显式声明的列：分类上它归第三族（不回读、不 +1），可写照旧。
+        var explicitStamped = orm().Schemas.Contract<ExplicitStamped>().Columns.Single(c => c.MemberName == nameof(ExplicitStamped.Stamp));
+
+        Assert.True(explicitStamped.AppSetsValue);
+    }
+
+    /// <summary>第三族之后写侧那句话的判据（<c>EntityTracker</c> 的 writable 位图）。</summary>
+    static bool WritableWithThirdFamily(ColumnContract column)
+        => !column.IsPrimary && !column.IsIdentity && (!column.IsConcurrencyToken || column.AppSetsValue);
+
+    static DbContext session2() => new(orm());
+}
+
+/// <summary>第三族的靶子（应用给值）：成员名 ConcurrencyStamp 命中约定，一个注解都不用加。
+/// 形状就是 ABP <c>IHasConcurrencyStamp</c> 那一族实体的现成拼写。</summary>
+[Table("QuickSqlStampedDoc")]
+public class StampedDoc
+{
+    public int Id { get; set; }
+
+    [QuickColumn(Length = 32)]
+    public string? Title { get; set; }
+
+    /// <summary>应用给值的并发戳：新值由应用生成（Guid 那一派），库拿快照旧值比 WHERE、把现值写进 SET。</summary>
+    public string? ConcurrencyStamp { get; set; }
+
+    /// <summary>普通可写列，与第三族并排才能判出"放行的只有那一族"。</summary>
+    public string? Note { get; set; }
+}
+
+/// <summary>显式声明第三族的靶子：成员名不叫 ConcurrencyStamp，靠特性的 AppSetsValue 参数升档。</summary>
+[Table("QuickSqlExplicitStamped")]
+public class ExplicitStamped
+{
+    public int Id { get; set; }
+
+    /// <summary>整型也能进第三族：显式声明优先于"整型 ⇒ +1"的缺省分类。</summary>
+    [ConcurrencyToken(true)]
+    public int Stamp { get; set; }
+
+    [QuickColumn(Length = 16)]
+    public string? Name { get; set; }
 }
 
 /// <summary>并发列而库里<em>没有</em>那一型的靶子（v0.24 那一档的负样本）。§8.2 明写过一句

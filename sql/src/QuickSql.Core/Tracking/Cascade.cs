@@ -105,6 +105,18 @@ sealed class CascadeWalker(ChangeTracker session, CascadeMode mode) : ICascadeSi
         edge.CascadeEnter(this, entity);
     }
 
+    /// <summary>到位档的入口（裁决③的镜像）：把 <paramref name="arrivals"/> 那几只送进子端<em>插入</em>档 ——
+    /// 基线里没有、此刻集合里新到、且会话还没跟过的那几只。与摘行档同一把 <c>CascadeEnter</c> 委托、
+    /// 同一次换成员，差别只在送进的档：摘掉一只删一行，新到一只插一行（外键由级联链接在父写出去之后补）。</summary>
+    public void Arrive(ITypeTracker parent, object entity, CollectionEdgeContract edge, IReadOnlyList<object> arrivals)
+    {
+        _parent = parent;
+        _edge = edge;
+        _victims = arrivals;
+
+        edge.CascadeEnter(this, entity);
+    }
+
     public void Enter<TParent, TChild>(TParent parent, IEnumerable<TChild>? children, string memberName)
         where TParent : class
         where TChild : class
@@ -130,9 +142,10 @@ sealed class CascadeWalker(ChangeTracker session, CascadeMode mode) : ICascadeSi
         }
     }
 
-    /// <summary>摘行档送的是<em>基线里那几只</em>，其余两档送的是委托现读的那一串。</summary>
+    /// <summary>送进去的那一份成员：摘行档送<em>基线里那几只</em>，到位档送<em>新到的那几只</em>（两者都换了名单，
+    /// 因为要的都不是"此刻那一串"），其余送委托现读的那一串。</summary>
     IEnumerable<TChild>? Pending<TChild>(IEnumerable<TChild>? children) where TChild : class
-        => mode == CascadeMode.Detach ? [.. _victims!.Select(static victim => (TChild) victim)] : children;
+        => _victims is not null ? [.. _victims.Select(static victim => (TChild) victim)] : children;
 
     /// <summary>那一格集合位<em>此刻</em>装着的成员（按引用原样收，<c>null</c> 元素跳过）。
     ///

@@ -73,7 +73,8 @@ sealed class InsertOrUpdateEngine<T> : IInsertOrUpdate<T> where T : class
 
             // 主键进冲突判定不进 SET；库里给值的列（自增/计算列）与并发列不接受书写——三条判据与
             // UpdateBulkEngine 构造函数那三道筛逐字同源。
-            if (column.IsPrimary || column.ValueFromStore || column.IsConcurrencyToken)
+            // 应用给值的并发列（AppSetsValue）例外：新值在实体上，随整行写出去（WHERE 仍比快照）。
+            if (column.IsPrimary || column.ValueFromStore || (column.IsConcurrencyToken && !column.AppSetsValue))
                 continue;
 
             settable.Add(column);

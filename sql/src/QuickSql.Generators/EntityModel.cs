@@ -101,6 +101,10 @@ sealed class ColumnModel
     /// Fluent 那一层 G1 整体上就吃不到（<c>GeneratedEntitySchemaRegistry</c> 的类注释里写着这条）。</summary>
     public bool IsConcurrencyToken;
 
+    /// <summary>应用给值那一族（<c>[ConcurrencyToken(AppSetsValue = true)]</c> 或成员名 ConcurrencyStamp 的约定）。
+    /// 与 IsConcurrencyToken 同一限制：生成期只看得见注解，Fluent 那一层 G1 吃不到。</summary>
+    public bool AppSetsValue;
+
     public string? ConcurrencyNote;
 
     /// <summary>CLR 侧是不是 <c>string</c>：只有字符串列有长度尺子（§10.4）。</summary>

@@ -164,6 +164,11 @@ sealed class ChangeTracker(QuickSqlOrm orm) : DbChangeTracker
     /// <para><b>为什么分两趟</b>：中途响（改父那一格）不能留下一份已经改到一半的基线，否则同一只会话
     /// 重试保存时，第一次响掉的那几只就不在基线里了 —— 响第二次变成"没改动"，那是最难读的一种形状。</para>
     ///
+    /// <para><b>到位是同一趟里的镜像</b>（裁决③补齐的另一半）：那一串里有、基线里没有、会话还没跟过的，
+    /// 送进子端<em>插入</em>档（<see cref="CascadeWalker.Arrive"/>），外键由级联链接在父写出去之后补 ——
+    /// "摘掉一只删一行，新到一只插一行"，两半合起来才是「明细换了没换」这一问的完整答案。
+    /// 已经在会话里的不算到位（第三道筛），库加载/别的路径带进来的成员不受这一趟影响。</para>
+    ///
     /// <para><b>代价</b>：每个带着"捞过的集合"的父一次读 + 一个引用哈希集，只在会话真出现过集合边时付。
     /// 与逐列比较同一量级，不是新添一个数量级。</para></summary>
     int DiffDetachedChildren()
@@ -186,8 +191,8 @@ sealed class ChangeTracker(QuickSqlOrm orm) : DbChangeTracker
 
                 for (var slot = 0; slot < edges.Count; slot++)
                 {
-                    // 基线是 null = 没见过；是空表 = 见过且没人。前者不判，后者也没什么可缺席的。
-                    if (!edges[slot].Cascade || baselines[slot] is not { Count: > 0 } baseline)
+                    // 基线是 null = 没见过，摘与到都不判；是空表 = 见过且没人，没人可缺席、但谁都算新到。
+                    if (!edges[slot].Cascade || baselines[slot] is not { } baseline)
                         continue;
 
                     var live = CascadeWalker.LiveMembers(edges[slot], node.Entity);
@@ -201,16 +206,16 @@ sealed class ChangeTracker(QuickSqlOrm orm) : DbChangeTracker
                     }
 
                     var victims = Missing(baseline, live);
+                    var arrivals = Arrived(baseline, live);
 
-                    if (victims is null)
+                    if (victims is null && arrivals is null)
                     {
-                        // 没人被摘：基线跟着往前走（新加进来的那些在这一格被认下来，不判它们"多出来"——
-                        // 摘掉一只才是要删一行，加进来一只不是一句 INSERT（那一档要的是级联插入侧的账）。
+                        // 谁也没动：基线跟着往前走。
                         baselines[slot] = live;
                         continue;
                     }
 
-                    (due ??= []).Add(new Detached(tracker, node, slot, edges[slot], live, victims));
+                    (due ??= []).Add(new Detached(tracker, node, slot, edges[slot], live, victims, arrivals));
                 }
             }
         }
@@ -226,20 +231,24 @@ sealed class ChangeTracker(QuickSqlOrm orm) : DbChangeTracker
         foreach (var item in due)
         {
             // 已经在删的那只不必判第二次：它本来就归这次删除，而且多半同时还挂在别人的集合里。
-            item.Victims.RemoveAll(victim => OwnerOf(victim)?.StateOf(victim) == EntityState.Deleted);
+            item.Victims?.RemoveAll(victim => OwnerOf(victim)?.StateOf(victim) == EntityState.Deleted);
 
-            foreach (var victim in item.Victims)
+            foreach (var victim in item.Victims ?? [])
                 if (held.TryGetValue(victim, out var holder))
                     throw Reparented(item, victim, holder);
         }
 
         foreach (var item in due)
         {
-            if (item.Victims.Count > 0)
+            if (item.Victims is { Count: > 0 })
                 new CascadeWalker(this, CascadeMode.Detach).Detach(item.Tracker, item.Node.Entity, item.Edge, item.Victims);
 
+            // 新到的那几只送进插入档：外键由级联链接在父写出去之后补（与 Add 顺导航带人同一条路）。
+            if (item.Arrivals is { Count: > 0 })
+                new CascadeWalker(this, CascadeMode.Insert).Arrive(item.Tracker, item.Node.Entity, item.Edge, item.Arrivals);
+
             item.Node.Baselines![item.Slot] = item.Live;
-            removed += item.Victims.Count;
+            removed += (item.Victims?.Count ?? 0) + (item.Arrivals?.Count ?? 0);
         }
 
         return removed;
@@ -255,6 +264,26 @@ sealed class ChangeTracker(QuickSqlOrm orm) : DbChangeTracker
                 (victims ??= []).Add(member);
 
         return victims;
+    }
+
+    /// <summary>到位的那一半（裁决③的镜像）：此刻那一串里有、基线里没有、且<em>会话还没跟过</em>的那几只。
+    /// 与 <see cref="Missing"/> 同一把参考尺（会话认的是实例）。「还没跟过」是第三道筛：
+    /// 已经在会话里的实例（别的路径 Add/Attach/物化进来的）不重复送——那一档要么本来就要写、
+    /// 要么是库里已有的行，把它们再 Add 一遍等于替调用方改主意。</summary>
+    List<object>? Arrived(List<object> baseline, List<object> live)
+    {
+        List<object>? arrivals = null;
+        var seen = new HashSet<object>(baseline, ReferenceEqualityComparer.Instance);
+
+        foreach (var member in live)
+        {
+            if (member is null || seen.Contains(member) || OwnerOf(member) is not null)
+                continue;
+
+            (arrivals ??= []).Add(member);
+        }
+
+        return arrivals;
     }
 
     /// <summary>此刻还被人捏在集合位里的那些子实体 → 捏着它的那根边。<b>判的是引用，不是键</b>：
@@ -299,16 +328,18 @@ sealed class ChangeTracker(QuickSqlOrm orm) : DbChangeTracker
                "而改父要写的是一句 SET 外键 —— 那一档没接线（§14）。会话不替它猜：要么自己改那只实例的外键列再保存，" +
                "要么先 SaveChanges 把这一串删干净，再往另一只父的那一串里插新的一只。");
 
-    /// <summary>摘行侦测中途的一份现场：哪一档、哪只父、哪一根边（连同它在契约里的槽位）、此刻那一串、
-    /// 被摘掉的那几只。存在的唯一理由是把"判"与"动手"分成两趟（理由写在 <see cref="DiffDetachedChildren"/> 的注释上）。</summary>
-    sealed class Detached(ITypeTracker tracker, Node node, int slot, CollectionEdgeContract edge, List<object> live, List<object> victims)
+    /// <summary>摘行/到位侦测中途的一份现场：哪一档、哪只父、哪一根边（连同它在契约里的槽位）、此刻那一串、
+    /// 被摘掉的那几只、新到的那几只。存在的唯一理由是把"判"与"动手"分成两趟（理由写在 <see cref="DiffDetachedChildren"/> 的注释上）。
+    /// 任一半都可以是 null（只摘不加、只加不摘都是常态）。</summary>
+    sealed class Detached(ITypeTracker tracker, Node node, int slot, CollectionEdgeContract edge, List<object> live, List<object>? victims, List<object>? arrivals)
     {
         public ITypeTracker Tracker { get; } = tracker;
         public Node Node { get; } = node;
         public int Slot { get; } = slot;
         public CollectionEdgeContract Edge { get; } = edge;
         public List<object> Live { get; } = live;
-        public List<object> Victims { get; } = victims;
+        public List<object>? Victims { get; } = victims;
+        public List<object>? Arrivals { get; } = arrivals;
     }
 
     /// <summary>父实体写出去之后、子那一档建语句之前，把父此刻的键落进子行的外键列。

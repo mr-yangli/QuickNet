@@ -98,9 +98,23 @@ public sealed class DataSourceAttribute(string cluster) : Attribute
 /// 所以脏判定照比，比出差异就在发射前<em>整句拒掉</em>（而不是剔掉那一列后照发）。
 /// 剔掉才是错的：那等于把调用方写进去的值静默丢弃，而静默丢弃查不出来。</para>
 /// <para>由<em>调用方</em>自己递增的版本号（<c>int Version</c> 那一派写法）不属于这一格：那一列要进 <c>SET</c>，
-/// 而「谁负责 +1」还没定，缺口与判据记在 §14 的 P1 余项。</para></remarks>
+/// 而「谁负责 +1」还没定，缺口与判据记在 §14 的 P1 余项。</para>
+/// <para><b><c>AppSetsValue = true</c> 开出第三族</b>（应用给值：ABP 的 <c>string ConcurrencyStamp</c> 那一派）：
+/// 那一列<em>进</em> <c>SET</c> 与 INSERT 列清单（写出去的是实体当前值），<c>WHERE</c> 仍比快照旧值，
+/// 不回读、也不自动 +1 —— 新值由应用在保存前生成好。「谁给新值」在这一档是定了的（调用方给），
+/// 所以 §14 那句「谁负责 +1 还没定」说的是整型自增那一族，不挡这一族。</para></remarks>
 [AttributeUsage(AttributeTargets.Property)]
-public sealed class ConcurrencyTokenAttribute : Attribute;
+public sealed class ConcurrencyTokenAttribute : Attribute
+{
+    /// <summary>默认构造：只比较不书写的那一族（库给值或整型自增）。</summary>
+    public ConcurrencyTokenAttribute() => AppSetsValue = false;
+
+    /// <summary>应用给值那一族（第三族）：新值由应用在保存前生成，列进 SET 与列清单，WHERE 仍比快照。</summary>
+    public ConcurrencyTokenAttribute(bool appSetsValue) => AppSetsValue = appSetsValue;
+
+    /// <summary>这一并发列的新值由应用给（写出去），而不是库给（回读）或 SET 自增。见特性备注里第三族。</summary>
+    public bool AppSetsValue { get; }
+}
 
 /// <summary>关掉级联：这一颗实体（打在类上）或这一根集合导航（打在属性上）在 <c>Add</c>/<c>Remove</c>
 /// 顺导航图带人时<em>不出边</em>，子实体要自己 <c>Add</c>/<c>Remove</c>。</summary>

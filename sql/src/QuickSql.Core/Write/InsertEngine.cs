@@ -579,7 +579,9 @@ sealed class InsertEngine<T> : IInsert<T> where T : class
 
             // 并发列同样不进列清单，理由与自增列同一条：那一列的值不归这一侧决定（SQL Server 的 rowversion 由库递增）。
             // 它也不进 AuditValue 与 §10.6 校验 —— 一列不写出去，就没有可校验的值。
-            if (column.IsConcurrencyToken)
+            // 应用给值那一族（AppSetsValue，如 ABP 的 string ConcurrencyStamp）例外：新值由应用生成、
+            // 要随行写出去，所以进列清单、也进 AuditValue 与校验；它也不需要回读（值就是刚写的这一个）。
+            if (column.IsConcurrencyToken && !column.AppSetsValue)
             {
                 (tokens ??= []).Add(column);
                 (tokenOrdinals ??= []).Add(ordinal);

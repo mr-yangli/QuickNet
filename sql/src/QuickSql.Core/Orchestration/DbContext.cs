@@ -15,40 +15,88 @@ namespace QuickSql;
 /// <b>生命周期：Scoped / Transient，绝不能单例</b>（§7 的表）。身份映射与脏标记都是它的状态，
 /// 跨请求共享一个会话得到的不是缓存而是别人的未提交改动。
 ///
-/// <b>派生类的写法</b>：§8.1 原稿那个 <c>public DbSet&lt;Order&gt; Orders { get; set; }</c> 的属性注入
+/// <b>派生类的写法有两档，拿到的会话一模一样</b>：§8.1 原稿那个 <c>public DbSet&lt;Order&gt; Orders { get; set; }</c> 的属性注入
 /// 没有落地（它要反射写字节码里不存在的东西，与 §12.7「调用不行」相冲）。等价写法是表达式体属性：
 /// <code>public DbSet&lt;Order&gt; Orders =&gt; Set&lt;Order&gt;();</code>
 /// 这一句看着像每次取属性都造一只，实际上 <see cref="Set{T}"/> 按类型缓存，所以拿到的一直是同一只对象
 /// （状态本来就全在 <see cref="ChangeTracker"/> 里，两只视图也共享同一份身份映射，但省掉一次构造）。
-/// 规格原稿那种 <c>{ get; set; }</c> 的属性注入反而要多一层反射才能填满，而 §8.1 那三行示例并不要求它。</summary>
-public class DbContext(QuickSqlOrm orm) : IAsyncDisposable, IDisposable
+/// 规格原稿那种 <c>{ get; set; }</c> 的属性注入反而要多一层反射才能填满，而 §8.1 那三行示例并不要求它。
+///
+/// <para><b>两档构造，接的都是同一份账</b>：DI 容器里的宿主（属性注入、上下文由容器先建出来的那一族，
+/// 例如 ABP 集成层的 <c>QuickSqlDbContext</c>）走保护构造先把类型建出来，组装根要等运行期按连接串
+/// 解析出来才收得到——那就让派生类在首次使用前调 <see cref="UseOrm"/>。两档只在「组装根什么时候到手上」
+/// 这一格不同：<see cref="Orm"/>、<see cref="ChangeTracker"/>、写侧三族与 <see cref="SaveChangesAsync"/>
+/// 的形状与语义逐字一致，接好之后没有哪一格还分得出你是哪一档建出来的。</para></summary>
+public class DbContext : IAsyncDisposable, IDisposable
 {
-    readonly ChangeTracker _tracker = new(orm);
+    /// <summary>本会话的组装根。主构造那一档在构造时给，先建后接那一档在 <see cref="UseOrm"/> 那一刻给；
+    /// 接好之前各成员经 <see cref="Orm"/>/<see cref="Tracker"/> 的守卫抛可读错，不埋空引用。</summary>
+    QuickSqlOrm? _orm;
+
+    /// <summary>会话的跟踪裁判（身份映射、快照、脏列与摘行那两问）。随组装根一起建（<see cref="UseOrm"/>）。</summary>
+    ChangeTracker? _tracker;
+
+    /// <summary>"这一条流上哪几座集群写过"的账本把手（§16.4 的写后读那一档）。
+    /// 挂在<b>收到组装根的同步帧</b>上，理由与 <c>QuickSqlTransaction.Install</c> 同一条：
+    /// <c>AsyncLocal</c> 只有同步被调方才写得回调用方的帧。主构造那一档那一帧就是构造；
+    /// 先建后接那一档是 <see cref="UseOrm"/> 的调用帧——宿主恰好也在那一帧里把会话交出去，两档同一口径。</summary>
+    IDisposable? _flowWrites;
+
     readonly Dictionary<Type, object> _sets = [];
     readonly List<DbConnection> _sessionConnections = [];
 
-    /// <summary>"这一条流上哪几座集群写过"的账本把手（§16.4 的写后读那一档）。
-    /// 挂在<b>构造</b>而不是首次执行上，理由与 <c>QuickSqlTransaction.Install</c> 同一条：
-    /// <c>AsyncLocal</c> 只有同步被调方才写得回调用方的帧，而会话正是被调用方同步 <c>new</c> 出来的。</summary>
-    readonly IDisposable _flowWrites = AdoExecutor.InstallFlowWrites();
+    /// <summary>先建后接那一档的构造：派生类型由 DI 容器建出来（属性注入这一段归容器），
+    /// 组装根等运行期解析出来再由派生类收。收之前 <see cref="Orm"/>/<see cref="ChangeTracker"/>
+    /// 与写侧三族都是「还没接线」的守卫态——首次使用之前必须 <see cref="UseOrm"/>，这是这一档唯一的纪律。</summary>
+    protected DbContext() { }
 
-    public QuickSqlOrm Orm { get; } = orm;
+    /// <summary>主构造（§8.1 派生写法那一档）：构造即收下组装根，账本把手也挂在构造这一同步帧上。</summary>
+    public DbContext(QuickSqlOrm orm) => UseOrm(orm);
+
+    /// <summary>收下本会话的组装根：建跟踪裁判、挂写后读账本把手。一只会话只接一场，
+    /// 接第二场当场拒——「同一只实例上钉两场」在事务那一格有同一道闸，这里是它的会话版。
+    /// <paramref name="orm"/> 与 <see cref="DbContext"/> 互相独立成立（会话不建连接、连接按语句懒取），
+    /// 所以「接」本身没有连接要开、没有语句要发，只是把三样东西挂到自己身上。</summary>
+    protected void UseOrm(QuickSqlOrm orm)
+    {
+        ArgumentNullException.ThrowIfNull(orm);
+
+        if (_orm is not null)
+            throw new QuickSqlException(
+                $"同一只会话只能接一场组装根：{GetType().Name} 已经接过一只（{_orm.GetType().Name}），" +
+                "先建后接那一档一只上下文只收一回。"
+            );
+
+        _orm = orm;
+        _tracker = new ChangeTracker(orm);
+        _flowWrites = AdoExecutor.InstallFlowWrites();
+    }
+
+    /// <summary>组装根到不到手上。先建后接那一档的卸载路径用它兜住「建出来了还没接线就 Dispose」
+    /// 的合法路径（DI 容器收一个解析出来但没初始化的实例，不该炸）。</summary>
+    protected bool HasOrm => _orm is not null;
+
+    public QuickSqlOrm Orm => _orm ?? throw new QuickSqlException(
+        "会话还没有接入组装根：构造时把 orm 给出来（主构造那一档），或派生侧在首次使用前调 UseOrm(orm)。"
+    );
 
     /// <summary>会话的跟踪视图（§8.2）。<c>DetectChanges()</c>、<c>Clear()</c>、<c>Entries()</c> 都从这里进。</summary>
-    public DbChangeTracker ChangeTracker => _tracker;
+    public DbChangeTracker ChangeTracker => Tracker;
 
     /// <summary>内核自己那一份（<see cref="DbSet{T}"/> 要的是它，而公开口只能看见抽象门面）。
     /// <b>两个名字指同一个对象</b>，所以 <c>db.Set&lt;Order&gt;().Local</c> 与 <c>db.ChangeTracker.Entries()</c>
     /// 说的必然是同一份会话状态 —— 要是各拿一份，§8.2 的身份映射就变成两份要互相同步的账。</summary>
-    internal ChangeTracker Tracker => _tracker;
+    internal ChangeTracker Tracker => _tracker ?? throw new QuickSqlException(
+        "会话还没有接入组装根：跟踪裁判随组装根一起建（主构造那一档在构造时，先建后接那一档在 UseOrm 那一刻）。"
+    );
 
     /// <summary>§8.2 那个开关。<b>关掉的只有「物化之前」与 <see cref="DbChangeTracker.HasChanges"/> 里那两次自动侦测</b>；
     /// <see cref="SaveChanges"/> 恒定先侦测再写，否则关掉它就等于「只写你显式标过的行」，
     /// 而那是 <c>Attach</c> + <c>Entry(...).State</c> 那条显式路线的语义，不是一个开关该改的东西。</summary>
     public bool AutoDetectChangesEnabled
     {
-        get => _tracker.AutoDetectChangesEnabled;
-        set => _tracker.AutoDetectChangesEnabled = value;
+        get => Tracker.AutoDetectChangesEnabled;
+        set => Tracker.AutoDetectChangesEnabled = value;
     }
 
     /// <summary>某一类实体的会话入口（§8.1）。<b>同一个类型在同一会话里是同一只对象</b>，
@@ -82,7 +130,7 @@ public class DbContext(QuickSqlOrm orm) : IAsyncDisposable, IDisposable
     /// 客户端生成的键（<c>Guid</c> 那一派）<b>要自己填</b>：那一档不代填，空着是填错了而不是"还没生成"。</summary>
     public T Add<T>(T entity) where T : class
     {
-        _tracker.For<T>().Add(entity);
+        Tracker.For<T>().Add(entity);
 
         return entity;
     }
@@ -92,7 +140,7 @@ public class DbContext(QuickSqlOrm orm) : IAsyncDisposable, IDisposable
     /// （它响了），但调用方要清楚这里没有回滚：没写库，可也没把已经收进去的那几只退回去。</summary>
     public void AddRange<T>(IEnumerable<T> entities) where T : class
     {
-        var tracker = _tracker.For<T>();
+        var tracker = Tracker.For<T>();
 
         foreach (var entity in entities)
             tracker.Add(entity);
@@ -101,7 +149,7 @@ public class DbContext(QuickSqlOrm orm) : IAsyncDisposable, IDisposable
     /// <summary>承认为「库里已有、当前值就是库值」，之后逐字段比对决定写不写。</summary>
     public T Attach<T>(T entity) where T : class
     {
-        _tracker.For<T>().Attach(entity);
+        Tracker.For<T>().Attach(entity);
 
         return entity;
     }
@@ -109,7 +157,7 @@ public class DbContext(QuickSqlOrm orm) : IAsyncDisposable, IDisposable
     /// <summary>纳入会话并且每列都算脏 —— §8.3 那两行 <c>db.Attach(order); db.Entry(order).State = Modified;</c> 的合成形态。</summary>
     public T Update<T>(T entity) where T : class
     {
-        _tracker.For<T>().Update(entity);
+        Tracker.For<T>().Update(entity);
 
         return entity;
     }
@@ -121,14 +169,14 @@ public class DbContext(QuickSqlOrm orm) : IAsyncDisposable, IDisposable
     /// 直到那一句 <c>DELETE</c> 真的执行完 —— 否则 <see cref="SaveChanges"/> 之后就没有任何东西能生成那条语句了。</summary>
     public T Remove<T>(T entity) where T : class
     {
-        _tracker.For<T>().Remove(entity);
+        Tracker.For<T>().Remove(entity);
 
         return entity;
     }
 
     public void RemoveRange<T>(IEnumerable<T> entities) where T : class
     {
-        var tracker = _tracker.For<T>();
+        var tracker = Tracker.For<T>();
 
         foreach (var entity in entities)
             tracker.Remove(entity);
@@ -141,11 +189,11 @@ public class DbContext(QuickSqlOrm orm) : IAsyncDisposable, IDisposable
     /// 泛型参数推出的那一档根本不存在，"先 Set&lt;派生&gt;().Attach"于是成了一句错的建议。</summary>
     public EntityEntry<T> Entry<T>(T entity) where T : class
     {
-        if (_tracker.OwnerOf(entity) is { } owner && owner.EntityType != typeof(T))
+        if (Tracker.OwnerOf(entity) is { } owner && owner.EntityType != typeof(T))
             throw new QuickSqlException($"这个实例是按 {owner.EntityType.Name} 纳入会话的，而 {typeof(T).Name} 那一档里没有它。" +
                 $"派生实例目前共享基类那张表的契约（各占一档要等继承映射，§8.2、P2/P3），所以入口也要按基类取：Set<{owner.EntityType.Name}>().Entry(...)。");
 
-        return _tracker.For<T>().Entry(entity);
+        return Tracker.For<T>().Entry(entity);
     }
 
     /// <summary>§8.3 最后那行 <c>db.InsertRaw(order)</c>：绕过会话，直接走 <see cref="QuickSqlOrm.Insert{T}"/> 那条链。
@@ -170,32 +218,37 @@ public class DbContext(QuickSqlOrm orm) : IAsyncDisposable, IDisposable
     /// <b>事务归属</b>（§6 (3) 那句「DbContext 那半边」的落点）：当前执行流上已经有<em>本 orm</em> 的环境事务时，
     /// 这一批就属于它 —— 不另开一条，也<em>不</em>提交它（提交归开它的那个人）。没有时才自己开一条、成功即提交。
     /// 判据用 <see cref="QuickSqlTransaction.For"/> 而不是「有没有环境事务」：两个 orm 实例（两套库）共用一个执行流时，
-    /// 把语句塞进另一家库的事务里不报错，只是数据少了一半。</summary>
-    public async Task<SaveChangesReport> SaveChangesAsync(CancellationToken ct = default)
+    /// 把语句塞进另一家库的事务里不报错，只是数据少了一半。
+    ///
+    /// <b>虚口给谁</b>：宿主侧（ABP 集成那一族）要在这颗收口上先做自己的概念（审计列、实体变更事件、软删整行、
+    /// 并发戳那一族），写链也归它自己发——所以这一口开成虚的，派生类覆写即整段替换，宿主的调用方
+    /// （UoW、接口那一面）拿到的永远是接管后的那一份；同步壳 <see cref="SaveChanges"/> 经虚分派走同一条路，
+    /// 不存在"经基类引用一调就绕过宿主概念"的那条暗门。</summary>
+    public virtual async Task<SaveChangesReport> SaveChangesAsync(CancellationToken ct = default)
     {
-        if (!_tracker.WritesAreDue())
+        if (!Tracker.WritesAreDue())
             return new SaveChangesReport([], []);
 
         // 先判"这一批排不排得出写入先后"，再碰驱动：成环是元数据的事，而 BeginTransaction 已经去要连接了，
         // 让它抢在前面只会把 QuickSqlException 盖成"连不上库"—— 而且一次注定失败、本该一条语句都不发的保存，
         // 不该在库里留下一个开过又回滚的事务（§8.2）。
-        _tracker.EnsureWriteOrderResolvable();
+        Tracker.EnsureWriteOrderResolvable();
 
         // 同一格位置上的第二道元数据闸门：分表实体的写要走"按行的分片键值定表"，跟踪器给不出那句
         // （§16.4，理由见 EnsureNoSplitWrites 那一段）。放在开事务之前是同一条理由：注定失败的保存
         // 不该在库里留一个开过又回滚的事务。
-        _tracker.EnsureNoSplitWrites();
+        Tracker.EnsureNoSplitWrites();
 
         // 同一格位置上的第三道元数据闸门：这一批<em>只能落一座集群</em>，而那座集群的名字就是下面那场事务
         // 要钉的那一格（§16.4）。判它仍然在开事务之前，同前两道一条理由：跨集群的保存注定失败，
         // 不该先在库里留一个开过又回滚的事务。
-        var cluster = _tracker.WriteCluster();
+        var cluster = Tracker.WriteCluster();
 
         // 确保会话连接工厂在位：SaveChanges 的事务会复用它（§8.4），而不是另取一条。
         EnsureSessionFactory();
 
         if (QuickSqlTransaction.For(Orm.Ado) is not null)
-            return await _tracker.FlushDueAsync(ct).ConfigureAwait(false);
+            return await Tracker.FlushDueAsync(ct).ConfigureAwait(false);
 
         // 事务可选那道口（【本笔（ClickHouse 重开·笔一）新增】的另一半）：provider 声明了
         // DbCapabilities.Transactions 才按原样自开一条事务交收；没有这一位时走 autocommit 直发——
@@ -203,13 +256,13 @@ public class DbContext(QuickSqlOrm orm) : IAsyncDisposable, IDisposable
         // 判据与写成文字的理由全部落在这颗位上；src/ 对这一位的读者从今天起有两处（另一处在执行层
         // BeginTransaction 的闸门，§14 行那是上面那一句），"掩码零读者"那句旧账按它自己写的重开条件结账。
         if (!TransactionCapability.Declared(Orm.Provider))
-            return await _tracker.FlushDueAsync(ct).ConfigureAwait(false);
+            return await Tracker.FlushDueAsync(ct).ConfigureAwait(false);
 
         using var tran = Orm.BeginTransaction(cluster ?? DataSourceRouting.DefaultCluster);
 
         try
         {
-            var report = await _tracker.FlushDueAsync(ct).ConfigureAwait(false);
+            var report = await Tracker.FlushDueAsync(ct).ConfigureAwait(false);
             tran.Commit();
 
             return report;
@@ -282,11 +335,13 @@ public class DbContext(QuickSqlOrm orm) : IAsyncDisposable, IDisposable
     /// 这一条流上后面每一句缺省读都被送回主库，读写分离静默失效并且绿得看不出来（示例第一跑撞在这格上）。
     /// 所以这里同步注销两颗槽位，把 <c>await</c> 只留给连接回收那一段。</para>
     ///
-    /// <para>同步 <c>Dispose</c> 走的是同一颗注销，只是连接关闭也同步。</para></summary>
-    public ValueTask DisposeAsync()
+    /// <para>同步 <c>Dispose</c> 走的是同一颗注销，只是连接关闭也同步。
+    /// 虚口与 <see cref="SaveChangesAsync"/> 同一条理由：宿主侧的卸载要在收尾时做自己的事
+    /// （清宿主侧的快照、发宿主侧的钩子），覆写即接管，基类的连接归还经 <c>base</c> 调用仍然发生。</para></summary>
+    public virtual ValueTask DisposeAsync()
     {
         AdoExecutor.ClearSessionFactory(this);
-        _flowWrites.Dispose();
+        _flowWrites?.Dispose();
 
         return CloseSessionConnectionsAsync();
     }
@@ -305,7 +360,7 @@ public class DbContext(QuickSqlOrm orm) : IAsyncDisposable, IDisposable
     }
 
     /// <summary>同步壳，给不用 <c>await using</c> 的调用方。DI 容器的 scoped 释放通常走 <c>DisposeAsync</c>。</summary>
-    public void Dispose()
+    public virtual void Dispose()
     {
         AdoExecutor.ClearSessionFactory(this);
 
@@ -316,7 +371,7 @@ public class DbContext(QuickSqlOrm orm) : IAsyncDisposable, IDisposable
         }
 
         _sessionConnections.Clear();
-        _flowWrites.Dispose();
+        _flowWrites?.Dispose();
 
         GC.SuppressFinalize(this);
     }

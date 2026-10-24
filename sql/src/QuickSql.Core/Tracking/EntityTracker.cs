@@ -49,10 +49,17 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
     /// 所以没有并发列的实体一条语句都不多、一颗参数都不多。</summary>
     readonly int[] _tokens;
 
-    /// <summary>应用自维护的并发列（如 <c>int Version</c>），与库维护的（如 SQL Server <c>rowversion</c>）相对。
-    /// 前者要在 SET 里写 <c>Version = Version + 1</c>，写完后直接在实体上 +1；后者靠 OUTPUT/RETURNING 回读。
+    /// <summary>应用自维护的并发列，分两族：<c>int Version</c> 那一档在 SET 里写
+    /// <c>Version = Version + 1</c>、写完后直接在实体上 +1；<see cref="ColumnContract.AppSetsValue"/>
+    /// 那一族（ABP 的 <c>string ConcurrencyStamp</c>）新值已在实体上，脏判定自然把它带进 SET，
+    /// 不自增、不回读。库维护的（如 SQL Server <c>rowversion</c>）不在这一档，它们靠 OUTPUT/RETURNING 回读。
     /// 空数组就是「没有应用自维护的并发列」，于是那一档 SET 与实体回写都不跑。</summary>
     readonly int[] _appMaintainedTokens;
+
+    /// <summary>应用给值的并发列（<see cref="ColumnContract.AppSetsValue"/>）。已包含在
+    /// <see cref="_appMaintainedTokens"/> 里（同样不回读），单列一份是因为它们的 SET 走脏判定
+    /// （实体上已有新值）而不是 <c>+1</c> 改写——<see cref="WriteSingularAsync"/> 那一圈要跳过它们。</summary>
+    readonly int[] _appSetsTokens;
 
     /// <summary>库维护的并发列（SQL Server <c>rowversion</c> 等），需要 OUTPUT/RETURNING 回读新值。
     /// 空数组就是「没有库维护的并发列」，于是 OUTPUT/RETURNING 子句与回读逻辑都不跑。</summary>
@@ -128,7 +135,10 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
 
             _hasIdentity |= column.IsIdentity;
 
-            writable[ordinal] = !column.IsPrimary && !column.IsIdentity && !column.IsConcurrencyToken;
+            // 应用给值那一族（AppSetsValue）要进 SET（新值在实体上、由应用生成），其余并发列只比较不书写
+            writable[ordinal] = !column.IsPrimary
+                && !column.IsIdentity
+                && (!column.IsConcurrencyToken || column.AppSetsValue);
         }
 
         _keyOrdinals = [.. keys];
@@ -136,25 +146,29 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
         _writable = writable;
         _tokens = [.. tokens];
 
-        // 并发列分两档：库维护的（StoreFillsValue，如 SQL Server rowversion）靠 OUTPUT/RETURNING 回读；
-        // 应用自维护的（如 int Version）要在 SET 里写 Version = Version + 1，写完后实体直接 +1。
-        // 两档不重叠、合起来等于 _tokens 全集。
-        // 应用自维护只认整型（int/long/short/byte）：非整型的并发列（如 datetime2 时间戳）即使 StoreFillsValue = false
-        // 也走 OUTPUT/RETURNING 回读，因为对它们做 +1 没有语义。这是向后兼容：v0.18 之前所有并发列都走回读。
-        //
-        // 【v0.39.0-beta.28 记一笔】这一档的「非整型 ⇒ 回读」把**应用自维护的新值由应用给**那一族挡在外面了
-        // （ABP 的 string ConcurrencyStamp 就是那一族：应用重新生成一颗戳，库负责写它、拿旧值比）。
-        // 而「回读」那一档对那一族根本走不通 —— 应用给的戳库里没有，回读回来的还是旧值。
-        // 要开出来得给契约加一颗**显式的**旗标（默认这一族仍走回读，那是既有基线钉着的），
-        // 那属于契约与生成器那一笔，不是这一格能顺手带过的。
+        // 并发列分三档：库维护的（StoreFillsValue，如 SQL Server rowversion）靠 OUTPUT/RETURNING 回读；
+        // 应用给值的（AppSetsValue，如 ABP 的 string ConcurrencyStamp）不回读、不自增——新值已在实体上，
+        // 脏判定自然带进 SET，写完实体手里的就是新值，下一次保存比的快照也对得上；
+        // 其余应用自维护的（如 int Version）在 SET 里写 Version = Version + 1，写完后实体直接 +1。
+        // 三档不重叠、合起来等于 _tokens 全集。
+        // 「其余」那一档只认整型（int/long/short/byte）：非整型的并发列（如 datetime2 时间戳）即使
+        // StoreFillsValue = false 也走 OUTPUT/RETURNING 回读，因为对它们做 +1 没有语义。
+        // 这是向后兼容：v0.18 之前所有并发列都走回读（beta.28 注释里欠的「应用给新值」那一族，
+        // 从本笔起由 AppSetsValue 旗标开出第三档承接）。
         var storeFilled = new List<int>();
         var appMaintained = new List<int>();
+        var appSets = new List<int>();
 
         foreach (var ordinal in _tokens)
         {
             var column = _columns[ordinal];
 
-            if (column.StoreFillsValue || !IsIntegerClrType(column.ClrType))
+            if (column.AppSetsValue)
+            {
+                appSets.Add(ordinal);
+                appMaintained.Add(ordinal);
+            }
+            else if (column.StoreFillsValue || !IsIntegerClrType(column.ClrType))
                 storeFilled.Add(ordinal);
             else
                 appMaintained.Add(ordinal);
@@ -162,6 +176,7 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
 
         _storeFilledTokens = [.. storeFilled];
         _appMaintainedTokens = [.. appMaintained];
+        _appSetsTokens = [.. appSets];
         _storeFilledTokenColumns = [.. _storeFilledTokens.Select(ordinal => _columns[ordinal])];
         // 目标怎么引用自己由方言定（§4 的 WriteTargetAlias）：T-SQL 与 PG 系给一个独立别名 t0，
         // Oracle 血统不接受目标别名、只能用表名本身。这一颗要问方言而不是现场写死，因为同一份 _table
@@ -1122,9 +1137,15 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
 
             // 应用自维护的并发列（如 int Version）：在 SET 里加 Version = Version + 1。
             // 库维护的（如 rowversion）不加 —— 它们的值由库生成，靠 OUTPUT/RETURNING 回读。
+            // 应用给值的那一族（_appSetsTokens）也不加 —— 它们的新值在实体上，Sets() 已按脏判定带进来了。
             foreach (var ordinal in _appMaintainedTokens)
+            {
+                if (Array.IndexOf(_appSetsTokens, ordinal) >= 0)
+                    continue;
+
                 sets.Add(new SetClause(_columns[ordinal], new SqlBinaryExpression(BinaryOperator.Add,
                     new ColumnExpression(_table, _columns[ordinal]), new ParameterValue(1, _columns[ordinal]))));
+            }
 
             // OUTPUT/RETURNING 只回读库维护的并发列；应用自维护的在写完后直接 +1，不需要回读。
             var sql = Emit(new UpdateStatement
@@ -1143,8 +1164,12 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
                 throw await ConflictAsync(row.Entity, row.Node.Snapshot, row.Key, "update", sql, ct).ConfigureAwait(false);
 
             // 应用自维护的并发列：写成功后直接在实体上 +1。库维护的已经由 WriteAsync 回读了。
+            // 应用给值的那一族不 +1 —— 实体手里已经是新值（SET 写出去的就是它）。
             foreach (var ordinal in _appMaintainedTokens)
-                IncrementTokenValue(row.Entity, ordinal);
+            {
+                if (Array.IndexOf(_appSetsTokens, ordinal) < 0)
+                    IncrementTokenValue(row.Entity, ordinal);
+            }
 
             affected += rows;
             first ??= sql.Text;

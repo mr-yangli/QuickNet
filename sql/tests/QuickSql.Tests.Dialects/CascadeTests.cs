@@ -267,6 +267,76 @@ public sealed class CascadeTests
         Assert.Equal(1, Count(db, EntityState.Deleted));
     }
 
+    // ── 到位:往集合里新添一只,就是要插那一行(裁决③的镜像)──────────────
+
+    [Fact]
+    public void Adding_a_child_to_a_tracked_collection_marks_that_row_inserted()
+    {
+        var db = session();
+        var kept = stored(11, 7, "A");
+        var bill = order(7, kept);
+
+        db.Attach(bill);
+        bill.Items!.Add(stored(0, 7, "N"));
+
+        // 新到的那一整只(不是成员集合的差,而是实例)进会话、并且是插入档;
+        // 原来就在基线里的 kept 不被顺手判成任何档。
+        Assert.Equal(1, db.ChangeTracker.DetectChanges());
+
+        var added = db.ChangeTracker.Entries().Single(e => e.State == EntityState.Added);
+
+        Assert.Equal("N", ((OrderItem) added.Entity).Sku);
+        Assert.DoesNotContain(db.ChangeTracker.Entries(), e => ReferenceEquals(e.Entity, kept) && e.State != EntityState.Unmodified);
+    }
+
+    [Fact]
+    public void An_already_tracked_child_added_to_the_collection_is_not_arrived_twice()
+    {
+        var db = session();
+        var kept = stored(11, 7, "A");
+        var bill = order(7, kept);
+
+        // kept 已被物化路径带进会话(这里用 Attach 模拟),再挂进集合不算到位:
+        // 第三道筛(会话还没跟过)把它挡下 —— Add 一遍等于替调用方改主意。
+        db.Attach(kept);
+        db.Attach(bill);
+        bill.Items!.Add(kept);
+
+        Assert.Equal(0, db.ChangeTracker.DetectChanges());
+        Assert.DoesNotContain(db.ChangeTracker.Entries(), e => e.State == EntityState.Added);
+    }
+
+    [Fact]
+    public void The_next_detect_round_does_not_insert_the_same_row_twice()
+    {
+        var db = session();
+        var bill = order(7, stored(11, 7, "A"));
+
+        db.Attach(bill);
+        bill.Items!.Add(new OrderItem { Id = 0, OrderId = 7, Sku = "N", Quantity = 1, Price = 2m });
+
+        Assert.Equal(1, db.ChangeTracker.DetectChanges());
+
+        // 基线跟着那一串往前走(与摘行同一颗纪律):第二轮不重复发现同一只新到。
+        Assert.Equal(0, db.ChangeTracker.DetectChanges());
+        Assert.Equal(1, Count(db, EntityState.Added));
+    }
+
+    [Fact]
+    public void A_child_that_was_in_the_collection_before_the_parent_got_tracked_is_not_arrived()
+    {
+        var db = session();
+        var existing = stored(12, 7, "B");
+        var bill = order(7, stored(11, 7, "A"), existing);
+
+        // 会话第一次看见这一串之前它就在里面:基线里有它,不算新到 ——
+        // 这是裁决①在到位档的镜像,看不见的不判,判得着的才动手。
+        db.Attach(bill);
+
+        Assert.Equal(0, db.ChangeTracker.DetectChanges());
+        Assert.DoesNotContain(db.ChangeTracker.Entries(), e => e.State == EntityState.Added);
+    }
+
     [Fact]
     public void A_child_that_was_pulled_out_before_the_parent_got_tracked_deletes_nothing()
     {

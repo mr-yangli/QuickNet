@@ -209,7 +209,22 @@ static class EntityFactsBuilder
 
         // 没打标记就不写来源：G2 侧那一格同样是 null，而 §13.11 的对拍比的是整个 ColumnFacts——
         // 这里多写一句常量就是「两侧各自都合理、但文本不一样」。
-        var concurrency = Find(declared, QuickSqlConcurrency) is not null;
+        // 名字约定与反射侧同一条：ConcurrencyStamp 直接认成应用给值的并发列（ABP 那一族的现成拼写）。
+        var tokenAttribute = Find(declared, QuickSqlConcurrency);
+        var conventionToken = name == "ConcurrencyStamp";
+        var concurrency = tokenAttribute is not null || conventionToken;
+
+        // 应用给值那一族（第三族）：特性的 AppSetsValue 参数显式声明，或成员名 ConcurrencyStamp 的约定
+        //（与反射侧同一条判据）。Fluent 那一档生成期整体上看不见（与并发标记本身同一个限制）。
+        var appSets = false;
+
+        if (concurrency)
+        {
+            if (tokenAttribute is not null)
+                appSets = Tri(tokenAttribute, "AppSetsValue") == 1;
+            else
+                appSets = conventionToken;
+        }
 
         return new ColumnModel
         {
@@ -226,6 +241,7 @@ static class EntityFactsBuilder
             IsPrimary = Tri(column, "IsPrimary") == 1 || Find(declared, DataKey) is not null,
             DeclaredIdentity = Tri(column, "IsIdentity") switch { 1 => true, 2 => false, _ => null },
             IsConcurrencyToken = concurrency,
+            AppSetsValue = concurrency && appSets,
             ConcurrencyNote = concurrency ? "[ConcurrencyToken]" : null,
             Precision = Positive(Number(column, -1, "Precision")),
             Scale = Positive(Number(column, -1, "Scale")),
