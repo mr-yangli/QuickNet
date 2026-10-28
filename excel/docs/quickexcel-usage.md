@@ -1,321 +1,284 @@
-# QuickExcel 使用说明
+# QuickExcel 使用文档
 
-> 面向使用者的一份操作文档：怎么集成、怎么配置、怎么使用。根 `README.md` 是营销向的特性清单与快速上手，本文是逐 API 对齐的操作手册 —— 想知道"为什么是这个形状"读代码注释，想知道"该调哪个参数"读这里。
->
-> 本文里出现的每一个 API 名字、每一个默认值都在工作树的 `excel/src/QuickExcel/` 下读到过真实定义；凡属"设计意图而尚未交付"的地方一律写明。
+**QuickExcel** 是一个面向 .NET 10 的高性能 Excel（`.xlsx`）导入导出库：**零第三方依赖**、全程流式读写（内存占用与行数无关）、内置 DataAnnotations 数据验证、单元格图片导入导出与模板填充。本文件同时也是 NuGet 包内 README。
 
-## 0. 这份文档是什么，现在真实的状态是什么
+> ① 只支持 `.xlsx`（OOXML），不支持老的 `.xls` 二进制格式与 CSV。
+> ② 目标框架 `net10.0`。
 
-四段：§1 集成、§2 列模型与数据源、§3 导出、§4 导入与验证；§5 图片、§6 模板是两条独立功能线；§7 是边界与坑，§8 是一张 API 总表。
-
-真实状态（三句，句句可核）：
-
-1. **零第三方依赖**。`QuickExcel.csproj` 没有任何 `PackageReference`，只用 BCL（`System.IO.Compression` 打 zip、`XmlReader`/`XmlWriter` 读写 OOXML、`System.ComponentModel.DataAnnotations` 做验证）。姊妹库 QuickWord / QuickPdf 与它**互不引用**——各自内置一套同构的列模型（见 `../../word/docs/quickword-usage.md`、`../../pdf/docs/quickpdf-usage.md`）。
-2. **只支持 `.xlsx`（OOXML），全程流式**。所有入口先归一到 `(sheet 名, 列元数据, 行枚举)` 三元组（`Export/SheetBuilder.cs`），写出是 SAX 式逐行、读取是前向 `XmlReader`，内存与行数无关。`ExcelType` 枚举里有 `Csv` 占位，但**今天没有 CSV 实现**（`enum ExcelType { Xlsx, Csv }`，`Csv` 是路线图）。
-3. **验证证据**：`excel/tests/QuickExcel.Tests` 26 个单测（roundtrip / 图片 / DISPIMG / 合并单元格 / 验证 / 模板）；产物兼容性经 openpyxl 交叉验证（日期格式、列宽、样式、drawing/media 结构），并经本机 Excel COM 真实打开校验。
-
-## 1. 怎么集成
-
-### 1.1 SDK 与目标框架
-
-| 项 | 值 | 出处 |
-| --- | --- | --- |
-| TFM | `net10.0` | `excel/Directory.Build.props` |
-| 语言版本 | `preview`；`Nullable enable`、`ImplicitUsings enable` | `excel/Directory.Build.props` |
-| unsafe | `AllowUnsafeBlocks`（仅本体需要） | `QuickExcel.csproj` |
-| XML 文档 | `GenerateDocumentationFile true`，`NoWarn` 抑制 `CS1591` | `QuickExcel.csproj` |
-| NuGet 包 | 有：`QuickExcel` —— **安装主路径就靠它**（见 §1.2）。源上（nuget.org）截至 2026-10-20 最新是 `0.1.0-beta.6`，与本仓库 props 声明的那颗逐字相同——`beta.5` 那颗没单独发过，源上从 `beta.4` 直接跳到 `beta.6`（版本串在此，作者/许可在仓库根 `Directory.Build.props`；运行期零依赖，csproj 只留 `PackageId`） | `excel/Directory.Build.props` + 根 `Directory.Build.props` |
-
-子树根有独立的 `Directory.Build.props`（上面四颗公共设置上提于此；它再 `<Import>` 仓库根那一棵，那里放着四家共用的作者/许可/仓库地址）与 `Directory.Packages.props`（CPM：测试四件套与基准的 MiniExcel 版本钉在那里；src 零依赖不入账）。与 `sql/` 子树的差异是刻意的：这里**不开** `TreatWarningsAsErrors` 与 trim/AOT 分析器 —— QuickExcel 大量用反射与表达式树，过了那道闸门会当场红；两本账的边界见各自 props 头注。
-
-### 1.2 应用侧怎么装：NuGet 主路径
-
-**装 QuickExcel 只有一条主路径：NuGet。** 包 ID 与工程名逐字相同，运行期零依赖（不拖任何传递包，只用 BCL），装一颗就能用全部功能。csproj 落一行：
-
-```xml
-<ItemGroup>
-  <PackageReference Include="QuickExcel" Version="0.1.0-beta.6" />
-</ItemGroup>
-```
-
-或命令行装。注意全家都是 `-beta.N` 预发布档，`dotnet add package` 必须带 `--prerelease`（否则报"找不到稳定版本"），或在 `PackageReference` 里写死版本号：
+## 安装
 
 ```bash
 dotnet add package QuickExcel --prerelease
 ```
 
-版本口径以源上实读为准：2026-10-20 实发 `0.1.0-beta.6`，本仓库 props 声明的就是这一颗——**装包请填源上已有的那颗**，写一颗还没发布的版本还原会失败；刚推完那阵注册索引可能还认旧号，而本机那份 NuGet 缓存会把旧号一直端出来（`dotnet nuget locals http-cache --clear` 清掉就直接拿到这一代那颗），装不上就把版本号写死。另有一条打包纪律：每重打一次包升一颗 beta，同版本号不同内容的两颗包，消费方全局缓存里那颗会压住新打的。
+或在 csproj 中写死版本号（当前为预发布系列，`dotnet add package` 不带 `--prerelease` 会报"找不到稳定版本"）：
 
-> **辅助路径（只有仓库内开发、贡献者、`tests`∶`samples` 才走）：源码 `ProjectReference`。** `<ProjectReference Include="..\..\excel\src\QuickExcel\QuickExcel.csproj" />`。`QuickExcel.csproj` 的 `InternalsVisibleTo` 只开一颗 `QuickExcel.Tests`；姊妹库 QuickWord / QuickPdf 各内置同构的 `TypeShape`/`SheetBuilder`/`DisplayFormatter` 副本，三库零互相引用——普通应用方请走上面的 NuGet 主路径，看到的都是全 `public` 门面，不必碰这些内部层。
-
-### 1.3 命名空间
-
-公开面全在 `namespace QuickExcel`：入口类 `Excel`、选项 `ExportOptions`/`ImportOptions`/`TemplateOptions`、结果 `ImportResult<T>`/`ImportError`、图片 `ExcelImage`/`ImagePlaceholder`、特性 `ExcelColumnAttribute` 等六个、枚举 `ExcelType`/`StringStorageMode`/`ExcelImageFormat`/`ImportErrorKind`/`ExcelAlign`，以及多表容器 `ExcelSheet`（定义在 `Export/SheetBuilder.cs`）。一行 `using QuickExcel;` 就够。
-
-## 2. 列模型与数据源
-
-`Excel.SaveAs` 先过本库 `SheetBuilder.Build` 归一。QuickWord / QuickPdf 各自带一份同构的 `SheetBuilder`（互不引用），接受的数据源形态完全一致，只是多表容器分别叫 `WordSheet` / `PdfSheet`。理解这一节等于理解三库共同的输入契约。
-
-### 2.1 五种数据源
-
-| 源 | 列怎么定 | 备注 |
-| --- | --- | --- |
-| POCO `IEnumerable<T>` | 扫 `T` 的属性/字段，按列特性建表 | 首选；见 §2.2 特性 |
-| `IEnumerable<IDictionary<string, object>>` | **取第一行的键集合**为列，顺序即键序 | 与 MiniExcel 同约定，各行键要保持一致 |
-| `IEnumerable<ExpandoObject>` | 同上（`ExpandoObject` 就是字典） | `elem==typeof(object)` 时探第一行判断 |
-| `DataTable`（或 `IEnumerable<DataRow>`） | 按 `DataColumns` 建列，`DBNull`→null | `Export/SheetBuilder.cs:FromDataTable` |
-| `IEnumerable<ExcelSheet>` / 单个 `ExcelSheet` | 每个 `ExcelSheet` 一表，各自带源 | 多 Sheet 输出；见 §2.3 |
-
-空字典序列（拿不到键）会抛 `ArgumentException("Cannot infer columns...")` —— 这时改用 POCO 或显式给一行。
-
-### 2.2 六个列特性
-
-全部定义在 `Attributes/`，`AllowMultiple=false`、`Inherited=true`，可打在属性或字段上（`ExcelSheet` 打在类型上）。
-
-| 特性 | 关键成员（默认值） | 作用 |
-| --- | --- | --- |
-| `ExcelColumnAttribute` | `Name`(=成员名)、`Aliases`(导入接受的额外表头，忽略大小写与空白)、`Order`(1000，小者靠前，同值保持声明序)、`Width`(-1=自动)、`Format`、`Required`(默认 false，与 DataAnnotations `[Required]` **取并集**)、`ColumnIndex`(-1=按名匹配)、`AutoTrim`(true)、`Bold`(false，整列含表头加粗)、`Align`(`ExcelAlign.Default`，水平对齐 Left/Center/Right) | 重命名 / 排序 / 定宽 / 定位 / 别名 / 逐列样式的主开关 |
-| `ExcelColumnWidthAttribute` | `Width`（构造参数，Excel 字符单位） | 只设导出列宽 |
-| `ExcelFormatAttribute` | `FormatString`（构造参数，如 `"#,##0.00"`、`"yyyy-MM-dd HH:mm"`） | 数字/日期自定义格式，写进 `xl/styles.xml`（自定义 numFmtId 从 164 起排） |
-| `ExcelIgnoreAttribute` | 无 | 属性/字段既不导出也不导入 |
-| `ExcelImageAttribute` | `Width`(0=原始)、`Height`(0=原始)、`AutoFitRow`(true) | 把成员标成图片列；见 §5 |
-| `ExcelSheetAttribute` | `Name`（构造参数） | 类型未显式给表名时的 Sheet 名 |
-
-`ExcelColumn.Format` 是 `ExcelFormat` 的简写，二者等价。
-
-### 2.3 多 Sheet：`ExcelSheet`
-
-```csharp
-public sealed class ExcelSheet
-{
-    public string Name { get; }   // 空则回退 "Sheet{i}"
-    public object Rows { get; }   // 上面任一"单表"数据源
-    public ExcelSheet(string name, object rows);
-}
+```xml
+<PackageReference Include="QuickExcel" Version="0.1.0-beta.6" />
 ```
 
-传给 `SaveAs` 时，第 1 张表若 `Name` 为空用 `Sheet1`、`Sheet2`…… 编号；`XlsxWriter.UniqueSheetName` 再去重防同名。
+包零依赖（不牵入任何第三方库），命名空间为 `QuickExcel`，一行 `using QuickExcel;` 就够。刚推送的新版本若安装不到，先清本机 NuGet 缓存：`dotnet nuget locals http-cache --clear`。
 
-### 2.4 列元数据缓存
+## 快速上手
 
-POCO 的属性访问器与构造函数在首行一次性编译成表达式树并缓存（`Internal/Metadata/TypeMetadata.cs`、`ValueResolver`），反射开销只发生在第一次访问某类型。目标类型需 `class + new()`；带参构造走 `Activator` 回退（见 §7）。
+### 导出
 
-## 3. 导出
+```csharp
+using QuickExcel;
 
-### 3.1 入口方法
+Excel.SaveAs("orders.xlsx", orderList, new ExportOptions
+{
+    SheetName = "订单",
+    BoldHeader = true,
+    FreezeHeaderRow = true,
+});
 
-| 方法 | 签名要点 |
+byte[] bytes = Excel.GetAsByteArray(orderList);     // 内存产物（Web 下载用）
+await Excel.SaveAsAsync("orders.xlsx", orderList);  // 异步
+```
+
+`value` 支持五种数据源（见[支持的数据源](#支持的数据源)）；传 `List<ExcelSheet>` 即多 Sheet 导出。
+
+### 导入 + 验证
+
+```csharp
+using QuickExcel;
+using System.ComponentModel.DataAnnotations;
+
+public class Employee
+{
+    [ExcelColumn("工号", Order = 1)]
+    [Required(ErrorMessage = "工号必填")]
+    public int Id { get; set; }
+
+    [ExcelColumn("姓名", Order = 2, Width = 18)]
+    [Required]
+    [StringLength(20, ErrorMessage = "姓名不能超过20字")]
+    public string Name { get; set; } = "";
+
+    [ExcelColumn("薪资", Order = 4)]
+    [Range(0, 1_000_000, ErrorMessage = "薪资范围非法")]
+    [ExcelFormat("#,##0.00")]
+    public decimal Salary { get; set; }
+
+    [ExcelColumn("部门", Aliases = new[] { "Dept", "所属部门" })]  // 表头别名
+    public string? Department { get; set; }
+
+    [ExcelIgnore]
+    public string InternalCode { get; set; } = "hidden";
+}
+
+ImportResult<Employee> result = Excel.Import<Employee>("in.xlsx");
+if (result.HasErrors)
+    foreach (var e in result.Errors)
+        Console.WriteLine($"第{e.RowNumber}行 {e.CellReference} [{e.Header}] {e.Message} ({e.Kind})");
+```
+
+验证基于 `System.ComponentModel.DataAnnotations`（`[Required]` / `[StringLength]` / `[Range]` / `[RegularExpression]` 等一切 `ValidationAttribute` 子类都生效），并支持 `IValidatableObject` 跨字段规则。**转换错误与验证错误合并不短路**：同一行的坏日期 + 缺失必填会一起报告，每条错误带行号、列名、单元格引用（如 `C12`）。
+
+### 模板填充
+
+```csharp
+Excel.SaveAsByTemplate("report.xlsx", "template.xlsx", new Dictionary<string, object?>
+{
+    ["Title"] = "季度报告",
+    ["When"]  = DateTime.Now,
+    ["items"] = orderList,                             // {{items.*}} 集合行展开
+    ["logo"]  = ExcelImage.FromFile("logo.png"),       // {{@logo}} 图片占位
+});
+```
+
+| 占位符 | 含义 |
+|---|---|
+| `{{Title}}` | 标量替换（独占一格时保留模板样式与原生类型） |
+| `{{items.Name}}` | 集合行展开，逐元素克隆模板行（样式保留） |
+| `{{@logo}}` | 图片占位符（`ExcelImage` / `byte[]` / `ImagePlaceholder`） |
+
+---
+
+## 导出
+
+### 入口方法
+
+| 方法 | 说明 |
 | --- | --- |
-| `Excel.SaveAs(string path, object value, ExportOptions? = null)` | 覆盖写；自动建父目录 |
-| `Excel.SaveAs(Stream stream, object value, ExportOptions? = null)` | 写完整包进流 |
-| `Excel.SaveAsAsync(...)`（path / stream 两重载） | 真异步（`useAsync: true` 的 `FileStream` + `await`） |
-| `Excel.GetAsByteArray(object value, ExportOptions? = null)` | 内存产物 |
+| `Excel.SaveAs(string path, object value, ExportOptions? = null)` | 覆盖写文件；自动创建父目录 |
+| `Excel.SaveAs(Stream stream, object value, ExportOptions? = null)` | 写入流 |
+| `Excel.SaveAsAsync(string path, …)` / `SaveAsAsync(Stream, …)` | 异步版 |
+| `Excel.GetAsByteArray(object value, ExportOptions? = null)` | 返回 `byte[]` |
+| `Excel.GetSheetNames(string path)` | 列出工作表名 |
 
-`options` 传 null 即 `new ExportOptions()` 全默认。
+### 支持的数据源
 
-### 3.2 `ExportOptions` 逐字段
+`value` 参数为 `object`，支持：
 
-| 字段 | 默认 | 含义 |
+| 数据源 | 列的来源 |
+| --- | --- |
+| `IEnumerable<T>`（POCO） | 公共可读属性/字段，按 `[ExcelColumn(Order)]` 排序 |
+| `List<ExcelSheet>` / 单个 `ExcelSheet` | 多 Sheet；`new ExcelSheet("订单", rows)`，重名自动去重 |
+| `IEnumerable<IDictionary<string, object>>` / `ExpandoObject` | **第一行的键集合**为列（空集合无法推断列，抛 `ArgumentException`） |
+| `DataTable` | `DataColumns`（`DBNull` → 空单元格） |
+| 其他任意 `IEnumerable` | 反射探测元素类型 |
+
+### `ExportOptions`
+
+| 属性 | 默认 | 说明 |
 | --- | --- | --- |
-| `SheetName` | `"Sheet1"` | 单表源且未走 `ExcelSheet` 时的表名 |
+| `SheetName` | `"Sheet1"` | 工作表名 |
 | `PrintHeader` | `true` | 是否写表头行 |
-| `BoldHeader` | `false` | 表头加粗（走 styles 的 bold 位） |
-| `FreezeHeaderRow` | `false` | 冻结首行（`sheetView` 的 pane） |
-| `StringStorage` | `Inline` | `Inline`=字符串直接写进单元格（O(1) 内存）；`Shared`=内部化到 `sharedStrings.xml`（重复数据文件更小） |
-| `CompressionLevel` | `Fastest` | zip 压缩档；`NoCompression` 最快、`MaximalCompress` 最小 |
-| `BufferSize` | `1<<20`（1 MiB） | 写流缓冲 |
+| `BoldHeader` | `false` | 表头加粗 |
+| `FreezeHeaderRow` | `false` | 冻结首行 |
+| `StringStorage` | `Inline` | 字符串存储模式 |
+| `CompressionLevel` | `Fastest` | zip 压缩档位 |
+| `BufferSize` | 1 MiB | 写出缓冲 |
 
-`Clone()` 是 `MemberwiseClone` 的浅拷贝，方便改一两个字段而不重建默认。
+### 列特性（导出）
 
-### 3.3 值怎么序列化
-
-`Internal/OpenXml/ValueSerializer.cs` 把 CLR 值折成"类别 + 不变字符串"。要点：
-
-- 数值全走 `InvariantCulture`（`float`→`G9`、`double`→`G17`、`decimal`→`InvariantCulture`）。
-- `DateTime`：零点视为纯日期（`Date` 类别，套用 `NumFmtDateShort`=14），带时分秒走 `Time` 类别（`NumFmtDateTime`=22）；都写成 **OADate 序列数字** + 样式，而非文本。`DateTimeOffset` 转 UTC 后同理，`DateOnly`/`TimeOnly`/`TimeSpan` 也落序列数。
-- `Guid`/`Uri`/`Enum`/其它对象 → 文本（`ToString()`）。
-- `ExcelImage` → 空单元格 + 走图片通道（§5）。
-- 裸 `byte[]`（未标图片语义）→ **Base64 文本**。想当图片导出就标 `[ExcelImage]`。
-
-列宽：`Width>0` 时按 Excel 字符单位写 `<cols>`；负值不写，交给 Excel 自动。
-
-### 3.4 单元格样式（逐列）
-
-导出的样式只有三个维度，`xl/styles.xml` 里按 `(numFmt, bold, align)` 内部化成一个 `xf` 索引，热路径逐格只是一次字典命中（`Internal/OpenXml/Stylesheet.cs`）。可控项：
-
-- **加粗**：`ExportOptions.BoldHeader=true` 粗化整行表头；`[ExcelColumn(Bold=true)]` 粗化该列（表头与正文都跟）。表头那格的实际粗体位是 `BoldHeader || Bold` 的并。
-- **水平对齐**：`[ExcelColumn(Align=ExcelAlign.Left|Center|Right)]`，默认 `Default` 交给 Excel 自己（数字右、文本左）。表头与正文同享该列的 `Align`。
-- **数字/日期格式**：`[ExcelFormat]` 或 `ExcelColumn.Format`（见 §3.3），写进 numFmt。
-
-**边界（今天做不到，别误当有）**：样式是**逐列**的，不是逐格——同一列里无法只标红某一行；**填充底色、字体颜色/字号/字体名、边框、垂直对齐、自动换行**都不在公开面上（`BuildXf` 里 `fillId`/`borderId` 恒为 `0`，字体硬编码 Calibri 11 两档）。按语义给错误格标色只能在导入侧靠 `ImportError.CellReference` 回传、由上层自行着色，导出管线本身不产色。
-
-## 4. 导入与验证
-
-两条读路径，取舍只看**要不要验证**：
-
-| | 入口 | 返回 | 验证 | 用途 |
-| --- | --- | --- | --- | --- |
-| 只读流式 | `Excel.Query` / `Excel.Query<T>` | `IEnumerable<字典>` 或 `IEnumerable<T>` | 无 | 高吞吐、百万行 |
-| 读+验证 | `Excel.Import<T>` / `ImportAsync<T>` | `ImportResult<T>` | DataAnnotations + IValidatableObject | 需要错误报告 |
-
-另有 `Excel.GetSheetNames(string path)` 按文档序返回工作表名，用于先探结构。
-
-### 4.1 `Query`
-
-```csharp
-// 动态字典：默认把首行当表头，键=表头文本
-IEnumerable<IDictionary<string, object?>> rows = Excel.Query(path);
-// useHeaderRow: false 时键回退列字母（A/B/C…）
-var raw = Excel.Query(path, useHeaderRow: false);
-// 强类型：走 ValueConverter 逐格转换，不验证
-IEnumerable<Employee> emps = Excel.Query<Employee>(path);
-```
-
-流式：`yield return` 逐行产出，文件流在读枚举期间持有。非 `Seekable` 的流传入会被整体拷进 `MemoryStream`（`Excel.cs:EnsureSeekable`）。
-
-### 4.2 `Import<T>` 与 `ImportResult<T>`
-
-`Import<T>` **从不因数据错误抛异常**（除非 `ThrowOnError=true`）：整册读完，一次返回。
-
-```csharp
-public sealed class ImportResult<T>
-{
-    public List<T> Data { get; }                 // 干净行
-    public List<ImportError> Errors { get; }     // 每个失败格一条
-    public List<string> TemplateErrors { get; }  // 表形问题（如必填列整列缺失）
-    public Exception? Exception { get; internal set; } // 整册级失败（坏包/不可读）
-    public int TotalRows { get; internal set; }  // 不含表头
-    public bool HasErrors => Errors.Count > 0 || TemplateErrors.Count > 0 || Exception is not null;
-    public IEnumerable<int> FailedRowNumbers();  // 去重后的失败行号
-}
-```
-
-一条 `ImportError`：
-
-```csharp
-public sealed class ImportError
-{
-    public int RowNumber; public string FieldName; public string Header;
-    public int? ColumnIndex;      // 定位不到时 null
-    public string? CellReference; // Excel 风格 "AB12"，取不到时 null
-    public string Message;
-    public ImportErrorKind Kind;  // Conversion | Validation | MissingColumn
-}
-```
-
-**关键设计：转换错误与验证错误合并不短路。** 同一行既有毒日期又缺必填，两条都会进 `Errors`，不是一条压一条。这就是相对"首错即抛"库的核心差异，也是 `RowNumber/CellReference/Kind` 三元组存在的意义 —— 让上层能把错误直接标回表格里。
-
-`ImportErrorKind` 三值：`Conversion`（格文本转不成目标 CLR 类型）、`Validation`（DataAnnotations 或 `IValidatableObject` 规则失败）、`MissingColumn`（必填列整列不在表上，模板对不上）。
-
-想退回"首错即抛"：`ThrowOnError=true`，抛 `QuickExcelImportException`，异常携带已收集的全部错误。
-
-**必填列判定也是并集。** 整列缺失才记 `TemplateErrors`，口径是 `ExcelColumn.Required || [Required]` —— 有 `[ExcelColumn]` 却没写 `Required` 时不能把 DataAnnotations 的 `[Required]` 吃掉（属性默认值是 `false`，无法与"未指定"区分，所以只能取并集；要显式免除就在 DTO 上别加 `[Required]`）。
-
-**空行按行判，不按册判。** 无值行（模板为画边框预留的 `<c s="…"/>` 样式空格）跳过、不计 `TotalRows`；只有该行确有浮动图片锚点才算数据行 —— 图片是浮在格上的对象，不能因为册子里有图就把整册空行都当数据读进来。
-
-### 4.3 类型转换能吃什么
-
-`Internal/ValueConverter.cs` 容忍 Nullable、enum、GUID、Excel 日期序列。文本到目标类型：整型族走各 `Parse`（decimal 用 **`CurrentCulture`**，其余用 `InvariantCulture`）、`bool` 用宽松 `ParseBool`、`Guid`/`Uri` 直解、`DateTime` 先按序列数再按多种文本格式试、`TimeSpan` 支持"日.小数"序列。转换失败不崩，折成一条 `Conversion` 错误。
-
-### 4.4 `ImportOptions` 逐字段
-
-| 字段 | 默认 | 含义 |
-| --- | --- | --- |
-| `SheetName` | `null` | 读哪张表；null=第一张 |
-| `HeaderRowIndex` | `0` | 表头所在 0-based 行；`-1`=自动探测首个非空行 |
-| `MatchHeadersByName` | `true` | false 时按 `ExcelColumn.ColumnIndex` 位置匹配，忽略表头文本 |
-| `ThrowOnError` | `false` | 首错即抛（收集进异常），否则回填 `Errors` |
-| `MaxRows` | `0` | 读满 N 数据行即停；0=不限 |
-| `TrimStrings` | `true` | 验证前对字符串格去首尾空白（与成员级 `AutoTrim` 配合） |
-| `IncludeInvalidRowsInData` | `false` | true 时失败行也（部分填充地）进 `Data` |
-| `FillMergedCells` | `true` | 🔗 合并单元格回填，见下 |
-
-**合并单元格**：OOXML 只把合并块的值存一份在左上角格。`FillMergedCells=true`（默认）在行流过时把该值灌回块内其余空格，于是分组表头、纵向合并的类别列都能逐行取到。关掉可省一次合并扫描（`Internal/OpenXml/MergeCellScanner.cs`），纯性能考量，非合并文件关掉无副作用。
-
-## 5. 图片
-
-### 5.1 `ExcelImage`
-
-`ExcelImage` 包原始字节 + 探测出的格式 + 像素尺寸，供写手建正确尺寸的 drawing 锚。构造/工厂：`new ExcelImage(byte[])`、`FromFile`/`FromFileAsync`、`FromStream`/`FromStreamAsync`，`byte[]` 可隐式转。
-
-格式靠**魔数嗅探**（`DetectFormat`）：PNG / JPEG / GIF / BMP / EMF / WMF / TIFF，识别不出发 `Unknown`（扩展名 `bin`、类型 `application/octet-stream`）。尺寸从头部读（PNG IHDR、GIF LSD、BMP DIB、JPEG 走 marker 链找 SOFn），失败回退 `(0,0)`，由 `ExcelImageAttribute` 显式尺寸兜底。
-
-### 5.2 导出
-
-成员类型是 `ExcelImage`（或 `byte[]` 且标 `[ExcelImage]`）时，值不落单元格文本，而是经 `DrawingWriter` 写一个浮动图片锚到该格；相同字节经 `MediaCollector` 内容哈希**自动去重**（`xl/media` 只存一份）。`[ExcelImage(Width, Height)]` 定显示尺寸，`AutoFitRow=true`（默认）抬高行高/列宽让图片放得下。
-
-### 5.3 导入
-
-`Import<T>`/`Query<T>` 按 `(行,列)` 锚点把图片字节回填到 `ExcelImage` 成员。**WPS 兼容**：WPS 的"单元格内图片"是 `=_xlfn.DISPIMG("ID_x",1)` 公式 + `xl/cellimages.xml`（ID→media 映射），`CellImageReader` 两侧都读，因此 WPS 产的单元格图片也能导回（`Internal/OpenXml/CellImageReader.cs`）。
-
-## 6. 模板
-
-### 6.1 三种占位符
-
-模板就是一个普通 xlsx，单元格文本里写占位符（`Internal/OpenXml/TemplateEngine.cs` 渲染）：
-
-| 语法 | 含义 |
+| 特性 | 作用 |
 | --- | --- |
-| `{{Name}}` | 标量替换，支持 `{{a.b}}` 嵌套属性。整格仅此一个占位符且值是数字/布尔时**保留原生类型与模板样式** |
-| `{{items.Field}}` | 行展开：`items` 解析为集合时，模板行按每个元素复制一份（样式保留；空集合删除该行） |
-| `{{@field}}` | 图片占位：值是 `ExcelImage`/`byte[]`/`ImagePlaceholder` 时锚定浮动图片 |
+| `[ExcelColumn("列名")]` | 改列名；`Order` 排序（小的在前）；`Width` 列宽（Excel 字符单位）；`Format` 数字格式；`Bold` 整列加粗；`Align` 对齐（`Left/Center/Right`）；`Aliases` 导入时的表头别名；`Required` 必填 |
+| `[ExcelColumnWidth(20)]` | 单独设列宽（优先级高于 `ExcelColumn.Width`） |
+| `[ExcelFormat("#,##0.00")]` | 单独设数字格式（写入 numFmt，Excel 中真实生效） |
+| `[ExcelIgnore]` | 排除该属性 |
+| `[ExcelImage]` / `[ExcelImage(Width, Height)]` | 该列按图片导出（`ExcelImage` 类型成员可省略此特性） |
 
-模板其余部件（样式、主题、其他 Sheet、已有 Logo）原样保留。
+样式能力只有三维度：**加粗**（表头/整列）、**对齐**、**数字格式**，外加列宽与冻结首行。没有填充色、字体颜色、边框、斑马纹——样式是逐列的，不是逐单元格的。
 
-### 6.2 `TemplateOptions`
+### 值的序列化规则
 
-| 字段 | 默认 | 含义 |
-| --- | --- | --- |
-| `SheetName` | `null` | 渲染模板里哪张表；null=第一张 |
-| `DateTimeFormat` | `"yyyy-MM-dd HH:mm:ss"` | 文本替换 `DateTime` 的格式；特殊值 `"serial"` 改写 OADate 数并保留模板日期样式 |
-| `DateOnlyFormat` | `"yyyy-MM-dd"` | 同上，`DateOnly` |
-
-### 6.3 入口方法
-
-```csharp
-Excel.SaveAsByTemplate(outputPath, templatePath, value, options);   // value: 字典或 POCO
-Excel.SaveAsByTemplate(outputStream, templateStream, value, options); // 模板流须可 seek
-Excel.SaveAsByTemplate(outputStream, templatePath, value, options);
-await Excel.SaveAsByTemplateAsync(...);                              // 两重载
-byte[] b = Excel.GetAsByteArrayByTemplate(templatePath, value, options);
-```
-
-模板渲染走 DOM 路径（模板体量小，可接受）：10 万行约 1.5 s（README 性能表）。
-
-### 6.4 模板导入
-
-数据文件带标题行/备注行等前置内容时，以模板声明的表头布局为准：
-
-```csharp
-// 模板第 2 行（HeaderRowIndex=1）是"工号/姓名/薪资…"表头
-var result = Excel.ImportByTemplate<Employee>("data.xlsx", "template.xlsx",
-    new ImportOptions { HeaderRowIndex = 1 });
-```
-
-表头从模板表读、用来映射数据文件的列，因此数据文件本身可以不带或乱序其表头行。
-
-## 7. 边界与坑
-
-- **仅 `.xlsx`**：不支持 `.xls` 二进制；`ExcelType.Csv` 是占位，无实现。
-- **模板行偏移不平移引用**：集合行展开后，`sheetData` 之后的部件（`mergeCells`/`dataValidation`/`hyperlink`…）原样保留，**展开导致的行号变化不会平移这些部件里的行引用**。若模板把合并区放在展开区下方，会错位。模板里已有的公式/shared formula 不重算。
-- **字典导出以第一行键集合为列**：各行键要一致（与 MiniExcel 同）。
-- **目标类型需 `class + new()`**：带参构造走 `Activator` 回退。
-- **`Import<T>` 读枚举期间持有文件流**：惰性 `Query` 要尽快消费完或及时 dispose。
-- **不可 seek 的流**读入时整体缓冲进 `MemoryStream`（大流注意）。
-- 导出不生成合并区（只在导入侧消化合并区）。
-- 样式仅逐列的加粗 + 水平对齐 + numFmt（§3.4）；逐格样式、填充色、字体颜色/字号、边框、垂直对齐都不支持。
-
-## 8. API 总表
-
-| 分类 | 成员 |
+| CLR 类型 | 单元格内容 |
 | --- | --- |
-| 导出 | `Excel.SaveAs`（path/stream）· `SaveAsAsync` · `GetAsByteArray` |
-| 只读 | `Excel.Query` · `Query<T>` · `GetSheetNames` |
-| 导入+验证 | `Excel.Import<T>` · `ImportAsync<T>` · `ImportByTemplate<T>` |
-| 模板 | `Excel.SaveAsByTemplate`（3 重载） · `SaveAsByTemplateAsync` · `GetAsByteArrayByTemplate` |
-| 选项 | `ExportOptions` · `ImportOptions` · `TemplateOptions` |
-| 结果 | `ImportResult<T>` · `ImportError` · `ImportErrorKind` |
-| 数据源 | `ExcelSheet` |
-| 图片 | `ExcelImage` · `ImagePlaceholder` · `ExcelImageFormat` |
-| 特性 | `ExcelColumn` · `ExcelColumnWidth` · `ExcelFormat` · `ExcelIgnore` · `ExcelImage` · `ExcelSheet` |
-| 枚举/异常 | `ExcelType` · `StringStorageMode` · `ExcelAlign` · `QuickExcelTemplateException` |
+| `null` / 空串 | 空单元格 |
+| `bool` | 原生布尔（1/0） |
+| 整数 / `decimal` / `float` / `double` | 数字（不变文化格式） |
+| `DateTime` / `DateOnly` / `TimeOnly` / `TimeSpan` | Excel 日期序列值 + 内置格式（午夜值按日期、其余按日期时间） |
+| `Guid` / `Uri` / 枚举（写名）/ 其他对象 | 文本 |
+| `byte[]` | **Base64 文本**——要内嵌为图片请标 `[ExcelImage]` 或改用 `ExcelImage` 类型 |
+| `ExcelImage` | 空单元格 + 浮动图片 |
+
+## 导入与验证
+
+### 两条读路径
+
+| 方法 | 用途 |
+| --- | --- |
+| `Excel.Query(path, useHeaderRow = true, ImportOptions?)` | **流式动态行**：`IEnumerable<IDictionary<string, object?>>`，不验证、不建类型；`useHeaderRow=false` 时键为列字母 `"A"/"B"/…` |
+| `Excel.Query<T>(path, ImportOptions?)` | **流式强类型**：懒枚举，边读边转；转换失败该成员落默认值、不报错 |
+| `Excel.Import<T>(path, ImportOptions?)` | **完整导入 + DataAnnotations 验证**：返回 `ImportResult<T>` |
+| `Excel.ImportAsync<T>(…)` | 异步版 |
+| `Excel.ImportByTemplate<T>(dataPath, templatePath, …)` | 表头以模板文件为准（取模板 `HeaderRowIndex` 行） |
+
+`Query` / `Query<T>` 是同步 `IEnumerable`（前向流式），适合大文件逐行处理；`Import<T>` 一次性读全并验证。
+
+### `ImportOptions`
+
+| 属性 | 默认 | 说明 |
+| --- | --- | --- |
+| `SheetName` | `null` | null = 第一个工作表 |
+| `HeaderRowIndex` | `0` | 表头行号（0 基）；`-1` 自动探测第一个非空行 |
+| `MatchHeadersByName` | `true` | 按表头名匹配列；否则按位置 |
+| `ThrowOnError` | `false` | true = 首错即抛 `QuickExcelImportException`（在 `QuickExcel.Import` 命名空间，带 `Errors` 清单） |
+| `MaxRows` | `0` | 最大数据行数，0 = 不限 |
+| `TrimStrings` | `true` | 字符串去首尾空白 |
+| `IncludeInvalidRowsInData` | `false` | true = 无效行也进 `Data`（配合错误清单定位） |
+| `FillMergedCells` | `true` | 合并区左上角的值回填到区内每一行（导出不生成合并区） |
+
+### `ImportResult<T>`
+
+| 成员 | 说明 |
+| --- | --- |
+| `Data` | `List<T>`，有效行（默认不含无效行） |
+| `Errors` | `List<ImportError>`：`RowNumber`（1 基工作表行号）、`FieldName`（属性名）、`Header`（表头名）、`ColumnIndex?`、`CellReference?`（如 `C12`）、`Message`、`Kind`（`Conversion` / `Validation`） |
+| `TemplateErrors` | `List<string>`：表头级问题（如必填列整个缺失——这类错误不属于任何一行） |
+| `Exception` | 整体性异常（文件损坏等） |
+| `TotalRows` | 数据行总数（不含表头） |
+| `HasErrors` | `Errors` / `TemplateErrors` / `Exception` 任一非空 |
+| `FailedRowNumbers()` | 出错行号（去重升序） |
+
+### 类型转换规则（导入）
+
+- 整数：不变文化解析，容忍 `"1,234"` 与 `"1234.0"`；布尔文本 `true/1/yes/y` 与 `false/0/no/n`（大小写不敏感）
+- `DateTime`：数字 → OADate；否则先 `TryParse`（当前文化 → 不变文化），再尝试常见格式（`yyyy-MM-dd`、`yyyy/MM/dd`、`yyyy-MM-dd HH:mm:ss` 等）；`DateOnly` / `DateTimeOffset` 由同一结果派生
+- 枚举：按名大小写不敏感解析；`Guid` / `Uri` 直接解析
+- 图片目标（`ExcelImage` / `byte[]`）：接受图片对象、字节数组或 Base64 文本
+- 失败 → `Conversion` 错误（`Import<T>` 报告；`Query<T>` 落默认值）
+
+## 图片
+
+```csharp
+public class Photo
+{
+    [ExcelColumn("名称")] public string Name { get; set; } = "";
+
+    [ExcelColumn("图片")]
+    [ExcelImage(Width = 120)]              // 显式像素尺寸（缺省用图片原生尺寸）
+    public ExcelImage? Pic { get; set; }   // 也支持 byte[]（需标 [ExcelImage]）
+}
+
+Excel.SaveAs("photos.xlsx", photos);           // 导出：浮动图片锚定到单元格，相同字节自动去重
+var back = Excel.Import<Photo>("photos.xlsx"); // 导入：按锚点坐标回填 ExcelImage
+```
+
+- `ExcelImage`：`FromFile` / `FromFileAsync` / `FromStream` / `FromStreamAsync`，支持 `byte[]` 隐式转换；格式按魔数识别（PNG/JPEG/GIF/BMP/EMF/WMF/TIFF），尺寸从头解析，识别不出时用 `[ExcelImage(Width, Height)]`
+- 导入兼容 WPS 的 `=DISPIMG()` 单元格图片（读取 `xl/cellimages.xml`）
+- `AutoFitRow = true`（默认）自动加高图片所在行
+
+## 模板
+
+### 入口方法
+
+| 方法 | 说明 |
+| --- | --- |
+| `Excel.SaveAsByTemplate(outputPath, templatePath, value, TemplateOptions?)` | 磁盘进出 |
+| `Excel.SaveAsByTemplate(Stream output, Stream template, …)` | 流进出（模板流不可寻址会先缓冲） |
+| `Excel.SaveAsByTemplate(Stream output, string templatePath, …)` | 模板来自文件，产物写流 |
+| `Excel.SaveAsByTemplateAsync(…)`（路径版 / 流版） | 异步版 |
+| `Excel.GetAsByteArrayByTemplate(templatePath, value, TemplateOptions?)` | 内存产物 |
+| `Excel.ImportByTemplate<T>(dataPath, templatePath, ImportOptions?)` | 表头取自模板 |
+
+`value`：`IDictionary<string, object?>`（含 `ExpandoObject`，键大小写不敏感）或任意对象（取 public 实例属性）。
+
+### `TemplateOptions`
+
+| 属性 | 默认 | 说明 |
+| --- | --- | --- |
+| `SheetName` | `null` | null = 第一个工作表 |
+| `DateTimeFormat` | `"yyyy-MM-dd HH:mm:ss"` | 日期转文本格式；特殊值 `"serial"` 写 Excel 原生日期序列（保留真日期类型） |
+| `DateOnlyFormat` | `"yyyy-MM-dd"` | `DateOnly` 转文本格式 |
+
+### 语法细节
+
+- `{{items.Field}}` 集合展开：**连续的模板行绑定同一集合名**构成一个块，逐元素克隆（样式保留）；空集合时整块行移除；一行里出现两个不同集合名抛 `QuickExcelTemplateException`
+- `{{@img}}` 图片：锚定为浮动图片、原单元格清空；模板里已有的图片/Logo 会保留（合并而非替换）
+- 无法解析的占位符输出**空单元格**；整格独占占位符保留模板样式与原生类型，与文字混排时按内联字符串处理
+
+## 性能
+
+100,000 行 × 7 列（家用 x64，Release）：
+
+| 场景 | QuickExcel | MiniExcel |
+|---|---|---|
+| 导出 | **366 ms / 101 MB 分配** | 662 ms / 243 MB |
+| 流式类型化导入（`Query<T>`） | **600 ms / 143 MB** | 1,522 ms / 483 MB |
+
+复现：`dotnet run -c Release --project excel/benchmarks/QuickExcel.Benchmarks`
+
+## 边界与常见问题
+
+- **只支持 `.xlsx`**；老的 `.xls` 与 CSV 不支持（`ExcelType.Csv` 是占位，尚无实现）
+- **模板展开的行偏移不会平移行引用**：`mergeCells` / `dataValidation` / `hyperlink` 等部件里引用行号的定义原样保留，展开区下方的合并区等可能错位
+- 字典/`ExpandoObject` 导出以**第一行的键**为列
+- 目标类型需 `class + new()`；带参构造用 `Activator` 回退
+- `byte[]` 默认按 Base64 文本导出，不是图片
+- 样式没有颜色/边框/逐格样式；需要复杂排版先出数据再用 Excel/WPS 调
+- `Query<T>` 静默容忍转换失败（落默认值）；需要错误定位请用 `Import<T>`
+
+## 相关文档
+
+- [QuickSql（ORM）使用文档](../../sql/docs/quicksql/README.md)
+- [QuickWord 使用文档](../../word/docs/quickword-usage.md)
+- [QuickPdf 使用文档](../../pdf/docs/quickpdf-usage.md)
+
+## License
+
+MIT

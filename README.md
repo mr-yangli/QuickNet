@@ -1,171 +1,143 @@
-# Quick
+# QuickNet
 
-基于 **.NET 10** 的高性能 Excel（.xlsx）导入导出库 **QuickExcel** 及其姊妹库（QuickWord / QuickPdf / QuickSql）的同仓集合。设计参考 [MiniExcel](https://gitee.com/dotnetchina/MiniExcel) 与 [Magicodes.IE](https://gitee.com/magicodes/Magicodes.IE)，**零第三方依赖**，全程流式读写，支持 DataAnnotations 特性验证、单元格图片导入导出与模板导出/导入。
+基于 **.NET 10** 的四个独立库的同仓集合：**QuickSql**（多数据库 ORM）、**QuickExcel**（.xlsx 导入导出）及其姊妹库 QuickWord / QuickPdf（.docx 与 PDF）。四库**互相零引用**、各自零第三方依赖（QuickSql 仅依赖 Microsoft.Extensions.DependencyInjection.Abstractions），全程流式处理，MIT 协议。
 
-## 文档
+| 库 | NuGet | 一句话 |
+| --- | --- | --- |
+| **QuickSql** | `QuickSql.Core` + `QuickSql.Providers.*` + `QuickSql.Generators` | LINQ 风格链式 ORM，一套实体覆盖 18 家数据库（含达梦/金仓/虚谷/GBase 等信创库），源生成器零反射物化 |
+| **QuickExcel** | `QuickExcel` | 高性能 .xlsx 流式导入导出：DataAnnotations 验证、图片、模板填充 |
+| **QuickWord** | `QuickWord` | .docx 表格导出 + 文档读回 + 不改版式填模板 |
+| **QuickPdf** | `QuickPdf` | PDF 报表导出：CJK 字体嵌入、续页表头、可选中可复制的真实文本 |
 
-每库一份使用说明（集成 / 配置 / 使用 / 边界，逐 API 对过源码）：
+> 全家均为 `-beta` 预发布档：`dotnet add package` 需带 `--prerelease`，或在 `PackageReference` 里写死版本号。
 
-| 库 | 使用说明 |
-| --- | --- |
-| QuickExcel | [`excel/docs/quickexcel-usage.md`](excel/docs/quickexcel-usage.md) |
-| QuickWord | [`word/docs/quickword-usage.md`](word/docs/quickword-usage.md) |
-| QuickPdf | [`pdf/docs/quickpdf-usage.md`](pdf/docs/quickpdf-usage.md) |
-| QuickSql | [`sql/docs/quicksql-orm-usage.md`](sql/docs/quicksql-orm-usage.md)（+ [设计规格](sql/docs/quicksql-orm-design.md)、[Schema 同步指南](sql/docs/schema-sync-guide.md)） |
+---
 
-## 特性一览
+## QuickSql — 多数据库 ORM
 
-- 🚀 **流式 xlsx 读写**：SAX 式写出 + 前向 `XmlReader` 读取，内存占用与行数无关（10 万行导出约 100 MB 分配、峰值工作集 <300 MB）
-- 🔗 **合并单元格导入**：读取时把合并区左上角的值自动回填到区内每一行（`FillMergedCells`，默认开启）；导出不生成合并区
-- ✅ **DataAnnotations 验证**：`[Required]` / `[Range]` / `[StringLength]` / `[RegularExpression]` …，并支持 `IValidatableObject` 跨字段规则；一行可同时报出多个定位错误（行号 / 列名 / 单元格引用）
-- 🖼️ **图片导入导出**：`ExcelImage` / `byte[]` 列，标准 OOXML drawing 锚定；相同图片字节自动去重；导入时按锚点坐标回填图片，并兼容 WPS 的 `DISPIMG` 单元格图片
-- 📄 **模板导出/导入**：`{{Name}}` 标量占位符、`{{items.Field}}` 集合行展开（保留模板样式）、`{{@img}}` 图片占位符
-- 🧬 **多数据源导出**：POCO、`IDictionary<string, object>`、`ExpandoObject`、`DataTable`、`IEnumerable<ExcelSheet>` 多 Sheet
-- ⚡ **表达式树编译**：属性访问器/构造函数一次性编译并缓存，反射开销仅发生在首行
-- 📝 **QuickWord / QuickPdf（同解决方案姊妹库，仅导出）**：各自内置与 QuickExcel 同构的列特性直接导出 .docx / PDF，三库互相**零项目引用**
+```bash
+dotnet add package QuickSql.Core --prerelease
+dotnet add package QuickSql.Providers.SqlServer --prerelease
+dotnet add package QuickSql.Generators --prerelease
+dotnet add package Microsoft.Data.SqlClient     # 驱动由应用侧自装
+```
 
-## 快速开始
+```csharp
+using QuickSql;
 
-### 导出
+var orm = QuickSqlOrm.Create(DbKind.SqlServer,
+    "Server=.;Database=app;User Id=sa;Password=***;TrustServerCertificate=True");
+
+await orm.Insert(new Order { CustomerName = "甲", Amount = 12.5m, CreatedAt = DateTime.Now })
+         .ExecuteAffrowsAsync();
+
+var page = await orm.Select<Order>()
+    .Where(o => o.Amount > 100m)
+    .OrderByDescending(o => o.CreatedAt)
+    .ToPagedAsync(1, 20);
+
+// 工作单元：改属性 → 一个批次提交（AppDb 是 DbContext 的派生类，见文档 09 篇）
+public class AppDb(QuickSqlOrm orm) : QuickSql.DbContext(orm)
+{
+    public DbSet<Order> Orders => Set<Order>();
+}
+
+await using var db = new AppDb(orm);
+var order = await db.Orders.Where(x => x.Id == 7).FirstOrDefaultAsync();
+order!.Note = "改一下";
+await db.SaveChangesAsync();                            // 只写脏列
+```
+
+特性一览：
+
+- **18 家数据库**：SQL Server、PostgreSQL、MySQL、Oracle、SQLite、达梦、人大金仓、openGauss、GaussDB、瀚高、GBase 8c/8s、DuckDB、ClickHouse、TiDB、OceanBase、神通、虚谷——换库只动 csproj、一处 `DbKind`、一处连接串，实体与链式代码一字不动
+- **查询**：条件/排序（含字符串排序键）/投影/Distinct/分页计数/存在性探针；`Include`/`IncludeMany` 导航与引用导航自动联表；分组聚合；子查询；流式读取
+- **写入**：批量分块（按各家参数预算）、自增键回填、SQL Server 装载通道高速层、`InsertOrUpdate` upsert
+- **工作单元**：`DbContext`/`DbSet`/`ChangeTracker`/`SaveChanges`（脏列判定、级联新增/摘行/到位、乐观锁）
+- **事务**：显式/包段/环境/会话四形态，保存点嵌套
+- **过滤与审计**：全局查询过滤器（接口键、mandatory）、软删除（删口自动改写）、AOP 钩子全家（审计/慢日志/文本改写/取消）
+- **分库分表**：`[SplitTable]` 时间+哈希分片、`[DataSource]` 具名集群、读写分离与写后读
+- **CodeFirst**：结构同步三档（关闭/执行/出 DBA 脚本）、已有表逐列补差
+- **工程化**：`ToSql()` 离线产 SQL、AOT 干净注册路径、原生 SQL 逃生舱走同一条执行链
+
+📚 **[QuickSql 文档中心（按功能 16 篇）](sql/docs/quicksql/README.md)** · [设计规格](sql/docs/quicksql-orm-design.md)
+
+## QuickExcel — Excel 导入导出
+
+```bash
+dotnet add package QuickExcel --prerelease
+```
 
 ```csharp
 using QuickExcel;
 
-// POCO 集合
-Excel.SaveAs("orders.xlsx", orderList, new ExportOptions
-{
-    SheetName = "订单",
-    BoldHeader = true,
-    FreezeHeaderRow = true,
-});
+// 导出
+Excel.SaveAs("orders.xlsx", orderList, new ExportOptions { BoldHeader = true, FreezeHeaderRow = true });
 
-// 多数据源支持
-Excel.SaveAs("multi.xlsx", new List<ExcelSheet>
-{
-    new("客户", customerList),
-    new("订单", orderList),
-});
-
-byte[] bytes = Excel.GetAsByteArray(orderList);   // 内存产物
-await Excel.SaveAsAsync("orders.xlsx", orderList); // 真异步
-```
-
-### 导入 + 验证
-
-```csharp
-public class Employee
-{
-    [ExcelColumn("工号", Order = 1)]
-    [Required(ErrorMessage = "工号必填")]
-    public int Id { get; set; }
-
-    [ExcelColumn("姓名", Order = 2, Width = 18)]
-    [Required]
-    [StringLength(20, ErrorMessage = "姓名不能超过20字")]
-    public string Name { get; set; } = "";
-
-    [ExcelColumn("薪资", Order = 4)]
-    [Range(0, 1_000_000, ErrorMessage = "薪资范围非法")]
-    [ExcelFormat("#,##0.00")]
-    public decimal Salary { get; set; }
-
-    [ExcelColumn("部门", Aliases = new[] { "Dept", "所属部门" })] // 表头别名
-    public string? Department { get; set; }
-
-    [ExcelIgnore]
-    public string InternalCode { get; set; } = "hidden";
-}
-
+// 导入 + DataAnnotations 验证（错误合并不短路，行号/列名/单元格引用逐条定位）
 ImportResult<Employee> result = Excel.Import<Employee>("in.xlsx");
 if (result.HasErrors)
     foreach (var e in result.Errors)
-        Console.WriteLine($"第{e.RowNumber}行 {e.CellReference} [{e.Header}] {e.Message} ({e.Kind})");
-```
+        Console.WriteLine($"第{e.RowNumber}行 {e.CellReference} [{e.Header}] {e.Message}");
 
-- 转换错误与验证错误**合并不短路**：同一行的坏日期 + 缺失必填会一起报告
-- `ThrowOnError = true` 改为首错即抛 `QuickExcelImportException`
-
-### 图片
-
-```csharp
-public class Photo
-{
-    [ExcelColumn("名称")] public string Name { get; set; } = "";
-
-    [ExcelColumn("图片")][ExcelImage(Width = 120)]  // 显式尺寸
-    public ExcelImage? Pic { get; set; }             // 也支持 byte[] / ImagePlaceholder
-}
-
-Excel.SaveAs("photos.xlsx", photos);                  // 导出为浮动图片锚定到单元格
-var back = Excel.Import<Photo>("photos.xlsx");        // 导入按锚点回填 ExcelImage
-```
-
-### 模板导出
-
-```csharp
+// 模板填充：{{标量}} / {{items.Field}} 集合行展开 / {{@img}} 图片占位
 Excel.SaveAsByTemplate("report.xlsx", "template.xlsx", new Dictionary<string, object?>
 {
     ["Title"] = "季度报告",
-    ["When"]  = DateTime.Now,
     ["items"] = orderList,
     ["logo"]  = ExcelImage.FromFile("logo.png"),
 });
 ```
 
-占位符语法：
-| 语法 | 含义 |
-|---|---|
-| `{{Title}}` | 标量替换 |
-| `{{items.Name}}` | 行展开 |
-| `{{@logo}}` | 图片占位符 |
+- SAX 式写出 + 前向读取，内存与行数无关（10 万行导出约 366 ms / 101 MB 分配，对照 MiniExcel 662 ms / 243 MB）
+- 图片列（`ExcelImage`）导出为浮动图片、导入按锚点回填，兼容 WPS `DISPIMG`；相同字节自动去重
+- 合并单元格导入自动回填（`FillMergedCells`）；多数据源（POCO / 字典 / ExpandoObject / DataTable / 多 Sheet）
 
-### Word / PDF 导出（QuickWord / QuickPdf）
+📚 [QuickExcel 使用文档](excel/docs/quickexcel-usage.md)
+
+## QuickWord — Word 导出与读回
+
+```bash
+dotnet add package QuickWord --prerelease
+```
 
 ```csharp
 using QuickWord;
+
+Word.SaveAs("report.docx", employeeList, new WordOptions { Title = "员工花名册", FooterText = "第 {PAGE} 页" });
+
+var doc = Word.Read("report.docx");                     // 段落 + 表格块模型
+var rows = doc.Tables.First().Query();                  // 与 QuickExcel Query 同形状
+
+await Word.SaveAsByTemplateAsync(output, "合同模板.docx", new Dictionary<string, object>
+{   // 不改版式：styles/theme 等部件逐字节照抄，run 级字体样式保留
+    ["姓名"] = "张萌",
+    ["签名"] = ImagePlaceholder.FromFile("sign.png", width: 70, height: 30),
+});
+```
+
+📚 [QuickWord 使用文档](word/docs/quickword-usage.md)
+
+## QuickPdf — PDF 报表导出
+
+```bash
+dotnet add package QuickPdf --prerelease
+```
+
+```csharp
 using QuickPdf;
 
-// Word 导出
-Word.SaveAs("report.docx", employeeList, new WordOptions { Title = "员工花名册" });
-
-// PDF 导出（自动嵌入 CJK 字体）
-Pdf.SaveAs("report.pdf", employeeList, new PdfOptions
-{
-    Title = "员工花名册",
-    Landscape = true,        // A4 横向
-    FontSizePt = 9,
-});
-
-// 多表 PDF
+Pdf.SaveAs("report.pdf", employeeList, new PdfOptions { Title = "员工花名册", Landscape = true });
 Pdf.SaveAs("multi.pdf", new List<PdfSheet> { new("员工", staff), new("字典", dict) });
 ```
 
-## 性能（100,000 行 × 7 列，i 家用小钢炮，Release）
+- CJK 安全：宿主机现找雅黑/黑体/Noto/文泉驿，TrueType 整份嵌入（Identity-H），任何阅读器渲染一致
+- 每页重复表头、自动换行与分页；文本是真实文字（可选中可复制，ToUnicode CMap 自动生成）
+- 只做导出；零依赖，字体解析失败先于任何写操作抛 `QuickPdfException`
 
-| 场景 | QuickExcel | MiniExcel | 说明 |
-|---|---|---|---|
-| 导出 | **366 ms / 101 MB alloc** | 662 ms / 243 MB | 产物大小相近（~7 MB） |
-| 流式类型化导入 | **600 ms / 143 MB** | 1,522 ms / 483 MB | `Query<T>` |
-| 模板渲染 10 万行 | ~1.5 s | — | DOM 路径 |
+📚 [QuickPdf 使用文档](pdf/docs/quickpdf-usage.md)
 
-复现：`dotnet run -c Release --project excel/benchmarks/QuickExcel.Benchmarks`
-
-## 与参考项目的差异
-
-| | MiniExcel | Magicodes.IE | **QuickExcel** |
-|---|---|---|---|
-| 依赖 | 无 | EPPlus/NPOI 等 | **无** |
-| 验证 | 无 | DataAnnotations | DataAnnotations + IValidatableObject，**不短路、可定位** |
-| 图片 | 导出模板占位 | 模板图片导出 | **标准 drawing 导出 + 按锚点导入 + 字节去重** |
-| 模板 | `{{}}` / 集合展开 | 模板导出 | `{{}}` / 集合展开 / **`{{@img}}` 图片占位** |
-
-## 已知限制
-
-- 仅支持 `.xlsx`（OOXML），不支持 `.xls` 二进制与 CSV
-- 模板渲染中：sheetData 之后的部件（mergeCells / dataValidation / hyperlink 等）原样保留，**集合行展开导致的行偏移不会平移其行引用**
-- 字典导出以**第一行的键集合**为列
-- 目标类型需 `class + new()`；带参构造用 `Activator` 回退
-- QuickWord 双向（导出 + 读回）；QuickPdf **只做导出**；PDF 依赖宿主机的 CJK TrueType 字体
+---
 
 ## 开发
 
@@ -173,23 +145,18 @@ Pdf.SaveAs("multi.pdf", new List<PdfSheet> { new("员工", staff), new("字典",
 # 全解决方案构建
 dotnet build Quick.slnx
 
-# Excel 测试
+# 各库测试
 dotnet test excel/tests/QuickExcel.Tests
-
-# Word 测试
 dotnet test word/tests/QuickWord.Tests
-
-# PDF 测试
 dotnet test pdf/tests/QuickPdf.Tests
 
-# 运行性能基准
-dotnet run -c Release --project excel/benchmarks/QuickExcel.Benchmarks
-```
-
-QuickSql 测试（需构建后直接运行 exe）：
-```bash
+# QuickSql 测试（离线方言册：构建后直接运行 exe）
 dotnet build sql/tests/QuickSql.Tests.Dialects
 sql/tests/QuickSql.Tests.Dialects/bin/Debug/net10.0/QuickSql.Tests.Dialects.exe
+
+# QuickSql 集成册（需真库，连接串由环境变量/本地凭据文件给）
+# 运行性能基准
+dotnet run -c Release --project excel/benchmarks/QuickExcel.Benchmarks
 ```
 
 ## License
