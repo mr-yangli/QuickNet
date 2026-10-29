@@ -514,7 +514,7 @@ public sealed class UpdateDeletePathTests
 
                 throw new InvalidOperationException("业务判定不通过");
             },
-            TestContext.Current.CancellationToken);
+            ct: TestContext.Current.CancellationToken);
 
         Assert.False(failed.Success);
         Assert.Contains("业务判定不通过", failed.ErrorMessage, StringComparison.Ordinal);

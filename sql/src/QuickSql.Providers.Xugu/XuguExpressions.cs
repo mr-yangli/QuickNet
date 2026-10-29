@@ -1,6 +1,5 @@
-using System.Collections.Frozen;
-using QuickSql.Providers;
 using QuickSql.Sql;
+using System.Collections.Frozen;
 
 namespace QuickSql.Providers.Xugu;
 
@@ -61,7 +60,7 @@ public sealed class XuguExpressions : IExpressionRules
 {
     FrozenDictionary<string, FunctionMapping> _map = Build();
 
-    readonly object _gate = new();
+    readonly Lock _gate = new();
 
     /// <summary>写 <c>||</c> 原判【推断】，<b>v0.32 第二格改判【实测】</b>：两台问过的连接上
     /// <c>SELECT '甲' || '乙'</c> 都答 <c>"甲乙"</c>（F-01），<c>CONCAT('甲','乙')</c> 同答（F-02）。

@@ -1,22 +1,22 @@
-using System.Data;
-using System.Data.Common;
-using System.Diagnostics.CodeAnalysis;
 using QuickSql.Aop;
 using QuickSql.Behaviors;
+using QuickSql.Core.Schema;
 using QuickSql.Execution;
 using QuickSql.Metadata;
 using QuickSql.Metadata.Fluent;
 using QuickSql.Providers;
 using QuickSql.Query;
 using QuickSql.Query.Filters;
-using QuickSql.Transactions;
 using QuickSql.Query.Model;
 using QuickSql.Schema;
-using QuickSql.Core.Schema;
-using QuickSql.Translation;
 using QuickSql.Sql.Ast;
 using QuickSql.Tracking;
+using QuickSql.Transactions;
+using QuickSql.Translation;
 using QuickSql.Write;
+using System.Data;
+using System.Data.Common;
+using System.Diagnostics.CodeAnalysis;
 
 namespace QuickSql;
 
@@ -237,7 +237,7 @@ public sealed class QuickSqlOrm
     [RequiresUnreferencedCode("CreateDbContext 按 Type 反射构造 TContext（§12.7 F）；AOT 下请自己 new。")]
     [RequiresDynamicCode("CreateDbContext 按 Type 反射构造 TContext；AOT 下请自己 new。")]
     public TContext CreateDbContext<TContext>() where TContext : DbContext
-        => (TContext) Activator.CreateInstance(typeof(TContext), this)!;
+        => (TContext)Activator.CreateInstance(typeof(TContext), this)!;
 
     /// <summary>§7 那行 <c>orm.CreateSharedContext&lt;AppDbContext&gt;()</c>：<b>在当前执行流上</b>取一只会话 ——
     /// 该流上第一次取时按 <see cref="CreateDbContext{TContext}"/> 建一只，之后每次取到的都是那一只，
@@ -261,7 +261,7 @@ public sealed class QuickSqlOrm
         for (var at = _shared.Value; at is not null; at = at.Next)
         {
             if (at.Type == type)
-                return (TContext) at.Context;
+                return (TContext)at.Context;
         }
 
         // 先建、再把新节点挂到这条流自己的那份链表头上：赋值 AsyncLocal 是"换引用"而不是"改表"，
@@ -496,8 +496,8 @@ public sealed class QuickSqlOrm
     /// 业务原因在先的那场事故才是调用方要分支的那一场；收口失败两条都在时两个都看得到。</para></summary>
     public async Task<TransactionResult> ExecuteInTransactionAsync(
         Func<CancellationToken, Task> body,
-        CancellationToken ct = default,
-        IsolationLevel level = IsolationLevel.ReadCommitted)
+        IsolationLevel level = IsolationLevel.ReadCommitted,
+        CancellationToken ct = default)
     {
         var tran = BeginTransaction(level);
 
@@ -512,7 +512,7 @@ public sealed class QuickSqlOrm
         {
             // 兜底回滚在这里完成（不留给 finally）：失败记进旁路而不是从收口冒出来盖掉业务异常。
             // RollbackQuiet 只住具体类上（接口是公开面）；BeginTransaction 造的恒是具体类本尊。
-            return TransactionResult.Failed(exception, ((QuickSqlTransaction) tran).RollbackQuiet());
+            return TransactionResult.Failed(exception, ((QuickSqlTransaction)tran).RollbackQuiet());
         }
         finally
         {
@@ -522,8 +522,8 @@ public sealed class QuickSqlOrm
 
     public async Task<TransactionResult<T>> ExecuteInTransactionAsync<T>(
         Func<CancellationToken, Task<T>> body,
-        CancellationToken ct = default,
-        IsolationLevel level = IsolationLevel.ReadCommitted)
+        IsolationLevel level = IsolationLevel.ReadCommitted,
+        CancellationToken ct = default)
     {
         var tran = BeginTransaction(level);
 
@@ -537,7 +537,7 @@ public sealed class QuickSqlOrm
         catch (Exception exception)
         {
             // 同上：回滚失败走旁路，业务异常保住。
-            return TransactionResult.Failed<T>(exception, ((QuickSqlTransaction) tran).RollbackQuiet());
+            return TransactionResult.Failed<T>(exception, ((QuickSqlTransaction)tran).RollbackQuiet());
         }
         finally
         {

@@ -1,8 +1,8 @@
-using System.Data;
-using System.Globalization;
 using QuickSql.Aop;
 using QuickSql.TestInfra;
 using QuickSql.Transactions;
+using System.Data;
+using System.Globalization;
 using Xunit;
 
 namespace QuickSql.Tests.Integration;
@@ -113,7 +113,7 @@ public sealed class WritePathTests
         // 按 payload 认定，而不是"拿到了某个非零数"：库里那一号必须就是这次插入的行。
         var landed = Assert.Single(Database.Rows(
             $"SELECT [CustomerName], [Amount], {Millis("[PaidAt]")} AS PaidAt FROM [dbo].[QuickSqlOrder] WHERE [Id] = @id",
-            ("@id", (int) identity)));
+            ("@id", (int)identity)));
 
         Assert.Equal(name, landed["CustomerName"]);
         Assert.Equal(10.5m, decimal.Parse(landed["Amount"], CultureInfo.InvariantCulture));
@@ -178,7 +178,7 @@ public sealed class WritePathTests
         var stored = Database.Rows(
                 "SELECT [Id], [CustomerName] FROM [dbo].[QuickSqlOrder] WHERE [Note] = @note",
                 ("@note", note))
-            .Select(r => (Id: int.Parse(r["Id"], CultureInfo.InvariantCulture), Name: (string?) r["CustomerName"]))
+            .Select(r => (Id: int.Parse(r["Id"], CultureInfo.InvariantCulture), Name: (string?)r["CustomerName"]))
             .OrderBy(x => x.Id)
             .ToArray();
 
@@ -477,7 +477,7 @@ public sealed class WritePathTests
 
                 throw new InvalidOperationException("业务判定不通过");
             },
-            TestContext.Current.CancellationToken);
+            ct: TestContext.Current.CancellationToken);
 
         Assert.False(failed.Success);
         Assert.Contains("业务判定不通过", failed.ErrorMessage, StringComparison.Ordinal);
@@ -496,7 +496,7 @@ public sealed class WritePathTests
 
                 return 42;
             },
-            TestContext.Current.CancellationToken);
+            ct: TestContext.Current.CancellationToken);
 
         Assert.True(ok.Success);
         Assert.Equal(42, ok.Value);
