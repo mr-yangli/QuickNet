@@ -22,8 +22,8 @@ namespace QuickSql.Providers.Xugu;
 /// <item>【推断】—— 文档与产物都没有出处，取"与已落地四族同形"的那一支。这一档<em>是推断</em>，
 /// 逐位进 §13.5 那本台账的"未实测"列。它下面还有两个限定词：<b>【推断·偏离产物】</b>只有两颗，
 /// 都在下面写了理由，而且写的是<em>同一句判据的两次应用</em>——产物优先的前提是"产物在那个槽位上
-/// 做的是与共用层同一件事"，当产物那一形服务的是另一个语义（<see cref="Fn.Blank"/> 与
-/// <see cref="Fn.Coalesce"/> 那两格），跟它就是改语义而不是跟出处。</item>
+/// 做的是与共用层同一件事"，当产物那一形服务的是另一个语义（<see cref="QuickFn.Blank"/> 与
+/// <see cref="QuickFn.Coalesce"/> 那两格），跟它就是改语义而不是跟出处。</item>
 /// <item><b>【实测】—— 本表新加的那一档，也是这一族在这一格上唯一有它的理由</b>：v0.32 第二格把这张表里
 /// 从没发进真库的那批模板逐颗发进了一台活虚谷（<c>RECON_PHASE=expr</c>，日志
 /// <c>obj/logs/v32-recon-expr-{1..5}.log</c>）。<b>它压在前三档之上，压的方式有两种</b>：
@@ -131,7 +131,7 @@ public sealed class XuguExpressions : IExpressionRules
         // 而 F-53 在真行上量到它遇 NULL 的语义与 <c>||</c> <em>同侧</em>（都是空字符派，两颗各数到 2）——
         // 上面那句"最不可能错"今天兑现了，但它兑现的是<em>这颗函数在场</em>，不是"这一家只有它"：
         // 同一段路 <c>||</c> 也在场，两形都在而 NULL 语义同侧，所以这一格没有留下要重开的岔。
-        [Fn.Key(Fn.Concat, 2)] = new("CONCAT({0}, {1})"),
+        [QuickFn.Key(QuickFn.Concat, 2)] = new("CONCAT({0}, {1})"),
 
         // 【产物】：已发布的第三方适配器为这一家发的就是裸 LENGTH({0})。<b>v0.32 第二格把那颗【没有出处】
         // 量掉了，而答案是"两边都对，因为问的不是同一颗东西"</b>：LENGTH 数<em>字符</em>、OCTET_LENGTH 数
@@ -142,18 +142,18 @@ public sealed class XuguExpressions : IExpressionRules
         // （F-32 utf8 ∶ cjk-plain-3 那一份，库的 <c>CHAR_SET</c> 两处都答 <c>GBK</c>）。
         // 于是这一颗函数在<em>换连接串的两台同一台库</em>上给出不同的数，而 provider 看不见那颗开关
         // （§14"连接串参数改变方言假设"同一行，与 <see cref="XuguTypes"/> 的 <c>WorstCaseBytesPerChar</c> 那一格同因）。
-        [Fn.Key(Fn.Length, 1)] = new("LENGTH({0})"),
-        [Fn.Key(Fn.Upper, 1)] = new("UPPER({0})"),
-        [Fn.Key(Fn.Lower, 1)] = new("LOWER({0})"),
+        [QuickFn.Key(QuickFn.Length, 1)] = new("LENGTH({0})"),
+        [QuickFn.Key(QuickFn.Upper, 1)] = new("UPPER({0})"),
+        [QuickFn.Key(QuickFn.Lower, 1)] = new("LOWER({0})"),
 
         // 原判【推断】，v0.32 第二格改判【实测】：三形一颗一句全绿（F-04 交回
         // <c>TRIM('  x  ')="x" | LTRIM('  x')="x" | RTRIM('x  ')="x"</c>），所以"取那两家那一形"这颗赌注兑了。
         // 顺带把 <c>Fn.Blank</c> 那一格要用的另一颗量了：这一家<em>不</em>需要金仓那颗 BTRIM，
         // 也<em>不</em>像 T-SQL 那一家要套两层（E-10h 在真行上把 <c>TRIM("S") = ''</c> 数到 1）。
         // （金仓那颗叫 BTRIM，T-SQL 那一家压根要 LTRIM(RTRIM(…)) 两层。）
-        [Fn.Key(Fn.Trim, 1)] = new("TRIM({0})"),
-        [Fn.Key(Fn.TrimStart, 1)] = new("LTRIM({0})"),
-        [Fn.Key(Fn.TrimEnd, 1)] = new("RTRIM({0})"),
+        [QuickFn.Key(QuickFn.Trim, 1)] = new("TRIM({0})"),
+        [QuickFn.Key(QuickFn.TrimStart, 1)] = new("LTRIM({0})"),
+        [QuickFn.Key(QuickFn.TrimEnd, 1)] = new("RTRIM({0})"),
 
         // 【推断·偏离产物·第一颗】。产物里这一槽发的是 `( {0}<>'' AND {0} IS NOT NULL )`——注意它<em>不带 TRIM</em>，
         // 因为它对的是 C# 的 IsNullOrEmpty；而共用层这一格对的是 IsNullOrWhiteSpace（§5.7 那一行）。
@@ -183,7 +183,7 @@ public sealed class XuguExpressions : IExpressionRules
         // 数的也是四颗，而三处各写了一份不同的名单，谁也没签过全量（<c>EMPTY_STR_AS_NULL</c> 只在本文件出现过，
         // <c>NLS_LENGTH_SEMANTICS</c> 只在 <c>OracleTypes</c>/<c>DamengProvider</c> 出现过）。
         // <b>实例清单合并成一份可数的记 §14 那一行</b>，本版回写规格时按五族逐颗列全，本文件不再自带那颗"三"。
-        [Fn.Key(Fn.Blank, 1)] = new("({0} IS NULL OR TRIM({0}) = '')"),
+        [QuickFn.Key(QuickFn.Blank, 1)] = new("({0} IS NULL OR TRIM({0}) = '')"),
 
         // 原判【推断】+【无出处】两颗，v0.32 第二格一并改判【实测】：
         // ① <c>SUBSTR</c> 两档就在（F-05 交回 <c>SUBSTR('abcdef', 2, 3)="bcd"</c> 与负索引那一档
@@ -194,14 +194,14 @@ public sealed class XuguExpressions : IExpressionRules
         // 认归认，本表仍发 <c>SUBSTR</c>：两形都在时跟的是<em>产物与 Oracle 血统那一形</em>，
         // 而换形的代价是把这一族唯一一处与另一族逐字同形的键改成第五族的口味，收益为零。
         // 这一格是"新家族把一颗键拉回某一家的旧形状"的那一类：它不新增第 5 形，而是让第 3 形有了第二家。
-        [Fn.Key(Fn.Substring, 2)] = new("SUBSTR({0}, {1} + 1)", RequiresNonNegativeLength: true),
-        [Fn.Key(Fn.Substring, 3)] = new("SUBSTR({0}, {1} + 1, {2})", RequiresNonNegativeLength: true),
+        [QuickFn.Key(QuickFn.Substring, 2)] = new("SUBSTR({0}, {1} + 1)", RequiresNonNegativeLength: true),
+        [QuickFn.Key(QuickFn.Substring, 3)] = new("SUBSTR({0}, {1} + 1, {2})", RequiresNonNegativeLength: true),
 
         // 元数含接收者：REPLACE 三槽在 /3、INSTR 两槽在 /2。抄错元数的后果在金仓那一族已经演示过一次
         // （永远查不到，而不是渲染错 —— 那两格当时全仓库没有一条含它们的黄金样本）。
         // <b>两颗都在真列上核过【实测】</b>：E-02 的 <c>REPLACE("NOTE", 'ul', 'UL')</c> 交回
         // <c>"fULcrum-p0"</c>（三槽逐位对得上，元数没错位），E-03 见 <see cref="Fn.IndexOf"/> 那一颗的注释。
-        [Fn.Key(Fn.Replace, 3)] = new("REPLACE({0}, {1}, {2})"),
+        [QuickFn.Key(QuickFn.Replace, 3)] = new("REPLACE({0}, {1}, {2})"),
 
         // 【产物】+ 实测：这一家发的是<em>四参</em> INSTR(串, 子串, 1, 1)，后两颗是"起始位置"与"第几次出现"。
         // 于是这一格有了第五形：金仓/Oracle 血统发 2 参 INSTR，T-SQL 发反序的 CHARINDEX，MySQL 血统发反序的 LOCATE，
@@ -212,13 +212,13 @@ public sealed class XuguExpressions : IExpressionRules
         // 而找不到的那一档在 N-02 量到 <c>INSTR(…, '公', 1, 1) = 0</c> ⇒ 减一之后是 <c>-1</c>，与 C# 同值。
         // 中文子串那一档也在这两颗上分岔过（utf8 连接命中、plain 连接不命中，N-02 两处并排），
         // 它分岔的不是 INSTR 而是<em>那颗 CHARSET</em>，与 <c>Fn.Length</c> 那格同因、同一行 §14。
-        [Fn.Key(Fn.IndexOf, 2)] = new("(INSTR({0}, {1}, 1, 1) - 1)"),
+        [QuickFn.Key(QuickFn.IndexOf, 2)] = new("(INSTR({0}, {1}, 1, 1) - 1)"),
 
         // 【产物】+ 实测：CAST(x AS date) 逐字出现在这一家的产物里，所以这一格不跟着 Oracle 血统那颗 TRUNC，
         // 而是落回 T-SQL / 金仓 / MySQL 血统那三家的多数派。代价与那三家一样：DATE 列上它是空操作。
         // E-08a 把那句代价量成了数：真列 <c>2026-05-06 07:08:09.456</c> 过这一形交回
         // <c>2026-05-06 00:00:00.0000000</c> —— 截到日、不报错、也不改型（仍是 <c>DateTime</c>）。
-        [Fn.Key(Fn.ToDate, 1)] = new("CAST({0} AS date)"),
+        [QuickFn.Key(QuickFn.ToDate, 1)] = new("CAST({0} AS date)"),
 
         // 【产物】+ 实测（推到 40 000 字那一档）：这一家发的是<em>裸</em> NVARCHAR，不带宽度。
         // 四家在这一格已经是四形（nvarchar(max) / text / TO_CHAR / char），第五家是第五形。
@@ -236,7 +236,7 @@ public sealed class XuguExpressions : IExpressionRules
         // <b>所以这一格今后不补宽度，而且这不是取向问题</b>：给 <c>CastText</c> 加一颗 <c>(n)</c> 等于把
         // "静默丢行"接进链路 —— 这一族其余四家的"补个宽度更保险"在这里是反的。判据与出处逐颗记 §13.5，
         // 后果与"哪家在 CAST 上会静默丢行"一起记 §14 的跨库差异表（它是新的一行，不并进现有任何一行）。
-        [Fn.Key(Fn.CastText, 1)] = new("CAST({0} AS NVARCHAR)"),
+        [QuickFn.Key(QuickFn.CastText, 1)] = new("CAST({0} AS NVARCHAR)"),
 
         // 【产物】六颗 → v0.32 第二格改成"五颗跟产物、一颗跟真库"。这一家有它自己的 GETYEAR/GETMONTH/…
         // 一颗一个函数，而不是 Oracle 血统与金仓那两家的 EXTRACT(unit FROM x)，也不是 T-SQL 的 DATEPART(unit, x)。
@@ -257,12 +257,12 @@ public sealed class XuguExpressions : IExpressionRules
         // 所以这一家是"GET* 与裸名两形都有"，本表仍跟产物的 GET* 五颗（两形都给同一颗数时跟有出处那一支）；
         // 而 <c>SECOND</c> 打在只到日的 DATE 上给 <c>0</c> 不报错（E-13e），DATE 列上它是空操作那一格与
         // <see cref="Fn.ToDate"/> 同形，别读成"DATE 列上它坏了"。
-        [Fn.Key(Fn.DateYear, 1)] = new("GETYEAR({0})"),
-        [Fn.Key(Fn.DateMonth, 1)] = new("GETMONTH({0})"),
-        [Fn.Key(Fn.DateDay, 1)] = new("GETDAY({0})"),
-        [Fn.Key(Fn.DateHour, 1)] = new("GETHOUR({0})"),
-        [Fn.Key(Fn.DateMinute, 1)] = new("GETMINUTE({0})"),
-        [Fn.Key(Fn.DateSecond, 1)] = new("SECOND({0})"),
+        [QuickFn.Key(QuickFn.DateYear, 1)] = new("GETYEAR({0})"),
+        [QuickFn.Key(QuickFn.DateMonth, 1)] = new("GETMONTH({0})"),
+        [QuickFn.Key(QuickFn.DateDay, 1)] = new("GETDAY({0})"),
+        [QuickFn.Key(QuickFn.DateHour, 1)] = new("GETHOUR({0})"),
+        [QuickFn.Key(QuickFn.DateMinute, 1)] = new("GETMINUTE({0})"),
+        [QuickFn.Key(QuickFn.DateSecond, 1)] = new("SECOND({0})"),
 
         // 【产物】：SYSDATE，而且产物里那句探活是 SELECT SYSDATE FROM DUAL —— 这一家<em>有</em> DUAL（S-04）。
         // 于是"这一家像 Oracle"这件事在两颗键上各成立一次，而日期加法那一格又把它推翻（见下面那六颗）。
@@ -272,7 +272,7 @@ public sealed class XuguExpressions : IExpressionRules
         // <c>2026-09-24 21:35:26.4440000</c>（S-06），<em>带毫秒</em>，与 <see cref="XuguTypes"/> 那一列的
         // <c>DATETIME(3)</c> 正好对齐。于是 §14 那一行"SYSDATE 精度"在这一家不再是缺口而是<em>已闭合</em>，
         // 而它<em>仍然</em>是另两族（Oracle 血统那一族的秒档）的缺口 —— 一处实测只结一家一格，别跨族推广。
-        [Fn.Key(Fn.Now, 0)] = new("SYSDATE"),
+        [QuickFn.Key(QuickFn.Now, 0)] = new("SYSDATE"),
 
         // 【同形·本表推断最重的一格】：这颗函数要<em>两颗</em>未证的东西同时成立（SYS_EXTRACT_UTC 与 SYSTIMESTAMP）。
         // 为什么仍然写而不是<em>删</em>这一颗键：删掉它会让所有含 DateTime.UtcNow 的链在这一家抛
@@ -287,7 +287,7 @@ public sealed class XuguExpressions : IExpressionRules
         // 交给驱动时<em>没有对应的 CLR 型</em>。它给 <see cref="XuguTypes"/> 那颗 DateTimeOffset 的抛
         // 补上一颗独立旁证：<em>库侧那一型确实在场，缺的确实是绑定与读回那一路</em>，
         // 而这一格从此不再是"我们没见过那一路的证据"。
-        [Fn.Key(Fn.UtcNow, 0)] = new("(SYS_EXTRACT_UTC(SYSTIMESTAMP))"),
+        [QuickFn.Key(QuickFn.UtcNow, 0)] = new("(SYS_EXTRACT_UTC(SYSTIMESTAMP))"),
 
 
         // <b>【实测改判，v0.32 第二格】六颗日期加法全部换形，而这一处是本版本族唯一一处"真库把产物的写法驳回了"。</b>
@@ -315,12 +315,12 @@ public sealed class XuguExpressions : IExpressionRules
         // 哪一档兼容，五颗候选全报"不存在"（<c>all_variables</c> / <c>props</c> / <c>all_props</c> /
         // <c>all_db_info</c> / <c>CHARSET()</c>，N-01c…f），<c>all_databases</c> 那一份里也没有兼容位那一格
         // —— 所以这一格留在 §14 那份清单上，标的是"问法没有"而不是"我们没有问"。
-        [Fn.Key(Fn.AddYears, 2)] = new("ADD_MONTHS({0}, ({1}) * 12)"),
-        [Fn.Key(Fn.AddMonths, 2)] = new("ADD_MONTHS({0}, {1})"),
-        [Fn.Key(Fn.AddDays, 2)] = new("({0} + NUMTODSINTERVAL({1}, 'DAY'))"),
-        [Fn.Key(Fn.AddHours, 2)] = new("({0} + NUMTODSINTERVAL({1}, 'HOUR'))"),
-        [Fn.Key(Fn.AddMinutes, 2)] = new("({0} + NUMTODSINTERVAL({1}, 'MINUTE'))"),
-        [Fn.Key(Fn.AddSeconds, 2)] = new("({0} + NUMTODSINTERVAL({1}, 'SECOND'))"),
+        [QuickFn.Key(QuickFn.AddYears, 2)] = new("ADD_MONTHS({0}, ({1}) * 12)"),
+        [QuickFn.Key(QuickFn.AddMonths, 2)] = new("ADD_MONTHS({0}, {1})"),
+        [QuickFn.Key(QuickFn.AddDays, 2)] = new("({0} + NUMTODSINTERVAL({1}, 'DAY'))"),
+        [QuickFn.Key(QuickFn.AddHours, 2)] = new("({0} + NUMTODSINTERVAL({1}, 'HOUR'))"),
+        [QuickFn.Key(QuickFn.AddMinutes, 2)] = new("({0} + NUMTODSINTERVAL({1}, 'MINUTE'))"),
+        [QuickFn.Key(QuickFn.AddSeconds, 2)] = new("({0} + NUMTODSINTERVAL({1}, 'SECOND'))"),
 
         // 原判【推断】+【无出处】，v0.32 第二格改判【实测】：本仓库发的裸形六颗全部在场
         // （E-01a/b 的 ROUND 两档、E-01c ABS、E-01d CEIL、E-01e FLOOR、E-01f POWER、E-01g SQRT，
@@ -334,16 +334,16 @@ public sealed class XuguExpressions : IExpressionRules
         // 另一颗顺带量到的读侧事实：ROUND/ABS/CEIL/FLOOR 的结果列经这台驱动读回是 <c>String</c>
         // （<c>"12.35"</c>），而 POWER/SQRT 是 <c>Double</c> —— 十进制的<em>表达式结果</em>不走 decimal 那一格，
         // 与本文件类注释第三段并排读（集成层今天没有一条链把 decimal 函数结果直接读进 DTO，所以它不红）。
-        [Fn.Key(Fn.Round, 1)] = new("ROUND({0})"),
-        [Fn.Key(Fn.Round, 2)] = new("ROUND({0}, {1})"),
-        [Fn.Key(Fn.Abs, 1)] = new("ABS({0})"),
+        [QuickFn.Key(QuickFn.Round, 1)] = new("ROUND({0})"),
+        [QuickFn.Key(QuickFn.Round, 2)] = new("ROUND({0}, {1})"),
+        [QuickFn.Key(QuickFn.Abs, 1)] = new("ABS({0})"),
 
         // 【产物】：CEIL 逐字出现在产物那句 CEIL(GETMONTH(x)/3) 里 —— 而它是这一家写法的一枚指纹：
         // T-SQL 那一族叫 CEILING，另三家叫 CEIL，这一家跟着 CEIL 且与它的 Oracle 倾向一致。
-        [Fn.Key(Fn.Ceiling, 1)] = new("CEIL({0})"),
-        [Fn.Key(Fn.Floor, 1)] = new("FLOOR({0})"),
-        [Fn.Key(Fn.Power, 2)] = new("POWER({0}, {1})"),
-        [Fn.Key(Fn.Sqrt, 1)] = new("SQRT({0})"),
+        [QuickFn.Key(QuickFn.Ceiling, 1)] = new("CEIL({0})"),
+        [QuickFn.Key(QuickFn.Floor, 1)] = new("FLOOR({0})"),
+        [QuickFn.Key(QuickFn.Power, 2)] = new("POWER({0}, {1})"),
+        [QuickFn.Key(QuickFn.Sqrt, 1)] = new("SQRT({0})"),
 
         // 原判【推断】+【无出处】两颗，v0.32 第二格都改判【实测】。原生 GREATEST/LEAST 在（F-07 交回
         // <c>G=2 | L=1</c>），四家里三家原生、只有 T-SQL 要 CASE 展开 —— 取多数派这颗赌赢了，而这一家
@@ -354,24 +354,24 @@ public sealed class XuguExpressions : IExpressionRules
         // 常量折叠有旁证（F-43d/F-43e 的小数逐字比 F-18 的中文比较都在常量上给出正确分岔），
         // 而这一格若翻，后果是"两形给不同的数"这种能一眼看出的事，不是静默少行。
         // 于是 §14 那张跨库差异表在这一家<em>加一个实例而不是新加一行</em>（与类注释第三段同一取向）。
-        [Fn.Key(Fn.Greatest, 2)] = new("GREATEST({0}, {1})"),
-        [Fn.Key(Fn.Least, 2)] = new("LEAST({0}, {1})"),
+        [QuickFn.Key(QuickFn.Greatest, 2)] = new("GREATEST({0}, {1})"),
+        [QuickFn.Key(QuickFn.Least, 2)] = new("LEAST({0}, {1})"),
 
         // 【推断·偏离产物·第二颗】。产物在这一槽发的是 NVL({0}, {1})。这里不跟，理由与 Blank 同一句判据的
         // 另一次应用：NVL 只证"这一家有二参空值替换"，不证"这一家没有 COALESCE"，而共用层这一颗是
         // <em>任意元</em>的空值替换在 2 元处的投影（Fn 集里今天只有 /2 这一颗键，将来补 /3 时 NVL 就装不下了）。
         // 四家在这一格逐字同形，跟多数派的代价是零，跟产物的代价是把一颗键的语义<em>写窄</em>。
-        [Fn.Key(Fn.Coalesce, 2)] = new("COALESCE({0}, {1})"),
-        [Fn.Key(Fn.NullIf, 2)] = new("NULLIF({0}, {1})"),
+        [QuickFn.Key(QuickFn.Coalesce, 2)] = new("COALESCE({0}, {1})"),
+        [QuickFn.Key(QuickFn.NullIf, 2)] = new("NULLIF({0}, {1})"),
 
         // 六颗聚合全取五家同形：这一家没有任何一颗聚合函数的产物出处（<c>WM_CONCAT</c> 有，而它是字符串聚合，
         // <b>共用层的 Fn 集里还没有那一颗符号</b> —— 于是"这一家有它的字符串聚合而契约上没有那一格"
         // 记进 §14 与 §16.14 那一批"先不补"的同一列）。
-        [Fn.Key(Fn.Count, 1)] = new("COUNT({0})"),
-        [Fn.Key(Fn.CountDistinct, 1)] = new("COUNT(DISTINCT {0})"),
-        [Fn.Key(Fn.Sum, 1)] = new("SUM({0})"),
-        [Fn.Key(Fn.Average, 1)] = new("AVG({0})"),
-        [Fn.Key(Fn.Min, 1)] = new("MIN({0})"),
-        [Fn.Key(Fn.Max, 1)] = new("MAX({0})"),
+        [QuickFn.Key(QuickFn.Count, 1)] = new("COUNT({0})"),
+        [QuickFn.Key(QuickFn.CountDistinct, 1)] = new("COUNT(DISTINCT {0})"),
+        [QuickFn.Key(QuickFn.Sum, 1)] = new("SUM({0})"),
+        [QuickFn.Key(QuickFn.Average, 1)] = new("AVG({0})"),
+        [QuickFn.Key(QuickFn.Min, 1)] = new("MIN({0})"),
+        [QuickFn.Key(QuickFn.Max, 1)] = new("MAX({0})"),
     }.ToFrozenDictionary(StringComparer.Ordinal);
 }

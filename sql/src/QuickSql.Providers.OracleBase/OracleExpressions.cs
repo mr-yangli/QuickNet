@@ -75,72 +75,72 @@ public sealed class OracleExpressions : IExpressionRules
     {
         // CONCAT 在这一族只有二参数版本（与 T-SQL 同，与金仓那一家"CONCAT 吃任意个"不同），
         // 所以元数 2 的键在这里没有第三种模板要写：三参数串接在翻译器那一侧本来就是两两嵌套。
-        [Fn.Key(Fn.Concat, 2)] = new("CONCAT({0}, {1})"),
-        [Fn.Key(Fn.Length, 1)] = new("LENGTH({0})"),
-        [Fn.Key(Fn.Upper, 1)] = new("UPPER({0})"),
-        [Fn.Key(Fn.Lower, 1)] = new("LOWER({0})"),
-        [Fn.Key(Fn.Trim, 1)] = new("TRIM({0})"),
-        [Fn.Key(Fn.TrimStart, 1)] = new("LTRIM({0})"),
-        [Fn.Key(Fn.TrimEnd, 1)] = new("RTRIM({0})"),
+        [QuickFn.Key(QuickFn.Concat, 2)] = new("CONCAT({0}, {1})"),
+        [QuickFn.Key(QuickFn.Length, 1)] = new("LENGTH({0})"),
+        [QuickFn.Key(QuickFn.Upper, 1)] = new("UPPER({0})"),
+        [QuickFn.Key(QuickFn.Lower, 1)] = new("LOWER({0})"),
+        [QuickFn.Key(QuickFn.Trim, 1)] = new("TRIM({0})"),
+        [QuickFn.Key(QuickFn.TrimStart, 1)] = new("LTRIM({0})"),
+        [QuickFn.Key(QuickFn.TrimEnd, 1)] = new("RTRIM({0})"),
 
         // '' 就是 NULL，所以"空或空白"一句判 IS NULL 就够：加一段 = '' 的比较不是多余而是<em>错</em>
         // （UNKNOWN 不是 TRUE，那一行不会被选中）。类注释里有这一格的完整推演。
-        [Fn.Key(Fn.Blank, 1)] = new("(TRIM({0}) IS NULL)"),
+        [QuickFn.Key(QuickFn.Blank, 1)] = new("(TRIM({0}) IS NULL)"),
 
         // C# 的 Substring 是 0 基、这一族是 1 基，所以 +1 与两族同形；写法用 SUBSTR(x, s, len)，
         // 与 T-SQL 那一家同形（金仓用的是 SQL 标准的 SUBSTRING … FROM … FOR …）。
-        [Fn.Key(Fn.Substring, 2)] = new("SUBSTR({0}, {1} + 1)", RequiresNonNegativeLength: true),
-        [Fn.Key(Fn.Substring, 3)] = new("SUBSTR({0}, {1} + 1, {2})", RequiresNonNegativeLength: true),
-        [Fn.Key(Fn.Replace, 3)] = new("REPLACE({0}, {1}, {2})"),
+        [QuickFn.Key(QuickFn.Substring, 2)] = new("SUBSTR({0}, {1} + 1)", RequiresNonNegativeLength: true),
+        [QuickFn.Key(QuickFn.Substring, 3)] = new("SUBSTR({0}, {1} + 1, {2})", RequiresNonNegativeLength: true),
+        [QuickFn.Key(QuickFn.Replace, 3)] = new("REPLACE({0}, {1}, {2})"),
 
         // INSTR 返回 1 基且找不到给 0，与 IndexOf 差一格；实参顺序是"串在前、子串在后"，
         // 与金仓那一族的 STRPOS 同形（T-SQL 的 CHARINDEX 是反的）。
-        [Fn.Key(Fn.IndexOf, 2)] = new("(INSTR({0}, {1}) - 1)"),
-        [Fn.Key(Fn.ToDate, 1)] = new("TRUNC({0})"),
-        [Fn.Key(Fn.CastText, 1)] = new("TO_CHAR({0})"),
+        [QuickFn.Key(QuickFn.IndexOf, 2)] = new("(INSTR({0}, {1}) - 1)"),
+        [QuickFn.Key(QuickFn.ToDate, 1)] = new("TRUNC({0})"),
+        [QuickFn.Key(QuickFn.CastText, 1)] = new("TO_CHAR({0})"),
 
-        [Fn.Key(Fn.DateYear, 1)] = new("EXTRACT(year FROM {0})"),
-        [Fn.Key(Fn.DateMonth, 1)] = new("EXTRACT(month FROM {0})"),
-        [Fn.Key(Fn.DateDay, 1)] = new("EXTRACT(day FROM {0})"),
-        [Fn.Key(Fn.DateHour, 1)] = new("EXTRACT(hour FROM {0})"),
-        [Fn.Key(Fn.DateMinute, 1)] = new("EXTRACT(minute FROM {0})"),
-        [Fn.Key(Fn.DateSecond, 1)] = new("EXTRACT(second FROM {0})"),
+        [QuickFn.Key(QuickFn.DateYear, 1)] = new("EXTRACT(year FROM {0})"),
+        [QuickFn.Key(QuickFn.DateMonth, 1)] = new("EXTRACT(month FROM {0})"),
+        [QuickFn.Key(QuickFn.DateDay, 1)] = new("EXTRACT(day FROM {0})"),
+        [QuickFn.Key(QuickFn.DateHour, 1)] = new("EXTRACT(hour FROM {0})"),
+        [QuickFn.Key(QuickFn.DateMinute, 1)] = new("EXTRACT(minute FROM {0})"),
+        [QuickFn.Key(QuickFn.DateSecond, 1)] = new("EXTRACT(second FROM {0})"),
 
         // 两个都是"库那台机器上的此刻"而不是 CLR 进程的此刻，与两族同一性质：放进逐行表达式里整批同值。
         // 注意 SYSTIMESTAMP 带会话时区而 CURRENT_TIMESTAMP 也带 —— 与金仓那一族的 LOCALTIMESTAMP
         // （不带）差在这一格，跨库对读文本时会看到"同一个 Now 两种类型"。
-        [Fn.Key(Fn.Now, 0)] = new("CURRENT_TIMESTAMP"),
-        [Fn.Key(Fn.UtcNow, 0)] = new("(SYS_EXTRACT_UTC(SYSTIMESTAMP))"),
+        [QuickFn.Key(QuickFn.Now, 0)] = new("CURRENT_TIMESTAMP"),
+        [QuickFn.Key(QuickFn.UtcNow, 0)] = new("(SYS_EXTRACT_UTC(SYSTIMESTAMP))"),
 
         // 年月走 ADD_MONTHS：它是这一族唯一把"月末对齐"写进规则的写法（1 月 31 日 + 1 月 = 2 月 28/29 日），
         // 而金仓那一家用 interval '1 month' 也是对齐的，两族同形而理由不同。
-        [Fn.Key(Fn.AddYears, 2)] = new("ADD_MONTHS({0}, 12 * ({1}))"),
-        [Fn.Key(Fn.AddMonths, 2)] = new("ADD_MONTHS({0}, {1})"),
-        [Fn.Key(Fn.AddDays, 2)] = new("({0} + NUMTODSINTERVAL({1}, 'DAY'))"),
-        [Fn.Key(Fn.AddHours, 2)] = new("({0} + NUMTODSINTERVAL({1}, 'HOUR'))"),
-        [Fn.Key(Fn.AddMinutes, 2)] = new("({0} + NUMTODSINTERVAL({1}, 'MINUTE'))"),
-        [Fn.Key(Fn.AddSeconds, 2)] = new("({0} + NUMTODSINTERVAL({1}, 'SECOND'))"),
+        [QuickFn.Key(QuickFn.AddYears, 2)] = new("ADD_MONTHS({0}, 12 * ({1}))"),
+        [QuickFn.Key(QuickFn.AddMonths, 2)] = new("ADD_MONTHS({0}, {1})"),
+        [QuickFn.Key(QuickFn.AddDays, 2)] = new("({0} + NUMTODSINTERVAL({1}, 'DAY'))"),
+        [QuickFn.Key(QuickFn.AddHours, 2)] = new("({0} + NUMTODSINTERVAL({1}, 'HOUR'))"),
+        [QuickFn.Key(QuickFn.AddMinutes, 2)] = new("({0} + NUMTODSINTERVAL({1}, 'MINUTE'))"),
+        [QuickFn.Key(QuickFn.AddSeconds, 2)] = new("({0} + NUMTODSINTERVAL({1}, 'SECOND'))"),
 
-        [Fn.Key(Fn.Round, 1)] = new("ROUND({0})"),
-        [Fn.Key(Fn.Round, 2)] = new("ROUND({0}, {1})"),
-        [Fn.Key(Fn.Abs, 1)] = new("ABS({0})"),
-        [Fn.Key(Fn.Ceiling, 1)] = new("CEIL({0})"),
-        [Fn.Key(Fn.Floor, 1)] = new("FLOOR({0})"),
-        [Fn.Key(Fn.Power, 2)] = new("POWER({0}, {1})"),
-        [Fn.Key(Fn.Sqrt, 1)] = new("SQRT({0})"),
+        [QuickFn.Key(QuickFn.Round, 1)] = new("ROUND({0})"),
+        [QuickFn.Key(QuickFn.Round, 2)] = new("ROUND({0}, {1})"),
+        [QuickFn.Key(QuickFn.Abs, 1)] = new("ABS({0})"),
+        [QuickFn.Key(QuickFn.Ceiling, 1)] = new("CEIL({0})"),
+        [QuickFn.Key(QuickFn.Floor, 1)] = new("FLOOR({0})"),
+        [QuickFn.Key(QuickFn.Power, 2)] = new("POWER({0}, {1})"),
+        [QuickFn.Key(QuickFn.Sqrt, 1)] = new("SQRT({0})"),
 
         // GREATEST/LEAST 在这一族是原生算子（五家里<em>只有 T-SQL</em> 要用 CASE 展开，金仓、MySQL 血统与第五家都原生），
         // 所以这一格与金仓逐字同形，而对拍里它是"第三家落回第二家形状"的那一类，不是新分岔。
-        [Fn.Key(Fn.Greatest, 2)] = new("GREATEST({0}, {1})"),
-        [Fn.Key(Fn.Least, 2)] = new("LEAST({0}, {1})"),
-        [Fn.Key(Fn.Coalesce, 2)] = new("COALESCE({0}, {1})"),
-        [Fn.Key(Fn.NullIf, 2)] = new("NULLIF({0}, {1})"),
+        [QuickFn.Key(QuickFn.Greatest, 2)] = new("GREATEST({0}, {1})"),
+        [QuickFn.Key(QuickFn.Least, 2)] = new("LEAST({0}, {1})"),
+        [QuickFn.Key(QuickFn.Coalesce, 2)] = new("COALESCE({0}, {1})"),
+        [QuickFn.Key(QuickFn.NullIf, 2)] = new("NULLIF({0}, {1})"),
 
-        [Fn.Key(Fn.Count, 1)] = new("COUNT({0})"),
-        [Fn.Key(Fn.CountDistinct, 1)] = new("COUNT(DISTINCT {0})"),
-        [Fn.Key(Fn.Sum, 1)] = new("SUM({0})"),
-        [Fn.Key(Fn.Average, 1)] = new("AVG({0})"),
-        [Fn.Key(Fn.Min, 1)] = new("MIN({0})"),
-        [Fn.Key(Fn.Max, 1)] = new("MAX({0})"),
+        [QuickFn.Key(QuickFn.Count, 1)] = new("COUNT({0})"),
+        [QuickFn.Key(QuickFn.CountDistinct, 1)] = new("COUNT(DISTINCT {0})"),
+        [QuickFn.Key(QuickFn.Sum, 1)] = new("SUM({0})"),
+        [QuickFn.Key(QuickFn.Average, 1)] = new("AVG({0})"),
+        [QuickFn.Key(QuickFn.Min, 1)] = new("MIN({0})"),
+        [QuickFn.Key(QuickFn.Max, 1)] = new("MAX({0})"),
     }.ToFrozenDictionary(StringComparer.Ordinal);
 }

@@ -537,7 +537,7 @@ public sealed class Gbase8sDialectTests
         // 读模板而不是读产出：`DateTime.Now` 在表达式树里是一颗无输入的常量式成员访问，
         // 翻译器今天把它折成参数而不是折成 date.now/0（六家同一格，所以这一颗在离线侧从来没有产出见证）。
         // 于是本家的这一行只能钉"注册的形状对不对"，钉不了"它发出去长什么样"。
-        Assert.True(Provider.Expressions.TryGetFunction(Fn.Key(Fn.Now, 0), out var now));
+        Assert.True(Provider.Expressions.TryGetFunction(QuickFn.Key(QuickFn.Now, 0), out var now));
 
         // CURRENT 不带括号，而共用层会把它拼进算术里 ⇒ 模板自己加括号的理由写在 Gbase8sExpressions 那一行；
         // 带 YEAR TO SECOND 是因为不带字段范围的 CURRENT 折到 DATETIME 那一族上是另一档写法。
@@ -546,7 +546,7 @@ public sealed class Gbase8sDialectTests
         Checks.Absent("GETDATE", now.Template);
 
         // 另一颗会话级取值函数有出处而形状不对（交回整数秒而不是时刻值），所以整臂不注册。
-        Assert.False(Provider.Expressions.TryGetFunction(Fn.Key(Fn.UtcNow, 0), out _));
+        Assert.False(Provider.Expressions.TryGetFunction(QuickFn.Key(QuickFn.UtcNow, 0), out _));
     }
 
     // ── CodeFirst：自增在型名里、约束名在括号后、注释那一格发不出去 ──

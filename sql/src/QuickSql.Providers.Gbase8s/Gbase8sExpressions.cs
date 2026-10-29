@@ -89,60 +89,60 @@ public sealed class Gbase8sExpressions : IExpressionRules
     {
         // 括起来是必需的：|| 在这一家的优先级与比较算子之间要靠括号钉住，
         // 而共用层把结果再拼进 WHERE 时不带自己的括号（§5.6 那一条优先级表在五家的形状不通用）。
-        [Fn.Key(Fn.Concat, 2)] = new("({0} || {1})"),
-        [Fn.Key(Fn.Length, 1)] = new("LENGTH({0})"),
-        [Fn.Key(Fn.Upper, 1)] = new("UPPER({0})"),
-        [Fn.Key(Fn.Lower, 1)] = new("LOWER({0})"),
-        [Fn.Key(Fn.Trim, 1)] = new("TRIM({0})"),
-        [Fn.Key(Fn.TrimStart, 1)] = new("LTRIM({0})"),
-        [Fn.Key(Fn.TrimEnd, 1)] = new("RTRIM({0})"),
+        [QuickFn.Key(QuickFn.Concat, 2)] = new("({0} || {1})"),
+        [QuickFn.Key(QuickFn.Length, 1)] = new("LENGTH({0})"),
+        [QuickFn.Key(QuickFn.Upper, 1)] = new("UPPER({0})"),
+        [QuickFn.Key(QuickFn.Lower, 1)] = new("LOWER({0})"),
+        [QuickFn.Key(QuickFn.Trim, 1)] = new("TRIM({0})"),
+        [QuickFn.Key(QuickFn.TrimStart, 1)] = new("LTRIM({0})"),
+        [QuickFn.Key(QuickFn.TrimEnd, 1)] = new("RTRIM({0})"),
 
         // + 1：CLR 的 startIndex 从 0 起，SUBSTR 从 1 起（六家同一条换算）。
         // 两臂的实参编号都是 0,1(,2) 各出现一次且升序 —— 本家每一条模板都要过这一遍自查。
-        [Fn.Key(Fn.Substring, 2)] = new("SUBSTR({0}, {1} + 1)", RequiresNonNegativeLength: true),
-        [Fn.Key(Fn.Substring, 3)] = new("SUBSTR({0}, {1} + 1, {2})", RequiresNonNegativeLength: true),
+        [QuickFn.Key(QuickFn.Substring, 2)] = new("SUBSTR({0}, {1} + 1)", RequiresNonNegativeLength: true),
+        [QuickFn.Key(QuickFn.Substring, 3)] = new("SUBSTR({0}, {1} + 1, {2})", RequiresNonNegativeLength: true),
 
-        [Fn.Key(Fn.ToDate, 1)] = new("CAST({0} AS DATE)"),
+        [QuickFn.Key(QuickFn.ToDate, 1)] = new("CAST({0} AS DATE)"),
 
-        [Fn.Key(Fn.DateYear, 1)] = new("YEAR({0})"),
-        [Fn.Key(Fn.DateMonth, 1)] = new("MONTH({0})"),
-        [Fn.Key(Fn.DateDay, 1)] = new("DAY({0})"),
+        [QuickFn.Key(QuickFn.DateYear, 1)] = new("YEAR({0})"),
+        [QuickFn.Key(QuickFn.DateMonth, 1)] = new("MONTH({0})"),
+        [QuickFn.Key(QuickFn.DateDay, 1)] = new("DAY({0})"),
 
         // HOURS/MINUTES/SECONDS 是这一族的取值函数【文档·IBM】，而它们要求<em>带相应字段的</em>
         // DATETIME：本家 DDL 发的正是 YEAR TO FRACTION(3)（<c>Gbase8sTypes</c> 那一条），
         // 所以"能取到秒"这一格在自己的表上是齐的；库里别人建的 DATE 列上这三颗会红 ——
         // 那是契约与库不一致，不是翻译错。
-        [Fn.Key(Fn.DateHour, 1)] = new("HOURS({0})"),
-        [Fn.Key(Fn.DateMinute, 1)] = new("MINUTES({0})"),
-        [Fn.Key(Fn.DateSecond, 1)] = new("SECONDS({0})"),
+        [QuickFn.Key(QuickFn.DateHour, 1)] = new("HOURS({0})"),
+        [QuickFn.Key(QuickFn.DateMinute, 1)] = new("MINUTES({0})"),
+        [QuickFn.Key(QuickFn.DateSecond, 1)] = new("SECONDS({0})"),
 
         // 句首括号是必需的：CURRENT 不带括号，而共用层会把它拼进算术里。
-        [Fn.Key(Fn.Now, 0)] = new("(CURRENT YEAR TO SECOND)"),
+        [QuickFn.Key(QuickFn.Now, 0)] = new("(CURRENT YEAR TO SECOND)"),
 
         // UNITS 是本家的日期算术算子【文档·IBM】（另五家分成 DATEADD / INTERVAL / NUMTODSINTERVAL 三派，
         // 这里是第四派，而它是四派里唯一一颗"算子在前、单位在词尾"的）。
-        [Fn.Key(Fn.AddYears, 2)] = new("ADD_MONTHS({0}, ({1}) * 12)"),
-        [Fn.Key(Fn.AddMonths, 2)] = new("ADD_MONTHS({0}, {1})"),
-        [Fn.Key(Fn.AddDays, 2)] = new("({0} + {1} UNITS DAY)"),
-        [Fn.Key(Fn.AddHours, 2)] = new("({0} + {1} UNITS HOUR)"),
-        [Fn.Key(Fn.AddMinutes, 2)] = new("({0} + {1} UNITS MINUTE)"),
-        [Fn.Key(Fn.AddSeconds, 2)] = new("({0} + {1} UNITS SECOND)"),
+        [QuickFn.Key(QuickFn.AddYears, 2)] = new("ADD_MONTHS({0}, ({1}) * 12)"),
+        [QuickFn.Key(QuickFn.AddMonths, 2)] = new("ADD_MONTHS({0}, {1})"),
+        [QuickFn.Key(QuickFn.AddDays, 2)] = new("({0} + {1} UNITS DAY)"),
+        [QuickFn.Key(QuickFn.AddHours, 2)] = new("({0} + {1} UNITS HOUR)"),
+        [QuickFn.Key(QuickFn.AddMinutes, 2)] = new("({0} + {1} UNITS MINUTE)"),
+        [QuickFn.Key(QuickFn.AddSeconds, 2)] = new("({0} + {1} UNITS SECOND)"),
 
         // 这一家的 ROUND 在手册里是双参的，所以一元那一臂补一颗字面量 0 而不是发 ROUND(x)
         // —— 与 <c>Fn.Key</c> 那段注释点的同一类错（少一个实参的模板会静默少一截）。
-        [Fn.Key(Fn.Round, 1)] = new("ROUND({0}, 0)"),
-        [Fn.Key(Fn.Round, 2)] = new("ROUND({0}, {1})"),
-        [Fn.Key(Fn.Abs, 1)] = new("ABS({0})"),
-        [Fn.Key(Fn.Sqrt, 1)] = new("SQRT({0})"),
+        [QuickFn.Key(QuickFn.Round, 1)] = new("ROUND({0}, 0)"),
+        [QuickFn.Key(QuickFn.Round, 2)] = new("ROUND({0}, {1})"),
+        [QuickFn.Key(QuickFn.Abs, 1)] = new("ABS({0})"),
+        [QuickFn.Key(QuickFn.Sqrt, 1)] = new("SQRT({0})"),
 
-        [Fn.Key(Fn.Coalesce, 2)] = new("COALESCE({0}, {1})"),
-        [Fn.Key(Fn.NullIf, 2)] = new("NULLIF({0}, {1})"),
+        [QuickFn.Key(QuickFn.Coalesce, 2)] = new("COALESCE({0}, {1})"),
+        [QuickFn.Key(QuickFn.NullIf, 2)] = new("NULLIF({0}, {1})"),
 
-        [Fn.Key(Fn.Count, 1)] = new("COUNT({0})"),
-        [Fn.Key(Fn.CountDistinct, 1)] = new("COUNT(DISTINCT {0})"),
-        [Fn.Key(Fn.Sum, 1)] = new("SUM({0})"),
-        [Fn.Key(Fn.Average, 1)] = new("AVG({0})"),
-        [Fn.Key(Fn.Min, 1)] = new("MIN({0})"),
-        [Fn.Key(Fn.Max, 1)] = new("MAX({0})"),
+        [QuickFn.Key(QuickFn.Count, 1)] = new("COUNT({0})"),
+        [QuickFn.Key(QuickFn.CountDistinct, 1)] = new("COUNT(DISTINCT {0})"),
+        [QuickFn.Key(QuickFn.Sum, 1)] = new("SUM({0})"),
+        [QuickFn.Key(QuickFn.Average, 1)] = new("AVG({0})"),
+        [QuickFn.Key(QuickFn.Min, 1)] = new("MIN({0})"),
+        [QuickFn.Key(QuickFn.Max, 1)] = new("MAX({0})"),
     }.ToFrozenDictionary(StringComparer.Ordinal);
 }

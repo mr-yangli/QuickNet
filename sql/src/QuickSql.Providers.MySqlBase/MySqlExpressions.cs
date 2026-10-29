@@ -102,80 +102,80 @@ public sealed class MySqlExpressions : IExpressionRules
     {
         // 本家的 CONCAT 传染 NULL【实测·P-07 ∶ P-08】，而共用层折成函数拼接的全部理由是
         // "C# 把 null 当空串"，所以这一族的模板必须逐颗实参自己包 —— 与第七家那两颗 COALESCE 同一处置。
-        [Fn.Key(Fn.Concat, 2)] = new("CONCAT(IFNULL({0}, ''), IFNULL({1}, ''))"),
+        [QuickFn.Key(QuickFn.Concat, 2)] = new("CONCAT(IFNULL({0}, ''), IFNULL({1}, ''))"),
 
         // LENGTH 在这一家是字节数（utf8mb4 下一个汉字 3），量纲要跟着契约走（§10.4）。
-        [Fn.Key(Fn.Length, 1)] = new("CHAR_LENGTH({0})"),
-        [Fn.Key(Fn.Upper, 1)] = new("UPPER({0})"),
-        [Fn.Key(Fn.Lower, 1)] = new("LOWER({0})"),
-        [Fn.Key(Fn.Trim, 1)] = new("TRIM({0})"),
-        [Fn.Key(Fn.TrimStart, 1)] = new("LTRIM({0})"),
-        [Fn.Key(Fn.TrimEnd, 1)] = new("RTRIM({0})"),
+        [QuickFn.Key(QuickFn.Length, 1)] = new("CHAR_LENGTH({0})"),
+        [QuickFn.Key(QuickFn.Upper, 1)] = new("UPPER({0})"),
+        [QuickFn.Key(QuickFn.Lower, 1)] = new("LOWER({0})"),
+        [QuickFn.Key(QuickFn.Trim, 1)] = new("TRIM({0})"),
+        [QuickFn.Key(QuickFn.TrimStart, 1)] = new("LTRIM({0})"),
+        [QuickFn.Key(QuickFn.TrimEnd, 1)] = new("RTRIM({0})"),
 
         // 与金仓那一族同形（那一家的 TRIM 叫 BTRIM）。这里的 '' 是真·空串：
         // 与 Oracle 血统那一档正好相反，那一家只能写 (TRIM(x) IS NULL)，因为它的 '' 就是 NULL。
-        [Fn.Key(Fn.Blank, 1)] = new("({0} IS NULL OR TRIM({0}) = '')"),
+        [QuickFn.Key(QuickFn.Blank, 1)] = new("({0} IS NULL OR TRIM({0}) = '')"),
 
         // C# 的 Substring 是 0 基、这一家是 1 基，所以 +1 与另四家同一形（同形的理由见类注释第二段）。
         // 这一家同时认逗号形式的 SUBSTRING(x, p, n)，而"FROM/FOR 两支能吃多复杂的表达式"没有一台库能证：
         // 取标准那一支是"与金仓同形"与"少一处可指认的实测依据"之间的交易，记 §13.5。
-        [Fn.Key(Fn.Substring, 2)] = new("SUBSTRING({0} FROM {1} + 1)", RequiresNonNegativeLength: true),
-        [Fn.Key(Fn.Substring, 3)] = new("SUBSTRING({0} FROM {1} + 1 FOR {2})", RequiresNonNegativeLength: true),
+        [QuickFn.Key(QuickFn.Substring, 2)] = new("SUBSTRING({0} FROM {1} + 1)", RequiresNonNegativeLength: true),
+        [QuickFn.Key(QuickFn.Substring, 3)] = new("SUBSTRING({0} FROM {1} + 1 FOR {2})", RequiresNonNegativeLength: true),
 
         // 元数含接收者：REPLACE 三槽在 /3、LOCATE 两槽在 /2 —— 与另四家同一套键，抄错元数的后果
         // 在金仓那一族已经演示过一次（永远查不到，而不是渲染错）。
-        [Fn.Key(Fn.Replace, 3)] = new("REPLACE({0}, {1}, {2})"),
+        [QuickFn.Key(QuickFn.Replace, 3)] = new("REPLACE({0}, {1}, {2})"),
 
         // LOCATE 是"子串在前、串在后"，与另四家那颗（CHARINDEX 子串在前 / STRPOS 与 INSTR 串在前）不同：
         // 这一家跟的是 STRPOS 的实参顺序而不是 CHARINDEX 的，所以模板里 {0} 与 {1} 要交换。
         // 返回值同样是 1 基且找不到给 0，-1 那一档换算与另四家一致。
-        [Fn.Key(Fn.IndexOf, 2)] = new("(LOCATE({1}, {0}) - 1)"),
-        [Fn.Key(Fn.ToDate, 1)] = new("CAST({0} AS date)"),
-        [Fn.Key(Fn.CastText, 1)] = new("CAST({0} AS char)"),
+        [QuickFn.Key(QuickFn.IndexOf, 2)] = new("(LOCATE({1}, {0}) - 1)"),
+        [QuickFn.Key(QuickFn.ToDate, 1)] = new("CAST({0} AS date)"),
+        [QuickFn.Key(QuickFn.CastText, 1)] = new("CAST({0} AS char)"),
 
-        [Fn.Key(Fn.DateYear, 1)] = new("EXTRACT(year FROM {0})"),
-        [Fn.Key(Fn.DateMonth, 1)] = new("EXTRACT(month FROM {0})"),
-        [Fn.Key(Fn.DateDay, 1)] = new("EXTRACT(day FROM {0})"),
-        [Fn.Key(Fn.DateHour, 1)] = new("EXTRACT(hour FROM {0})"),
-        [Fn.Key(Fn.DateMinute, 1)] = new("EXTRACT(minute FROM {0})"),
-        [Fn.Key(Fn.DateSecond, 1)] = new("EXTRACT(second FROM {0})"),
+        [QuickFn.Key(QuickFn.DateYear, 1)] = new("EXTRACT(year FROM {0})"),
+        [QuickFn.Key(QuickFn.DateMonth, 1)] = new("EXTRACT(month FROM {0})"),
+        [QuickFn.Key(QuickFn.DateDay, 1)] = new("EXTRACT(day FROM {0})"),
+        [QuickFn.Key(QuickFn.DateHour, 1)] = new("EXTRACT(hour FROM {0})"),
+        [QuickFn.Key(QuickFn.DateMinute, 1)] = new("EXTRACT(minute FROM {0})"),
+        [QuickFn.Key(QuickFn.DateSecond, 1)] = new("EXTRACT(second FROM {0})"),
 
         // 与金仓那一族同形（这一家的 LOCALTIMESTAMP 不带括号，与 NOW() 同义）。
         // UTC 那一档换写法：这一家没有 AT TIME ZONE，但有原生的一颗 UTC_TIMESTAMP()，
         // 它给的是不带时区的 UTC 时刻，与落地另三家那一档同一个语义（第五家今天没有 UTC 那一颗的出处）。
-        [Fn.Key(Fn.Now, 0)] = new("LOCALTIMESTAMP"),
-        [Fn.Key(Fn.UtcNow, 0)] = new("UTC_TIMESTAMP()"),
+        [QuickFn.Key(QuickFn.Now, 0)] = new("LOCALTIMESTAMP"),
+        [QuickFn.Key(QuickFn.UtcNow, 0)] = new("UTC_TIMESTAMP()"),
 
         // 这一家有原生 DATE_ADD，但它不吃"间隔乘一个数"（那是 PG 系的形状），所以六档各写一颗单位。
         // 括号包着乘数：与金仓那一族同一条理由 —— {1} 若是表达式，没有它就变成 DATE_ADD(x, INTERVAL a - b YEAR)。
-        [Fn.Key(Fn.AddYears, 2)] = new("DATE_ADD({0}, INTERVAL ({1}) YEAR)"),
-        [Fn.Key(Fn.AddMonths, 2)] = new("DATE_ADD({0}, INTERVAL ({1}) MONTH)"),
-        [Fn.Key(Fn.AddDays, 2)] = new("DATE_ADD({0}, INTERVAL ({1}) DAY)"),
-        [Fn.Key(Fn.AddHours, 2)] = new("DATE_ADD({0}, INTERVAL ({1}) HOUR)"),
-        [Fn.Key(Fn.AddMinutes, 2)] = new("DATE_ADD({0}, INTERVAL ({1}) MINUTE)"),
-        [Fn.Key(Fn.AddSeconds, 2)] = new("DATE_ADD({0}, INTERVAL ({1}) SECOND)"),
+        [QuickFn.Key(QuickFn.AddYears, 2)] = new("DATE_ADD({0}, INTERVAL ({1}) YEAR)"),
+        [QuickFn.Key(QuickFn.AddMonths, 2)] = new("DATE_ADD({0}, INTERVAL ({1}) MONTH)"),
+        [QuickFn.Key(QuickFn.AddDays, 2)] = new("DATE_ADD({0}, INTERVAL ({1}) DAY)"),
+        [QuickFn.Key(QuickFn.AddHours, 2)] = new("DATE_ADD({0}, INTERVAL ({1}) HOUR)"),
+        [QuickFn.Key(QuickFn.AddMinutes, 2)] = new("DATE_ADD({0}, INTERVAL ({1}) MINUTE)"),
+        [QuickFn.Key(QuickFn.AddSeconds, 2)] = new("DATE_ADD({0}, INTERVAL ({1}) SECOND)"),
 
         // 不需要金仓那一层 CAST(… AS numeric)：那一层是"9.x 之前这些函数只吃 numeric"的版本原因，
         // 这一家的 ROUND/CEIL/FLOOR 从 Double 起就一直在。减一层包装会得到与那一族不同的文本，是真实分岔。
-        [Fn.Key(Fn.Round, 1)] = new("ROUND({0})"),
-        [Fn.Key(Fn.Round, 2)] = new("ROUND({0}, {1})"),
-        [Fn.Key(Fn.Abs, 1)] = new("ABS({0})"),
-        [Fn.Key(Fn.Ceiling, 1)] = new("CEIL({0})"),
-        [Fn.Key(Fn.Floor, 1)] = new("FLOOR({0})"),
-        [Fn.Key(Fn.Power, 2)] = new("POWER({0}, {1})"),
-        [Fn.Key(Fn.Sqrt, 1)] = new("SQRT({0})"),
+        [QuickFn.Key(QuickFn.Round, 1)] = new("ROUND({0})"),
+        [QuickFn.Key(QuickFn.Round, 2)] = new("ROUND({0}, {1})"),
+        [QuickFn.Key(QuickFn.Abs, 1)] = new("ABS({0})"),
+        [QuickFn.Key(QuickFn.Ceiling, 1)] = new("CEIL({0})"),
+        [QuickFn.Key(QuickFn.Floor, 1)] = new("FLOOR({0})"),
+        [QuickFn.Key(QuickFn.Power, 2)] = new("POWER({0}, {1})"),
+        [QuickFn.Key(QuickFn.Sqrt, 1)] = new("SQRT({0})"),
 
         // 原生 GREATEST/LEAST，与金仓同档（T-SQL 要用 CASE 展开）。NULL 传染那一档与那一家相反，见类注释。
-        [Fn.Key(Fn.Greatest, 2)] = new("GREATEST({0}, {1})"),
-        [Fn.Key(Fn.Least, 2)] = new("LEAST({0}, {1})"),
-        [Fn.Key(Fn.Coalesce, 2)] = new("COALESCE({0}, {1})"),
-        [Fn.Key(Fn.NullIf, 2)] = new("NULLIF({0}, {1})"),
+        [QuickFn.Key(QuickFn.Greatest, 2)] = new("GREATEST({0}, {1})"),
+        [QuickFn.Key(QuickFn.Least, 2)] = new("LEAST({0}, {1})"),
+        [QuickFn.Key(QuickFn.Coalesce, 2)] = new("COALESCE({0}, {1})"),
+        [QuickFn.Key(QuickFn.NullIf, 2)] = new("NULLIF({0}, {1})"),
 
-        [Fn.Key(Fn.Count, 1)] = new("COUNT({0})"),
-        [Fn.Key(Fn.CountDistinct, 1)] = new("COUNT(DISTINCT {0})"),
-        [Fn.Key(Fn.Sum, 1)] = new("SUM({0})"),
-        [Fn.Key(Fn.Average, 1)] = new("AVG({0})"),
-        [Fn.Key(Fn.Min, 1)] = new("MIN({0})"),
-        [Fn.Key(Fn.Max, 1)] = new("MAX({0})"),
+        [QuickFn.Key(QuickFn.Count, 1)] = new("COUNT({0})"),
+        [QuickFn.Key(QuickFn.CountDistinct, 1)] = new("COUNT(DISTINCT {0})"),
+        [QuickFn.Key(QuickFn.Sum, 1)] = new("SUM({0})"),
+        [QuickFn.Key(QuickFn.Average, 1)] = new("AVG({0})"),
+        [QuickFn.Key(QuickFn.Min, 1)] = new("MIN({0})"),
+        [QuickFn.Key(QuickFn.Max, 1)] = new("MAX({0})"),
     }.ToFrozenDictionary(StringComparer.Ordinal);
 }

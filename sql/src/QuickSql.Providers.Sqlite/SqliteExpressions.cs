@@ -11,8 +11,8 @@ namespace QuickSql.Providers.Sqlite;
 /// 是后一批，逐颗对到点）。"全登记"不是能力最强，是<em>问得起</em>：
 /// 每一颗都能对着一份报告核，而这一格在另六家做不到。
 ///
-/// <para><b>本文件有一条形状纪律，它比任何一颗单键都重要</b>：所有产出<em>时刻</em>的模板（<see cref="Fn.Now"/>、
-/// <see cref="Fn.UtcNow"/>、六颗 <c>Add*</c>、<see cref="Fn.ToDate"/>）都套同一层 <see cref="Stored"/>，
+/// <para><b>本文件有一条形状纪律，它比任何一颗单键都重要</b>：所有产出<em>时刻</em>的模板（<see cref="QuickFn.Now"/>、
+/// <see cref="QuickFn.UtcNow"/>、六颗 <c>Add*</c>、<see cref="QuickFn.ToDate"/>）都套同一层 <see cref="Stored"/>，
 /// 因为这一家的时刻是文本，而<em>等号比的是字面串</em>。不套的话引擎交回的是定长三位小数
 /// （<c>2026-03-09 10:20:30.000</c>），而库里那一格由驱动写成"去尾零、整秒连小数点都不留"
 /// （<c>2026-03-09 10:20:30</c>【实测·2400 的 <c>id 1…6</c> 那六行】），两形相遇<em>恒不等</em>：
@@ -64,7 +64,7 @@ namespace QuickSql.Providers.Sqlite;
 /// 【实测·4304 ∶ 4309】。取向不变：<b>发短的那一形</b>，把这一格放在这里、放在 §14、放在 <c>docs</c>
 /// 那句"本家日期语义有出入"里 —— 只是从今天起这一句后面站着第 43 轮的一整排读数，而不是一棵没写出来的 <c>CASE</c>。
 /// <b>同一轮顺带钉住的是本表既有的一条形状选择</b>：那九处套 <c>STRFTIME('%Y-%m-%d %H:%M:%f', …)</c> 的行
-/// （六颗加减、两颗取时钟、一颗 <see cref="Fn.ToDate"/>）今天不再是审美而是精度——换成 <c>DATETIME(…)</c>
+/// （六颗加减、两颗取时钟、一颗 <see cref="QuickFn.ToDate"/>）今天不再是审美而是精度——换成 <c>DATETIME(…)</c>
 /// 就交不回小数秒【实测·4330 那一行的第一格与第四格：同一个入参，<c>DATETIME()</c> 交回 <c>12:34:56</c>
 /// 而 <c>STRFTIME(…%f)</c> 交回 <c>12:34:56.789</c>】——改成 <c>DATETIME</c> 不需要新证据就能把
 /// <see cref="SqliteTypes"/> 第三条的"保住 100 纳秒"那句废掉。</para>
@@ -76,7 +76,7 @@ namespace QuickSql.Providers.Sqlite;
 /// 【实测·2608】两颗定点数过 <c>MAX()</c> 同一判；
 /// 【实测·2710】更硬：<c>MAX("m", 100)</c> 交回那颗文本 <c>'12.34'</c> —— 在这一家的类型序里
 /// <b>文本永远大于任何数</b>，所以"一列定点 vs 一颗字面数"连截断的机会都没有。
-/// 与 <see cref="Fn.Greatest"/>/<see cref="Fn.Least"/> 同一格的还有 <c>Coalesce</c> 之外的两颗聚合
+/// 与 <see cref="QuickFn.Greatest"/>/<see cref="QuickFn.Least"/> 同一格的还有 <c>Coalesce</c> 之外的两颗聚合
 /// （<c>Min/Max</c>），而<b>那两颗不能不登记</b>。所以本表照登，代价写在两处：§14 那一行与
 /// <c>SqliteTypes</c> 第三条旁边。<em>另一颗是好消息</em>：算数函数会自己把文本折成数
 /// 【实测·2703】<c>CEIL('12.34') = 13</c>、<c>POWER('12.34', 2)</c>，而同一颗 <c>ROUND</c> 打在
@@ -88,7 +88,7 @@ namespace QuickSql.Providers.Sqlite;
 /// 而折得<em>不一致</em>：<c>CEIL('abc')</c> 交回 <c>NULL</c>，<c>ABS('abc')</c> 交回 <c>0</c>
 /// 【实测·2704】，同一批函数对"折不动"那一档没有统一答案。</para>
 ///
-/// <para><b>第五格只有一句话，但它值整份文件</b>：<see cref="Fn.Blank"/> 在本家<em>登得了</em>
+/// <para><b>第五格只有一句话，但它值整份文件</b>：<see cref="QuickFn.Blank"/> 在本家<em>登得了</em>
 /// （<c>({0} IS NULL OR TRIM({0}) = '')</c>，同一颗参数在文本里出现两次），因为本家参数是具名形
 /// <c>@p0</c>【实测·4220 两臂 ∶ 4221 三处】。<c>Gbase8sExpressions</c> 为同一条形丢了这颗键
 /// （位置形 <c>?</c> 下"文本两颗、表里一颗"会把值绑到隔壁列），那一格的分岔在这里落回"能登"。
@@ -99,19 +99,19 @@ namespace QuickSql.Providers.Sqlite;
 ///
 /// <para><b>不登记的键：零颗</b>，与类注释第一句同一事。要逐颗记的那一类"登了而读的人会上当"的三颗：
 /// <list type="bullet">
-/// <item><see cref="Fn.ToDate"/> 交回的是<em>零点那一形</em>（<c>2026-03-09 00:00:00</c>）而不是裸日期
+/// <item><see cref="QuickFn.ToDate"/> 交回的是<em>零点那一形</em>（<c>2026-03-09 00:00:00</c>）而不是裸日期
 /// （<c>2026-03-09</c>），两条都有实测：<b>【实测·2600/2604】裸形命中三行而遇不上 <c>DateTime</c> 零点的绑定
 /// 参数（2605 数到 0）；【实测·2602/2603】零点形命中同一批三行</b>。取零点形是为了与另六家在这一点上同语义
 /// —— 虚谷那一颗 <c>CAST(x AS date)</c> 在真列上交回的就是 <c>2026-05-06 00:00:00.0000000</c>
 /// （<c>XuguExpressions</c> 里那条 <c>E-08a</c>），也就是说<em>七家的翻译契约里这一格是"截到日而仍是时刻"</em>。
 /// 代价写在原处：与一颗 <c>DateOnly</c> 参数相遇时本形<em>不等</em>（差一段 <c>' 00:00:00'</c>），
 /// 那一档要的是裸 <c>DATE({0})</c>。两臂都量了，选一臂就得承认另一臂。</item>
-/// <item><see cref="Fn.DateSecond"/> 截到整秒【实测·2515：<c>.456</c> 那一行的秒是 <c>30</c> 不是 <c>30.456</c>】，
+/// <item><see cref="QuickFn.DateSecond"/> 截到整秒【实测·2515：<c>.456</c> 那一行的秒是 <c>30</c> 不是 <c>30.456</c>】，
 /// 与虚谷那一颗 <c>GETSECOND</c> 交回 <c>9.456</c> 的错法相反（那一家的修法在同一条键上）。
-/// <see cref="Fn.DateYear"/> 那一族打在带偏移的文本上读的是 <b>UTC</b> 那一份字段
+/// <see cref="QuickFn.DateYear"/> 那一族打在带偏移的文本上读的是 <b>UTC</b> 那一份字段
 /// 【实测·2412：<c>10:20:30.456+08:00</c> 过 <c>STRFTIME('%H')</c> 得 <c>02</c>】，
 /// 而打在无偏移文本上就是本地那一格 —— 同一颗键两种语义，取决于<em>库里那一串长什么样</em>。</item>
-/// <item><see cref="Fn.Now"/> 与 <see cref="Fn.UtcNow"/> 在这一家<em>不是"库那台机器的钟"</em>：
+/// <item><see cref="QuickFn.Now"/> 与 <see cref="QuickFn.UtcNow"/> 在这一家<em>不是"库那台机器的钟"</em>：
 /// 引擎在进程内（<c>e_sqlite3.dll</c> 与我们同址），所以这一格与 CLR 的 <c>DateTime.Now</c> 之间不再有
 /// 六家都有的那颗网络/时区差。这是七家里的第一次，而它带来的不是省事是一格新的判据：<b>本家 <c>Now</c>
 /// 的唯一损失就是那颗 <c>%f</c> 的毫秒档</b>【实测·2211/2237】，所以 <c>Where(x =&gt; x.At &lt; Now())</c>
@@ -188,60 +188,60 @@ public sealed class SqliteExpressions : IExpressionRules
         // ③ <b>本家</b>：同一件事被<em>量</em>到了（2200），而量到的是"不折就错"，所以折在本族的模板里。
         // 折叠用的那颗问过了：二参与三参的 <c>COALESCE</c> 都交回右支【实测·2143：<c>COALESCE(NULL, NULL, 3)</c> → 3、
         // <c>IFNULL(NULL, 'd')</c> → <c>'d'</c>】，取 <c>COALESCE</c> 是因为本家另有 <c>Fn.Coalesce</c> 那颗模板，两处同一拼法。
-        [Fn.Key(Fn.Concat, 2)] = new("(COALESCE({0}, '') || COALESCE({1}, ''))"),
-        [Fn.Key(Fn.Concat, 2)] = new("(COALESCE({0}, '') || COALESCE({1}, ''))"),
+        [QuickFn.Key(QuickFn.Concat, 2)] = new("(COALESCE({0}, '') || COALESCE({1}, ''))"),
+        [QuickFn.Key(QuickFn.Concat, 2)] = new("(COALESCE({0}, '') || COALESCE({1}, ''))"),
 
         // 颗数而不是字节【实测·2201】：'中文' → 2、'😀' → 1（代理对算一颗），与另六家同一档而本家是量出来的。
         // 打在文本化的定点上无损【实测·2708：<c>'12.34'</c> → 5】。
-        [Fn.Key(Fn.Length, 1)] = new("LENGTH({0})"),
+        [QuickFn.Key(QuickFn.Length, 1)] = new("LENGTH({0})"),
 
         // 两颗只折 ASCII【实测·2202】：'éa' → 'éA'（é 原样），'İ' 一颗都不动。
         // 与 <c>COLLATE NOCASE</c> 同一条边界（【实测·2239】'ä' 与 'Ä' 在那一档下也不等），
         // 所以"这一家的 <c>UPPER</c> 与 <c>LOWER</c> 只到 ASCII"是两格而同一因。
         // CLR 的 <c>ToUpper</c> 走当前区域性 —— 差在哪一颗字符上要现场问，本表仍登这一形（六家同形）。
-        [Fn.Key(Fn.Upper, 1)] = new("UPPER({0})"),
-        [Fn.Key(Fn.Lower, 1)] = new("LOWER({0})"),
+        [QuickFn.Key(QuickFn.Upper, 1)] = new("UPPER({0})"),
+        [QuickFn.Key(QuickFn.Lower, 1)] = new("LOWER({0})"),
 
         // 只去空格【实测·2203】：<c>TRIM(char(9) || 'x' || char(9)) = 'x'</c> 交回 <b>0</b>，
         // 而两臂带空格的交回 1。两颗带字符集形（<c>TRIM(x, '`')</c>）也在场（同一跑的中间臂），
         // 本表不用它 —— CLR 的 <c>Trim()</c> 语义是"全部空白"，那一档在这里发不出来，记 §14。
-        [Fn.Key(Fn.Trim, 1)] = new("TRIM({0})"),
-        [Fn.Key(Fn.TrimStart, 1)] = new("LTRIM({0})"),
-        [Fn.Key(Fn.TrimEnd, 1)] = new("RTRIM({0})"),
+        [QuickFn.Key(QuickFn.Trim, 1)] = new("TRIM({0})"),
+        [QuickFn.Key(QuickFn.TrimStart, 1)] = new("LTRIM({0})"),
+        [QuickFn.Key(QuickFn.TrimEnd, 1)] = new("RTRIM({0})"),
 
         // 类注释第五格：这一形在本家登得进来，因为 <c>@p0</c> 在同一句文本里出现两次是驱动的合法用法
         // 【实测·4220 两臂 ∶ 4221 三处】；<c>Gbase8sExpressions</c> 为同一条形把这颗键删了。
         // "空格串算不算空白"这一问的答案与 <c>Fn.Trim</c> 同边（【实测·2204 数到 1 的是 <c>''</c> 那一行】，
         // 一颗 <c>'\t'</c> 在这一形下<em>不</em>成立），那是六家共有的语义差而不是本家新添的。
-        [Fn.Key(Fn.Blank, 1)] = new("({0} IS NULL OR TRIM({0}) = '')"),
+        [QuickFn.Key(QuickFn.Blank, 1)] = new("({0} IS NULL OR TRIM({0}) = '')"),
 
         // CLR 的 startIndex 从 0 起而 SUBSTR 从 1 起（七家同一条换算）。
         // 【实测·2205 两臂 + 2610 打在真列上】。
         // 越界与零长那一档本家比另六家宽：【实测·2130/2131】<c>SUBSTR('abcdef', 0)</c> 交回整串、
         // <c>SUBSTR('abc', 1, 0)</c> 交回 <c>''</c>、负起点从串尾数 —— 所以 <c>RequiresNonNegativeLength</c>
         // 那道闸不是防这一家报错（它不报），是防我们把 CLR 会抛的那一档静默发下去（§5.7 那一条）。
-        [Fn.Key(Fn.Substring, 2)] = new("SUBSTR({0}, {1} + 1)", RequiresNonNegativeLength: true),
-        [Fn.Key(Fn.Substring, 3)] = new("SUBSTR({0}, {1} + 1, {2})", RequiresNonNegativeLength: true),
+        [QuickFn.Key(QuickFn.Substring, 2)] = new("SUBSTR({0}, {1} + 1)", RequiresNonNegativeLength: true),
+        [QuickFn.Key(QuickFn.Substring, 3)] = new("SUBSTR({0}, {1} + 1, {2})", RequiresNonNegativeLength: true),
 
         // 【实测·2206】，三处空串与重叠那一档也一起量了【实测·2236】：<c>REPLACE('aaa','aa','z')</c>
         // 交回 <c>'za'</c>（不回头扫），这一条与 CLR <c>String.Replace</c> 同。
-        [Fn.Key(Fn.Replace, 3)] = new("REPLACE({0}, {1}, {2})"),
+        [QuickFn.Key(QuickFn.Replace, 3)] = new("REPLACE({0}, {1}, {2})"),
 
         // INSTR 同序（串在前、子串在后，与金仓的 STRPOS 与 Oracle 血统那一形一边，T-SQL 与 MySQL 血统是反的）。
         // 1 基换算成 CLR 的 0 基，找不到交回 -1【实测·2207 两臂】、NULL 传播 NULL【实测·2226】
         // （绑定参数那一臂同判：2612）。
-        [Fn.Key(Fn.IndexOf, 2)] = new("(INSTR({0}, {1}) - 1)"),
+        [QuickFn.Key(QuickFn.IndexOf, 2)] = new("(INSTR({0}, {1}) - 1)"),
 
         // 零点那一形，两臂的取舍写在类注释"不登记之外"那一格的第一条【实测·2600…2605】。
         // 里外两层都是必需的：内层 <c>DATE()</c> 截到日（【实测·2209】交回 <c>text</c>），
         // 外层把那一形<em>展开成时刻文本</em>再归一，否则会差一段 <c>' 00:00:00'</c>。
-        [Fn.Key(Fn.ToDate, 1)] = new(Stored("STRFTIME(" + Timestamp + ", DATE({0}))")),
+        [QuickFn.Key(QuickFn.ToDate, 1)] = new(Stored("STRFTIME(" + Timestamp + ", DATE({0}))")),
 
         // 这一格与 <c>Gbase8sExpressions</c> 那颗<em>不登记</em>的 <c>cast.text</c> 是同一问的两种答案：
         // 本家的目标型 <c>TEXT</c> 是<em>不带宽度</em>的合法型名【实测·2208：<c>CAST(12 AS TEXT)</c> → '12'，
         // typeof → 'text'】，所以那颗"缺的不是函数而是一个宽度数"在这里根本不成立。
         // 打在 REAL 上交回引擎的浮点转文本【实测·2606：<c>2.5</c> → '2.5'】，与 §13.5 那条"文本是载体"同边。
-        [Fn.Key(Fn.CastText, 1)] = new("CAST({0} AS TEXT)"),
+        [QuickFn.Key(QuickFn.CastText, 1)] = new("CAST({0} AS TEXT)"),
 
         // 六颗都过 STRFTIME 的掩码再折整数【实测·2210 六臂、2515 打在两形真列上】。
         // 三处要说清：① <c>'%S'</c> 只到整秒（2515），② 掩码打在读不懂的文本上交回 NULL 而不是报错
@@ -250,12 +250,12 @@ public sealed class SqliteExpressions : IExpressionRules
         // 整数那一档【实测·2232】打在 <c>1700000000</c> 这种裸整数上是 NULL —— 引擎只认那几种时刻文本，
         // 而本家 <c>TimeSpan</c>/<c>TimeOnly</c> 落的是 <c>Ticks</c>（<c>SqliteTypes</c> 第六条），
         // 所以<em>那两列上这六颗都不该用</em>，共用层按 CLR 型就不会走到。
-        [Fn.Key(Fn.DateYear, 1)] = new("CAST(STRFTIME('%Y', {0}) AS INTEGER)"),
-        [Fn.Key(Fn.DateMonth, 1)] = new("CAST(STRFTIME('%m', {0}) AS INTEGER)"),
-        [Fn.Key(Fn.DateDay, 1)] = new("CAST(STRFTIME('%d', {0}) AS INTEGER)"),
-        [Fn.Key(Fn.DateHour, 1)] = new("CAST(STRFTIME('%H', {0}) AS INTEGER)"),
-        [Fn.Key(Fn.DateMinute, 1)] = new("CAST(STRFTIME('%M', {0}) AS INTEGER)"),
-        [Fn.Key(Fn.DateSecond, 1)] = new("CAST(STRFTIME('%S', {0}) AS INTEGER)"),
+        [QuickFn.Key(QuickFn.DateYear, 1)] = new("CAST(STRFTIME('%Y', {0}) AS INTEGER)"),
+        [QuickFn.Key(QuickFn.DateMonth, 1)] = new("CAST(STRFTIME('%m', {0}) AS INTEGER)"),
+        [QuickFn.Key(QuickFn.DateDay, 1)] = new("CAST(STRFTIME('%d', {0}) AS INTEGER)"),
+        [QuickFn.Key(QuickFn.DateHour, 1)] = new("CAST(STRFTIME('%H', {0}) AS INTEGER)"),
+        [QuickFn.Key(QuickFn.DateMinute, 1)] = new("CAST(STRFTIME('%M', {0}) AS INTEGER)"),
+        [QuickFn.Key(QuickFn.DateSecond, 1)] = new("CAST(STRFTIME('%S', {0}) AS INTEGER)"),
 
         // 'now' 是 UTC【实测·2211 两臂差八小时，与本机偏移正好对上】，所以 <c>Now</c> 要带 'localtime'。
         // 为什么这一家 <c>Now</c> 配 <c>localtime</c>：驱动写入 <c>DateTime</c> 时<em>丢掉 Kind</em>
@@ -263,20 +263,20 @@ public sealed class SqliteExpressions : IExpressionRules
         // 而 <c>Local</c> 那一档写的就是本地墙上时间 —— 于是与"库里最近的那一行"可比的只有本地档。
         // 那颗 <c>UtcNow</c> 与 <c>Kind=Utc</c> 写进去的裸串也对得上，因为写的时候<em>已经是</em>那一格的墙上时间。
         // 两形的归一命中【实测·2407/2408/2516】。类注释最后一条：这一家没有"库那台机器的钟"这一格。
-        [Fn.Key(Fn.Now, 0)] = new(Stored("STRFTIME(" + Timestamp + ", 'now', 'localtime')")),
-        [Fn.Key(Fn.UtcNow, 0)] = new(Stored("STRFTIME(" + Timestamp + ", 'now')")),
+        [QuickFn.Key(QuickFn.Now, 0)] = new(Stored("STRFTIME(" + Timestamp + ", 'now', 'localtime')")),
+        [QuickFn.Key(QuickFn.UtcNow, 0)] = new(Stored("STRFTIME(" + Timestamp + ", 'now')")),
 
         // 六颗 <c>Add*</c>：类注释第三格（月/年溢出）与第二格（<c>%+d</c> 与 <c>%+f</c> 的分工）都在这一组上。
         // 年与月走 <c>%+d</c>（CLR 只用整数部分，4219/2409/2702）；日与时分秒走 <c>%+f</c>（2410/2215/2511/2614）。
         // 修饰符的单复数两形都收【实测·2213】，本表统一发复数（与 <c>%+f</c> 那一臂的小数同读法：
         // <c>+1.5 days</c> 才是"一天半"，<c>+1.5 day</c> 没有量过，不赌）。
         // 月末那一档【实测·2138/2705/2707】是本家与另六家<em>唯一一处算术结果本身不同</em>的格。
-        [Fn.Key(Fn.AddYears, 2)] = new(Stored("STRFTIME(" + Timestamp + ", {0}, printf('%+d years', {1}))")),
-        [Fn.Key(Fn.AddMonths, 2)] = new(Stored("STRFTIME(" + Timestamp + ", {0}, printf('%+d months', {1}))")),
-        [Fn.Key(Fn.AddDays, 2)] = new(Stored("STRFTIME(" + Timestamp + ", {0}, printf('%+f days', {1}))")),
-        [Fn.Key(Fn.AddHours, 2)] = new(Stored("STRFTIME(" + Timestamp + ", {0}, printf('%+f hours', {1}))")),
-        [Fn.Key(Fn.AddMinutes, 2)] = new(Stored("STRFTIME(" + Timestamp + ", {0}, printf('%+f minutes', {1}))")),
-        [Fn.Key(Fn.AddSeconds, 2)] = new(Stored("STRFTIME(" + Timestamp + ", {0}, printf('%+f seconds', {1}))")),
+        [QuickFn.Key(QuickFn.AddYears, 2)] = new(Stored("STRFTIME(" + Timestamp + ", {0}, printf('%+d years', {1}))")),
+        [QuickFn.Key(QuickFn.AddMonths, 2)] = new(Stored("STRFTIME(" + Timestamp + ", {0}, printf('%+d months', {1}))")),
+        [QuickFn.Key(QuickFn.AddDays, 2)] = new(Stored("STRFTIME(" + Timestamp + ", {0}, printf('%+f days', {1}))")),
+        [QuickFn.Key(QuickFn.AddHours, 2)] = new(Stored("STRFTIME(" + Timestamp + ", {0}, printf('%+f hours', {1}))")),
+        [QuickFn.Key(QuickFn.AddMinutes, 2)] = new(Stored("STRFTIME(" + Timestamp + ", {0}, printf('%+f minutes', {1}))")),
+        [QuickFn.Key(QuickFn.AddSeconds, 2)] = new(Stored("STRFTIME(" + Timestamp + ", {0}, printf('%+f seconds', {1}))")),
 
         // 一元那一臂补字面量 0 而不是发 <c>ROUND(x)</c>：<c>ROUND</c> 在这一家确实认一元
         // 【实测·2217/2234 的第一臂】，而<em>它到 0 位而不是 CLR 那一档</em>是巧合，写成两臂一致更可读
@@ -286,16 +286,16 @@ public sealed class SqliteExpressions : IExpressionRules
         // ② 负标度被<em>忽略</em>（2217：<c>ROUND(1234.0, -2)</c> 交回 <c>1234</c> 而不是 <c>1200</c>），
         // CLR 那一档压根不接受负标度（抛），所以这一格不会错值而是"少一步"；
         // ③ 定点那一列上它是折了文本再算【实测·2703 第二行：<c>ROUND('-0.5')</c> → -1】。
-        [Fn.Key(Fn.Round, 1)] = new("ROUND({0}, 0)"),
-        [Fn.Key(Fn.Round, 2)] = new("ROUND({0}, {1})"),
+        [QuickFn.Key(QuickFn.Round, 1)] = new("ROUND({0}, 0)"),
+        [QuickFn.Key(QuickFn.Round, 2)] = new("ROUND({0}, {1})"),
 
         // 【实测·2221/2609/2703】。两颗一起记：<c>CEIL</c> 与 <c>CEILING</c> 都在场且同值
         // 【实测·2218】，本表跟 MySQL 血统那颗的短形 <c>CEIL</c>；交回的是 <c>REAL</c>
         // （2218 的 typeof 那一臂），所以 CLR 的 <c>decimal</c> 在这一家过这两颗会退成浮点 ——
         // 那是<em>算式的返回值</em>而不是存储，与本文件的第四格同一因。
-        [Fn.Key(Fn.Abs, 1)] = new("ABS({0})"),
-        [Fn.Key(Fn.Ceiling, 1)] = new("CEIL({0})"),
-        [Fn.Key(Fn.Floor, 1)] = new("FLOOR({0})"),
+        [QuickFn.Key(QuickFn.Abs, 1)] = new("ABS({0})"),
+        [QuickFn.Key(QuickFn.Ceiling, 1)] = new("CEIL({0})"),
+        [QuickFn.Key(QuickFn.Floor, 1)] = new("FLOOR({0})"),
 
         // 实参序与 CLR <c>Math.Pow(x, y)</c> 同（另六家同形，<c>POWER({0}, {1})</c>）。
         // <c>POW</c> 与 <c>POWER</c> 两形都在【实测·2219】，跟另六家那一颗长的；<c>SQRT(9)</c> 交回的
@@ -305,8 +305,8 @@ public sealed class SqliteExpressions : IExpressionRules
         // （常用对数）也都在【实测·2219】，而 CLR 的 <c>Math.Log</c> 一档是<em>自然</em>对数 ——
         // 真要加 <c>math.log</c> 那一颗，先答"这一家的 <c>LOG</c> 是不是那一档"（2219 给的读数是
         // <c>LOG(1000) = 3</c>，也就是说<em>不是</em>，得配 <c>LOG(x)/LOG(e)</c> 或 <c>LN</c> 那一颗，而后者本次没量）。
-        [Fn.Key(Fn.Power, 2)] = new("POWER({0}, {1})"),
-        [Fn.Key(Fn.Sqrt, 1)] = new("SQRT({0})"),
+        [QuickFn.Key(QuickFn.Power, 2)] = new("POWER({0}, {1})"),
+        [QuickFn.Key(QuickFn.Sqrt, 1)] = new("SQRT({0})"),
 
         // 本家没有 <c>GREATEST/LEAST</c>【文档·SQLite 手册把它们列在"多参标量聚合"那一类】，
         // 场上有的就是<em>变参的 <c>MAX()/MIN()</c></em>【实测·2220 四臂、2608、2710】。
@@ -314,12 +314,12 @@ public sealed class SqliteExpressions : IExpressionRules
         // 恒大于数（2710 的 <c>MAX("m", 100)</c> → <c>'12.34'</c>）。NULL 那一档与 <c>Math.Max</c> 不同：
         // 【实测·2220 第四臂】<c>MIN(NULL, 1)</c> 交回 NULL 而不是跳过 —— 本表不补 <c>COALESCE</c>，
         // 因为补了就把"参与比较的是 NULL"这件事藏起来，而那正是共用层 <c>Nullable</c> 契约要露的一格。
-        [Fn.Key(Fn.Greatest, 2)] = new("MAX({0}, {1})"),
-        [Fn.Key(Fn.Least, 2)] = new("MIN({0}, {1})"),
+        [QuickFn.Key(QuickFn.Greatest, 2)] = new("MAX({0}, {1})"),
+        [QuickFn.Key(QuickFn.Least, 2)] = new("MIN({0}, {1})"),
 
         // 【实测·2223（含 <c>IIF</c> 那一形，本表不用）、2710 的 <c>COALESCE(NULL, "m")</c> 那一臂】。
-        [Fn.Key(Fn.Coalesce, 2)] = new("COALESCE({0}, {1})"),
-        [Fn.Key(Fn.NullIf, 2)] = new("NULLIF({0}, {1})"),
+        [QuickFn.Key(QuickFn.Coalesce, 2)] = new("COALESCE({0}, {1})"),
+        [QuickFn.Key(QuickFn.NullIf, 2)] = new("NULLIF({0}, {1})"),
 
         // 六颗聚合【实测·2222 八臂、2607】。两颗本家特有的：
         // <c>COUNT(DISTINCT x)</c> 在这一家与 <c>COUNT(x)</c> 同一档而 <c>GROUP_CONCAT</c> 要带分隔符才可控
@@ -329,12 +329,12 @@ public sealed class SqliteExpressions : IExpressionRules
         // 本表跟 <c>SUM</c>（六家同），
         // 因为 CLR 那侧的 <c>Sum()</c> 对空集交的正是 <c>null</c> 一颗 <c>decimal?</c>。
         // <c>Min/Max</c> 在定点列上是词法【实测·2506】，与 <c>Greatest/Least</c> 同一格同一代价。
-        [Fn.Key(Fn.Count, 1)] = new("COUNT({0})"),
-        [Fn.Key(Fn.CountDistinct, 1)] = new("COUNT(DISTINCT {0})"),
-        [Fn.Key(Fn.Sum, 1)] = new("SUM({0})"),
-        [Fn.Key(Fn.Average, 1)] = new("AVG({0})"),
-        [Fn.Key(Fn.Min, 1)] = new("MIN({0})"),
-        [Fn.Key(Fn.Max, 1)] = new("MAX({0})"),
+        [QuickFn.Key(QuickFn.Count, 1)] = new("COUNT({0})"),
+        [QuickFn.Key(QuickFn.CountDistinct, 1)] = new("COUNT(DISTINCT {0})"),
+        [QuickFn.Key(QuickFn.Sum, 1)] = new("SUM({0})"),
+        [QuickFn.Key(QuickFn.Average, 1)] = new("AVG({0})"),
+        [QuickFn.Key(QuickFn.Min, 1)] = new("MIN({0})"),
+        [QuickFn.Key(QuickFn.Max, 1)] = new("MAX({0})"),
     }.ToFrozenDictionary(StringComparer.Ordinal);
 
     /// <summary>STRFTIME 那颗掩码串（带单引号，所以拼进模板时不用再补）。本表九处用到它，

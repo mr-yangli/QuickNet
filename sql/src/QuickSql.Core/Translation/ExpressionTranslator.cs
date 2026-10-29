@@ -325,14 +325,14 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
 
         var symbol = member.Member.Name switch
         {
-            nameof(string.Length) when kind == typeof(string) => Fn.Length,
-            "Year" when temporal => Fn.DateYear,
-            "Month" when temporal => Fn.DateMonth,
-            "Day" when temporal => Fn.DateDay,
-            "Hour" when temporal => Fn.DateHour,
-            "Minute" when temporal => Fn.DateMinute,
-            "Second" when temporal => Fn.DateSecond,
-            "Date" when temporal => Fn.ToDate,
+            nameof(string.Length) when kind == typeof(string) => QuickFn.Length,
+            "Year" when temporal => QuickFn.DateYear,
+            "Month" when temporal => QuickFn.DateMonth,
+            "Day" when temporal => QuickFn.DateDay,
+            "Hour" when temporal => QuickFn.DateHour,
+            "Minute" when temporal => QuickFn.DateMinute,
+            "Second" when temporal => QuickFn.DateSecond,
+            "Date" when temporal => QuickFn.ToDate,
             _ => null,
         };
 
@@ -348,7 +348,7 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
     SqlExpression Binary(BinaryExpression node, Scope scope, ColumnContract? hint)
     {
         if (node.NodeType == ExpressionType.Coalesce)
-            return Template(Fn.Coalesce, [Visit(node.Left, scope, hint), Visit(node.Right, scope, hint)]);
+            return Template(QuickFn.Coalesce, [Visit(node.Left, scope, hint), Visit(node.Right, scope, hint)]);
 
         if (node.NodeType is ExpressionType.AndAlso or ExpressionType.OrElse)
         {
@@ -390,7 +390,7 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
         // C# 的 "a + b" 把 null 当空串，而 T-SQL/Oracle 的 + 会把整个表达式变成 NULL：
         // 不折成 CONCAT，== "xy" 这类查询在库里会悄悄少行（§5.8 的「绝不静默生成错 SQL」）。
         if (node.NodeType == ExpressionType.Add && node.Type == typeof(string))
-            return Template(Fn.Concat, [lhs, rhs]);
+            return Template(QuickFn.Concat, [lhs, rhs]);
 
         return new SqlBinaryExpression(Operator(node.NodeType), lhs, rhs);
     }
@@ -578,7 +578,7 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
             }
 
             case "IsNullOrWhiteSpace" when declaring == typeof(string) && node.Arguments.Count == 1:
-                return Template(Fn.Blank, [Visit(node.Arguments[0], scope, hint)]);
+                return Template(QuickFn.Blank, [Visit(node.Arguments[0], scope, hint)]);
 
             case "Any" or "Count" when declaring == typeof(Enumerable):
                 if (TryNavigationSubquery(node, scope, out var subqueryResult))
@@ -596,7 +596,7 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
 
         var key = SymbolicKey(node);
 
-        if (key == Fn.Concat)
+        if (key == QuickFn.Concat)
             return FoldConcatenation(arguments);
 
         if (key is not null)
@@ -774,7 +774,7 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
 
             // LongCount 与 Count 发同一句 COUNT(*)：库里那一列本来就是整数，
             // 读回 int 还是 long 由投影槽位的声明类型定（§5.7 那套按声明类型判的形状）。
-            return Template(Fn.Count, [new StarExpression(null)]);
+            return Template(QuickFn.Count, [new StarExpression(null)]);
         }
 
         if (node.Arguments.Count != 2 || StripQuote(node.Arguments[1]) is not LambdaExpression selector)
@@ -787,10 +787,10 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
 
         var symbol = node.Method.Name switch
         {
-            "Sum" => Fn.Sum,
-            "Max" => Fn.Max,
-            "Min" => Fn.Min,
-            _ => Fn.Average,
+            "Sum" => QuickFn.Sum,
+            "Max" => QuickFn.Max,
+            "Min" => QuickFn.Min,
+            _ => QuickFn.Average,
         };
 
         // 组里的行就是那张表的行，所以形参绑回同一个表位：这一格不建子查询、不给别名，
@@ -1246,52 +1246,52 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
         if (declaring == typeof(string))
             return name switch
             {
-                "get_Length" => Fn.Length,
-                "ToUpper" or "ToUpperInvariant" => Fn.Upper,
-                "ToLower" or "ToLowerInvariant" => Fn.Lower,
-                "Trim" when node.Arguments.Count == 0 => Fn.Trim,
-                "TrimStart" when node.Arguments.Count == 0 => Fn.TrimStart,
-                "TrimEnd" when node.Arguments.Count == 0 => Fn.TrimEnd,
-                "Substring" => Fn.Substring,
-                "Replace" => Fn.Replace,
-                "IndexOf" => Fn.IndexOf,
-                "Concat" => Fn.Concat,
-                "ToString" when node.Arguments.Count == 0 => Fn.CastText,
+                "get_Length" => QuickFn.Length,
+                "ToUpper" or "ToUpperInvariant" => QuickFn.Upper,
+                "ToLower" or "ToLowerInvariant" => QuickFn.Lower,
+                "Trim" when node.Arguments.Count == 0 => QuickFn.Trim,
+                "TrimStart" when node.Arguments.Count == 0 => QuickFn.TrimStart,
+                "TrimEnd" when node.Arguments.Count == 0 => QuickFn.TrimEnd,
+                "Substring" => QuickFn.Substring,
+                "Replace" => QuickFn.Replace,
+                "IndexOf" => QuickFn.IndexOf,
+                "Concat" => QuickFn.Concat,
+                "ToString" when node.Arguments.Count == 0 => QuickFn.CastText,
                 _ => null,
             };
 
         if (declaring == typeof(Math))
             return name switch
             {
-                "Round" => Fn.Round,
-                "Abs" => Fn.Abs,
-                "Ceiling" => Fn.Ceiling,
-                "Floor" => Fn.Floor,
-                "Power" => Fn.Power,
-                "Sqrt" => Fn.Sqrt,
-                "Max" => Fn.Greatest,
-                "Min" => Fn.Least,
+                "Round" => QuickFn.Round,
+                "Abs" => QuickFn.Abs,
+                "Ceiling" => QuickFn.Ceiling,
+                "Floor" => QuickFn.Floor,
+                "Power" => QuickFn.Power,
+                "Sqrt" => QuickFn.Sqrt,
+                "Max" => QuickFn.Greatest,
+                "Min" => QuickFn.Least,
                 _ => null,
             };
 
         if (declaring is { } t && (t == typeof(DateTime) || t == typeof(DateTimeOffset) || t == typeof(DateOnly)))
             return name switch
             {
-                "get_Year" => Fn.DateYear,
-                "get_Month" => Fn.DateMonth,
-                "get_Day" => Fn.DateDay,
-                "get_Hour" => Fn.DateHour,
-                "get_Minute" => Fn.DateMinute,
-                "get_Second" => Fn.DateSecond,
-                "get_Date" => Fn.ToDate,
-                "AddYears" => Fn.AddYears,
-                "AddMonths" => Fn.AddMonths,
-                "AddDays" => Fn.AddDays,
-                "AddHours" => Fn.AddHours,
-                "AddMinutes" => Fn.AddMinutes,
-                "AddSeconds" => Fn.AddSeconds,
-                "get_Now" => Fn.Now,
-                "get_UtcNow" => Fn.UtcNow,
+                "get_Year" => QuickFn.DateYear,
+                "get_Month" => QuickFn.DateMonth,
+                "get_Day" => QuickFn.DateDay,
+                "get_Hour" => QuickFn.DateHour,
+                "get_Minute" => QuickFn.DateMinute,
+                "get_Second" => QuickFn.DateSecond,
+                "get_Date" => QuickFn.ToDate,
+                "AddYears" => QuickFn.AddYears,
+                "AddMonths" => QuickFn.AddMonths,
+                "AddDays" => QuickFn.AddDays,
+                "AddHours" => QuickFn.AddHours,
+                "AddMinutes" => QuickFn.AddMinutes,
+                "AddSeconds" => QuickFn.AddSeconds,
+                "get_Now" => QuickFn.Now,
+                "get_UtcNow" => QuickFn.UtcNow,
                 _ => null,
             };
 
@@ -1317,7 +1317,7 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
         var result = arguments[0];
 
         for (var i = 1; i < arguments.Count; i++)
-            result = Template(Fn.Concat, [result, arguments[i]]);
+            result = Template(QuickFn.Concat, [result, arguments[i]]);
 
         return result;
     }
@@ -1325,7 +1325,7 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
     SqlExpression Template(string symbol, IReadOnlyList<SqlExpression> arguments)
     {
         // 键带元数：同一符号在 1 参与 2 参下模板不同（Math.Round），少了这一步 string.Format 会静默丢掉多余实参。
-        var key = Fn.Key(symbol, arguments.Count);
+        var key = QuickFn.Key(symbol, arguments.Count);
 
         return Provider.Expressions.TryGetFunction(key, out var mapping)
             ? new FunctionExpression(mapping.Template, arguments)

@@ -281,23 +281,23 @@ public sealed class QueryCompiler(IDbProvider provider)
 
         var key = (countLike, aggregate.Distinct) switch
         {
-            (true, true) => Fn.CountDistinct,
-            (true, false) => Fn.Count,
+            (true, true) => QuickFn.CountDistinct,
+            (true, false) => QuickFn.Count,
             (false, true) => throw new UntranslatableExpressionException(aggregate.Kind.ToString(),
                 $"DISTINCT {aggregate.Kind}(x) 暂未接入模板表，请改写为先 DISTINCT 子查询再 {aggregate.Kind}(x)"),
             (false, false) => aggregate.Kind switch
             {
-                AggregateKind.Sum => Fn.Sum,
-                AggregateKind.Average => Fn.Average,
-                AggregateKind.Min => Fn.Min,
-                AggregateKind.Max => Fn.Max,
+                AggregateKind.Sum => QuickFn.Sum,
+                AggregateKind.Average => QuickFn.Average,
+                AggregateKind.Min => QuickFn.Min,
+                AggregateKind.Max => QuickFn.Max,
                 _ => throw new UntranslatableExpressionException(aggregate.Kind.ToString(), "该聚合当前无 SQL 对应（All 需要 EXISTS 反形）"),
             },
         };
 
         // 聚合永远是单参（COUNT 的参数是 * 或那一列），所以元数在这里补上。
-        if (!Provider.Expressions.TryGetFunction(Fn.Key(key, 1), out var mapping))
-            throw new QuickSqlException($"{Provider.Kind} 未登记聚合函数 {Fn.Key(key, 1)}");
+        if (!Provider.Expressions.TryGetFunction(QuickFn.Key(key, 1), out var mapping))
+            throw new QuickSqlException($"{Provider.Kind} 未登记聚合函数 {QuickFn.Key(key, 1)}");
 
         // COUNT(*) 而非 COUNT(1)：两家优化器都直接认这个形态。
         var argument = countLike ? new StarExpression(null) : aggregate.Node;

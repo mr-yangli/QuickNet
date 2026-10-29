@@ -3,7 +3,7 @@ namespace QuickSql.Sql;
 /// <summary>CLR 形状 → 符号 → provider 模板，三段式（§4 的 <c>IExpressionRules</c>）。
 /// 翻译器只认识左边这些符号，<b>绝不</b>在表达式树里硬写 <c>DATEADD</c> 或 <c>BTRIM</c>：
 /// 那等于把方言知识漏进共用层，金仓与达梦的复用价值就没了。</summary>
-public static class Fn
+public static class QuickFn
 {
     public const string Concat = "str.concat";
     public const string Length = "str.length";

@@ -10,7 +10,7 @@ namespace QuickSql.Providers.ClickHouse;
 /// <list type="bullet">
 /// <item><b><c>length(s) 量字节、<c>lengthUTF8(s) 量码点</c></b>【文档·ClickHouse：string-functions 页
 /// 明写 lengthUTF8 "Counts the number of code points"】：C# 的 <c>string.Length</c> 量的是 UTF-16 码元
-///（BMP 内=码点），语义对齐的是<b>码点</b>那一颗，所以 <see cref="Fn.Length"/> 键注册
+///（BMP 内=码点），语义对齐的是<b>码点</b>那一颗，所以 <see cref="QuickFn.Length"/> 键注册
 /// <c>lengthUTF8</c>，反而把字面更短的 <c>length</c> 留在外面 —— 那颗在中文的一个 BMP 汉字上是 3 字节，
 /// 用它实现 .Length 是静默错那一类。</item>
 /// <item><b>upper/lower 只转 ASCII Latin</b>【文档·ClickHouse：string-functions 页注明 converts all
@@ -87,27 +87,27 @@ public sealed class ClickHouseExpressions : IExpressionRules
     {
         // 码点那一颗，不是 length 字节那一颗：C# 的 .Length 量 UTF-16 码元，对着 BMP 里=码点；
         // 中文一个 BMP 汉字在 length 上是 3 字节，用它实现 .Length 是静默错那一类【文档·ClickHouse】。
-        [Fn.Key(Fn.Length, 1)] = new("lengthUTF8({0})"),
+        [QuickFn.Key(QuickFn.Length, 1)] = new("lengthUTF8({0})"),
 
         // 与 GBase 8s 同一档：三个键各落各的独立名，本家没有"普通 trim"那一颗。
-        [Fn.Key(Fn.Trim, 1)] = new("trimBoth({0})"),
-        [Fn.Key(Fn.TrimStart, 1)] = new("trimLeft({0})"),
-        [Fn.Key(Fn.TrimEnd, 1)] = new("trimRight({0})"),
+        [QuickFn.Key(QuickFn.Trim, 1)] = new("trimBoth({0})"),
+        [QuickFn.Key(QuickFn.TrimStart, 1)] = new("trimLeft({0})"),
+        [QuickFn.Key(QuickFn.TrimEnd, 1)] = new("trimRight({0})"),
 
         // + 1：CLR 的 startIndex 从 0 起，substring 从 1 起（这一条与另几族同一换算）。
         // 两臂的实参编号都是 0,1(,2) 且升序。RequiresNonNegativeLength 与 GBase 8s 那两臂同判：
         // CLR 侧负长度的语义（截到末尾）与本家（报错）不同为条件性【文档没逐页回读】，门先在外侧挡住。
-        [Fn.Key(Fn.Substring, 2)] = new("substring({0}, {1} + 1)", RequiresNonNegativeLength: true),
-        [Fn.Key(Fn.Substring, 3)] = new("substring({0}, {1} + 1, {2})", RequiresNonNegativeLength: true),
+        [QuickFn.Key(QuickFn.Substring, 2)] = new("substring({0}, {1} + 1)", RequiresNonNegativeLength: true),
+        [QuickFn.Key(QuickFn.Substring, 3)] = new("substring({0}, {1} + 1, {2})", RequiresNonNegativeLength: true),
 
         // 任一实参 NULL 则整串 NULL【文档·ClickHouse：string-functions 页 concat 那一行】，
         // 与 C# 的 string.Concat 把 null 当空串不同。括号是上一版几族同一取舍：共用层把结果拼进
         // WHERE 时不带自己的括号，优先级钉住。
-        [Fn.Key(Fn.Concat, 2)] = new("concat({0}, {1})"),
+        [QuickFn.Key(QuickFn.Concat, 2)] = new("concat({0}, {1})"),
 
-        [Fn.Key(Fn.Upper, 1)] = new("upper({0})"),
-        [Fn.Key(Fn.Lower, 1)] = new("lower({0})"),
+        [QuickFn.Key(QuickFn.Upper, 1)] = new("upper({0})"),
+        [QuickFn.Key(QuickFn.Lower, 1)] = new("lower({0})"),
 
-        [Fn.Key(Fn.ToDate, 1)] = new("CAST({0} AS Date)"),
+        [QuickFn.Key(QuickFn.ToDate, 1)] = new("CAST({0} AS Date)"),
     }.ToFrozenDictionary(StringComparer.Ordinal);
 }

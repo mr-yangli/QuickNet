@@ -691,12 +691,12 @@ public sealed class SqliteDialectTests
         // INSTR 同序（串在前、子串在后），1 基换算成 CLR 的 0 基、找不到交回 -1【实测·2207 两臂 ∶ 2226 ∶ 2612】。
         // 这颗键写成 <c>Fn.Key(颗, 元数)</c> 而不是字面量：注册侧那颗是 "str.indexOf/2"，
         // 少尾巴上那颗元数会得到一条"这一族没注册这个函数"的红，而那条红读起来像缺功能。
-        Assert.True(Provider.Expressions.TryGetFunction(Fn.Key(Fn.IndexOf, 2), out var indexOf));
+        Assert.True(Provider.Expressions.TryGetFunction(QuickFn.Key(QuickFn.IndexOf, 2), out var indexOf));
         Checks.Has("(INSTR({0}, {1}) - 1)", indexOf.Template);
 
         // 同一颗实参用两次在本家登得进来：@p0 在同一句里出现两次是驱动的合法用法【实测·4220 两臂 ∶ 4221 三处】。
         // 这一格与 Gbase8sExpressions 为同一条形把那行删掉是"同一判据两种答案"的第一例——差在参数记号，不在库。
-        Assert.True(Provider.Expressions.TryGetFunction(Fn.Key(Fn.Blank, 1), out var blank));
+        Assert.True(Provider.Expressions.TryGetFunction(QuickFn.Key(QuickFn.Blank, 1), out var blank));
         Checks.Has("({0} IS NULL OR TRIM({0}) = '')", blank.Template);
     }
 
@@ -737,7 +737,7 @@ public sealed class SqliteDialectTests
         // 而 Local 那一档写的就是本地墙上时间——与"库里最近那一行"可比的只有本地档。
         // 归一命中【实测·2407/2408/2516】。本家也没有"库那台机器的钟"这一格（类注释最后一条）。
         Checks.Has("RTRIM(RTRIM(STRFTIME('%Y-%m-%d %H:%M:%f', 'now', 'localtime'), '0'), '.')",
-            Provider.Expressions.TryGetFunction(Fn.Key(Fn.Now, 0), out var now) ? now.Template : string.Empty);
+            Provider.Expressions.TryGetFunction(QuickFn.Key(QuickFn.Now, 0), out var now) ? now.Template : string.Empty);
         Checks.Has("'localtime'", now.Template);
         Checks.Absent("SYSTIMESTAMP", now.Template);
         Assert.DoesNotContain("SYSUTCDATETIME", sql, StringComparison.Ordinal);
@@ -775,9 +775,9 @@ public sealed class SqliteDialectTests
         // 本家没有 GREATEST/LEAST【文档·SQLite 把它们列在多参标量聚合那一类】，场上有的就是变参 MAX()/MIN()
         // 【实测·2220 四臂 ∶ 2608 ∶ 2710】。两颗代价都在注释里而不在文本里：定点列上它比的是词法【实测·2608】，
         // 且文本在这一家的类型序里恒大于数【实测·2710】。
-        Assert.True(Provider.Expressions.TryGetFunction(Fn.Key(Fn.Greatest, 2), out var greatest));
+        Assert.True(Provider.Expressions.TryGetFunction(QuickFn.Key(QuickFn.Greatest, 2), out var greatest));
         Checks.Has("MAX({0}, {1})", greatest.Template);
-        Assert.True(Provider.Expressions.TryGetFunction(Fn.Key(Fn.Least, 2), out var least));
+        Assert.True(Provider.Expressions.TryGetFunction(QuickFn.Key(QuickFn.Least, 2), out var least));
         Checks.Has("MIN({0}, {1})", least.Template);
 
         // NULL 那一档与 CLR Math.Max 不同：MIN(NULL, 1) 交回 NULL 而不是跳过【实测·2220 第四臂】。
@@ -786,7 +786,7 @@ public sealed class SqliteDialectTests
 
         // ROUND 的三格读数里最要紧的是"半数远离零进"【实测·2217：2.5 → 3、-2.5 → -3】而 CLR 是银行家——
         // 六家同然，本家只是第一家把它量出来，整格记 §14。一元那一臂补字面量 0 而不是发 ROUND(x)。
-        Assert.True(Provider.Expressions.TryGetFunction(Fn.Key(Fn.Round, 1), out var round));
+        Assert.True(Provider.Expressions.TryGetFunction(QuickFn.Key(QuickFn.Round, 1), out var round));
         Checks.Has("ROUND({0}, 0)", round.Template);
     }
 

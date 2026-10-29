@@ -961,7 +961,7 @@ public abstract class DialectBase(IdentifierPolicy identifiers, IValueBinder val
                 + "位置式方言要改的是本家 IExpressionRules 里的那一条模板（每个实参恰好出现一次、且按序），"
                 + "不是把值内联成字面量绕过去（§12.7 的共享计划与 §5.8 的内联纪律同一格）。");
 
-        writer.Append(Fn.Apply(function.Template, RenderArguments(function.Arguments, writer)));
+        writer.Append(QuickFn.Apply(function.Template, RenderArguments(function.Arguments, writer)));
     }
 
     /// <summary>扫模板里的 <c>{n}</c>：必须恰好是 <c>0,1,2,…,argumentCount-1</c> 且各出现一次。
