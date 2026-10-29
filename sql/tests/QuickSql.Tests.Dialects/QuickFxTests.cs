@@ -28,9 +28,11 @@ public sealed class Schedule
 
 /// <summary>QuickFx 三口的钉子（日期范围 / 日期交集 / 时间段×日期交集 —— SqlSugar 旧 SqlFunc 封装的一比一移植）。
 ///
-/// <para>判据两半：① <b>黄金样本</b>钉"整条文本长什么样"（含参数颗数与序）；② <b>口径等价</b>钉
+/// <para>判据三半：① <b>黄金样本</b>钉"整条文本长什么样"（含参数颗数与序）；② <b>口径等价</b>钉
 /// QuickFx 的产出与手写比较逐字节相同 —— 这条功能最重要的主张就是"译文只是比较 + AND，
-/// 十八家方言共用一份，谁都不用登记模板"，等价钉由七个方言族各答一次。</para>
+/// 十八家方言共用一份，谁都不用登记模板"，等价钉在<b>全部十八家叶子</b>上各答一次；
+/// ③ 谓词文本再按<b>九个在册金标族</b>逐族钉整条 —— 各族引号、参数前缀、大小写折叠这一层
+/// 由金标册认领（九个金标在案的族：自有方言五家 + 血统代表金仓/达梦/MySQL + 自带金标的虚谷）。</para>
 ///
 /// <para>与旧封装语义的两处分岔都在 <c>DateRange</c>，都往好处翻：
 /// ① 终点<b>含当天</b>（旧封装要调用方自己 +1 天并留注释道歉；现在内核翻译时在参数侧算好）；
@@ -112,15 +114,26 @@ public sealed class QuickFxTests
         Assert.Equal([To, From.AddDays(1)], parameters.Select(p => (DateOnly) p.Value!).ToArray());
     }
 
-    // ---------- 三口的"口径等价"：与手写比较逐字节相同，七个方言族各答一次 ----------
+    // ---------- 三口的"口径等价"：与手写比较逐字节相同，十八家叶子各答一次 ----------
 
     [Theory]
     [InlineData("sqlserver")]
-    [InlineData("postgresql")]
-    [InlineData("mysql")]
     [InlineData("sqlite")]
+    [InlineData("xugu")]
+    [InlineData("gbase8s")]
+    [InlineData("clickhouse")]
+    [InlineData("postgresql")]
     [InlineData("kingbase")]
+    [InlineData("duckdb")]
+    [InlineData("gbase8c")]
+    [InlineData("gaussdb")]
+    [InlineData("highgo")]
+    [InlineData("opengauss")]
+    [InlineData("mysql")]
+    [InlineData("tidb")]
+    [InlineData("oceanbase")]
     [InlineData("dameng")]
+    [InlineData("shentong")]
     [InlineData("oracle")]
     public void The_three_shapes_match_their_handwritten_equivalents_byte_for_byte(string family)
     {
@@ -149,17 +162,69 @@ public sealed class QuickFxTests
         Assert.Equal(timeIntersectionByHand, timeIntersection);
     }
 
+    /// <summary>按名取一家的离线组装根（现有十八家叶子<b>全数在册</b>，两家理论共用）。
+    /// 默认分支响而不静默少测：以后添一家，只要 InlineData 忘了登、或登了名而这里没有探针，都是当场红。</summary>
     static QuickSqlOrm For(string family) => family switch
     {
+        // 自有方言五家（各自一册金标；QuickFx 没有方言函数可登，在它们家也只有这几处共享字形）。
         "sqlserver" => SqlServer.Orm(),
-        "postgresql" => PostgreSql.Orm(),
-        "mysql" => MySql.Orm(),
         "sqlite" => Sqlite.Orm(),
+        "xugu" => Xugu.Orm(),
+        "gbase8s" => Gbase8s.Orm(),
+        "clickhouse" => ClickHouse.Orm(),
+
+        // PostgreSql 血统七家（本尊 ∶ 金标代表金仓 ∶ 自带金标的虚谷 ∶ 另四叶逐字同形，§13.3 同形交给对读）。
+        "postgresql" => PostgreSql.Orm(),
         "kingbase" => Kingbase.Orm(),
+        "duckdb" => DuckDb.Orm(),
+        "gbase8c" => Gbase8c.Orm(),
+        "gaussdb" => GaussDb.Orm(),
+        "highgo" => Highgo.Orm(),
+        "opengauss" => OpenGauss.Orm(),
+
+        // MySQL 血统三家（本尊带金标）。
+        "mysql" => MySql.Orm(),
+        "tidb" => TiDb.Orm(),
+        "oceanbase" => OceanBase.Orm(),
+
+        // Oracle 血统三家（达梦带金标；本尊与神通的查询链与它逐字同形）。
         "dameng" => Dameng.Orm(),
+        "shentong" => ShenTong.Orm(),
         "oracle" => Oracle.Orm(),
-        _ => throw new InvalidOperationException($"未知方言族 {family}"),
+        _ => throw new NotSupportedException($"QuickFx 册里没有 {family} 这一家的探针。"),
     };
+
+    // ---------- 九族金标：谓词整条文本长什么样，账按族立 ----------
+
+    /// <summary>谓词文本按<b>九个在册金标族</b>钉整条 —— 与 <see cref="InsertOrUpdateLayerTests"/>
+    /// "新产出的文本按族立基线"同一分工：金标只立在金标在案的族（自有方言五家 ∶ 血统代表金仓/达梦/MySQL ∶
+    /// 自带金标的虚谷），没有金标目录的九颗叶子（PG 血统 postgresql/opengauss/gaussdb/highgo/gbase8c，
+    /// Oracle 血统 oracle/shentong，MySQL 血统 tidb/oceanbase）走各家 DialectTests 的"同形交给逐字对读"
+    /// —— 这里抄基线只会多一处要同步的地方。它们的<b>行为</b>由上面那颗十八家等价钉逐族量过。
+    /// <para>每族钉两枰：范围形把一条比较谓词里最重要的三格字形（列引法 ∶ 参数前缀 ∶ AND 组合）一次钉住，
+    /// 交集形钉旧四参模板的语序。<c>fx-daterange-open-ended</c>/<c>fx-daterange-dateonly</c>/
+    /// <c>fx-datetimeintersection</c> 不入各族：上界摘除与列型分岔、DateTime×DateOnly 混排是<b>共享翻译器</b>
+    /// 的行为不是方言行为——sqlserver 那五份钉形状，谁家都不会在这三处分岔。</para></summary>
+    [Theory]
+    [InlineData("sqlserver")]
+    [InlineData("sqlite")]
+    [InlineData("xugu")]
+    [InlineData("gbase8s")]
+    [InlineData("clickhouse")]
+    [InlineData("kingbase")]
+    [InlineData("dameng")]
+    [InlineData("mysql")]
+    [InlineData("duckdb")]
+    public void The_predicate_text_is_byte_pinned_per_golden_family(string family)
+    {
+        var orm = For(family);
+
+        Golden.Verify("fx-daterange-datetime",
+            orm.Select<Schedule>().Where(s => QuickFx.DateRange(s.BeginAt, From, To)).ToSql(), family);
+
+        Golden.Verify("fx-dateintersection",
+            orm.Select<Schedule>().Where(s => QuickFx.DateIntersection(s.BeginDate, s.EndDate, From, To)).ToSql(), family);
+    }
 
     // ---------- 交集两口：闭端重叠的形状 ----------
 
