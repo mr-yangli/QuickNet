@@ -18,9 +18,9 @@ dotnet add package Microsoft.Data.SqlClient                    # 数据库驱动
 或写死版本号：
 
 ```xml
-<PackageReference Include="QuickSql.Core" Version="0.39.0-beta.24" />
-<PackageReference Include="QuickSql.Providers.SqlServer" Version="0.39.0-beta.24" />
-<PackageReference Include="QuickSql.Generators" Version="0.39.0-beta.24" />
+<PackageReference Include="QuickSql.Core" Version="0.39.0-beta.33" />
+<PackageReference Include="QuickSql.Providers.SqlServer" Version="0.39.0-beta.33" />
+<PackageReference Include="QuickSql.Generators" Version="0.39.0-beta.33" />
 ```
 
 > 全家都是 `-beta.N` 预发布档，`dotnet add package` 必须带 `--prerelease`；版本以 nuget.org 实际可得的最新一颗为准。

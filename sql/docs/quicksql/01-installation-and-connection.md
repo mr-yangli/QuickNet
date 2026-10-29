@@ -15,9 +15,9 @@
 
 ```xml
 <ItemGroup>
-  <PackageReference Include="QuickSql.Core" Version="0.39.0-beta.24" />
-  <PackageReference Include="QuickSql.Providers.SqlServer" Version="0.39.0-beta.24" />
-  <PackageReference Include="QuickSql.Generators" Version="0.39.0-beta.24" />
+  <PackageReference Include="QuickSql.Core" Version="0.39.0-beta.33" />
+  <PackageReference Include="QuickSql.Providers.SqlServer" Version="0.39.0-beta.33" />
+  <PackageReference Include="QuickSql.Generators" Version="0.39.0-beta.33" />
   <PackageReference Include="Microsoft.Data.SqlClient" Version="7.1.1" />
 </ItemGroup>
 ```
@@ -33,7 +33,7 @@ dotnet add package Microsoft.Data.SqlClient
 
 版本说明：
 
-- 全系列都是 `-beta.N` 预发布档，安装时以 [nuget.org](https://www.nuget.org/packages/QuickSql.Core) 上实际可得的最新一颗为准（写作时点为 `0.39.0-beta.24`，仓库源码版本见 [Directory.Build.props](../../../Directory.Build.props)）。
+- 全系列都是 `-beta.N` 预发布档，安装时以 [nuget.org](https://www.nuget.org/packages/QuickSql.Core) 上实际可得的最新一颗为准（写作时点为 `0.39.0-beta.33`，仓库源码版本见 [Directory.Build.props](../../../Directory.Build.props)）。
 - 刚推送的新版本装不到时，先清本机 NuGet HTTP 缓存：`dotnet nuget locals http-cache --clear`；或直接把版本号写死。
 - `QuickSql.Providers.PostgreSqlBase` / `OracleBase` / `MySqlBase` 三颗是血统基类包，由叶子包传递引入，**应用侧不直接装**。
 

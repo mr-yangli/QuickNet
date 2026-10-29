@@ -23,7 +23,7 @@
        这一组只喂 dotnet pack，编译期行为一个字不改；非库工程（tests / benchmarks / samples）各自在
        csproj 或本目录的 props 里标 IsPackable=false，所以 dotnet pack Quick.slnx 出的是 22 颗库包。 -->
   <PropertyGroup>
-    <Version>0.39.0-beta.32</Version>
+    <Version>0.39.0-beta.33</Version>
     <PackageReadmeFile>quicksql-orm-usage.md</PackageReadmeFile>
     <PackageTags>orm;sql;linq;ado.net;source-generator</PackageTags>
   </PropertyGroup>
