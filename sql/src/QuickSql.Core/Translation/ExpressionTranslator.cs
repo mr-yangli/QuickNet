@@ -1,17 +1,17 @@
-using System.Collections;
-using System.Diagnostics.CodeAnalysis;
-using System.Globalization;
-using System.Reflection;
-using System.Runtime.CompilerServices;
 using QuickSql.Metadata;
 using QuickSql.Providers;
-using QuickSql.Schema;
 using QuickSql.Query;
 using QuickSql.Query.Model;
+using QuickSql.Schema;
 using QuickSql.Sql;
 using QuickSql.Sql.Ast;
 using QuickSql.Write;
+using System.Collections;
+using System.Diagnostics.CodeAnalysis;
+using System.Globalization;
 using System.Linq.Expressions;
+using System.Reflection;
+using System.Runtime.CompilerServices;
 
 namespace QuickSql.Translation;
 
@@ -451,18 +451,18 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
                 return new SqlUnaryExpression(UnaryOperator.Negate, Visit(node.Operand, scope, hint));
 
             case ExpressionType.Convert or ExpressionType.ConvertChecked:
-            {
-                var operand = Visit(node.Operand, scope, hint);
+                {
+                    var operand = Visit(node.Operand, scope, hint);
 
-                // enum ↔ int、T ↔ T?、装箱成 object 只是 CLR 的表示差异，不进 SQL。
-                // 装箱这条最常从 string.Concat(object, object) 里冒出来：C# 把 a + "/" + i 编成它，
-                // 而 CONCAT 本来就会把数字转成文本 —— 补一个 CAST 既没有目标类型可填，也是多余的。
-                if (node.Type == typeof(object) || RepresentationOnly(node.Operand.Type, node.Type))
-                    return operand;
+                    // enum ↔ int、T ↔ T?、装箱成 object 只是 CLR 的表示差异，不进 SQL。
+                    // 装箱这条最常从 string.Concat(object, object) 里冒出来：C# 把 a + "/" + i 编成它，
+                    // 而 CONCAT 本来就会把数字转成文本 —— 补一个 CAST 既没有目标类型可填，也是多余的。
+                    if (node.Type == typeof(object) || RepresentationOnly(node.Operand.Type, node.Type))
+                        return operand;
 
-                var storeType = Provider.StoreTypeOf(Nullable.GetUnderlyingType(node.Type) ?? node.Type);
-                return storeType is null ? operand : new CastExpression(operand, storeType);
-            }
+                    var storeType = Provider.StoreTypeOf(Nullable.GetUnderlyingType(node.Type) ?? node.Type);
+                    return storeType is null ? operand : new CastExpression(operand, storeType);
+                }
 
             case ExpressionType.TypeAs:
                 throw new UntranslatableExpressionException(node.ToString(), "as 转换依赖鉴别器投影（P1）");
@@ -529,16 +529,16 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
             // 枚举数组同写法编成 3 元、末尾多一个值为 null 的 IEqualityComparer<T> 实参。
             // 所以判别条件不能钉在实参数量上，只能钉在"这两个类"上，再对多出来的那一元单独放行。
             case "Contains" when node.Arguments.Count is 2 or 3 && (declaring == typeof(Enumerable) || declaring == typeof(MemoryExtensions)):
-            {
-                // 比较器实参只有 null 这一种可以当没看见 —— 它在两侧都等价于 EqualityComparer<T>.Default。
-                // 真给了比较器还照默认语义发射，等于把用户显式指定的相等规则偷偷换掉（§5.8）。
-                if (node.Arguments.Count == 3 && node.Arguments[2] is not ConstantExpression { Value: null })
-                    throw new UntranslatableExpressionException(node.ToString(),
-                        "IN 的元素相等规则要下推到库里才保得住语义，本版本只接受默认比较器（编译期传下来的 null）。" +
-                        "请去掉自定义比较器，或先物化到内存再过滤。");
+                {
+                    // 比较器实参只有 null 这一种可以当没看见 —— 它在两侧都等价于 EqualityComparer<T>.Default。
+                    // 真给了比较器还照默认语义发射，等于把用户显式指定的相等规则偷偷换掉（§5.8）。
+                    if (node.Arguments.Count == 3 && node.Arguments[2] is not ConstantExpression { Value: null })
+                        throw new UntranslatableExpressionException(node.ToString(),
+                            "IN 的元素相等规则要下推到库里才保得住语义，本版本只接受默认比较器（编译期传下来的 null）。" +
+                            "请去掉自定义比较器，或先物化到内存再过滤。");
 
-                return InFromCollection(AsEnumerable(Evaluate(SpanSource(node.Arguments[0])), node), node.Arguments[1], scope, hint);
-            }
+                    return InFromCollection(AsEnumerable(Evaluate(SpanSource(node.Arguments[0])), node), node.Arguments[1], scope, hint);
+                }
 
             case "Contains" when node.Object is { Type: not null } enumerable && enumerable.Type != typeof(string)
                                  && typeof(IEnumerable).IsAssignableFrom(enumerable.Type)
@@ -568,14 +568,14 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
                 return ValueEquality(node, equalsLeft, equalsRight, scope, hint);
 
             case "IsNullOrEmpty" when declaring == typeof(string) && node.Arguments.Count == 1:
-            {
-                var target = Visit(node.Arguments[0], scope, hint);
-                var empty = new ParameterValue(string.Empty, DirectColumn(node.Arguments[0], scope));
+                {
+                    var target = Visit(node.Arguments[0], scope, hint);
+                    var empty = new ParameterValue(string.Empty, DirectColumn(node.Arguments[0], scope));
 
-                return new SqlBinaryExpression(BinaryOperator.Or,
-                    new SqlUnaryExpression(UnaryOperator.IsNull, target),
-                    new SqlBinaryExpression(BinaryOperator.Equal, target, empty));
-            }
+                    return new SqlBinaryExpression(BinaryOperator.Or,
+                        new SqlUnaryExpression(UnaryOperator.IsNull, target),
+                        new SqlBinaryExpression(BinaryOperator.Equal, target, empty));
+                }
 
             case "IsNullOrWhiteSpace" when declaring == typeof(string) && node.Arguments.Count == 1:
                 return Template(QuickFn.Blank, [Visit(node.Arguments[0], scope, hint)]);
@@ -1336,7 +1336,7 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
     {
         switch ((node.Method.Name, arguments.Count))
         {
-            case ("DateRange", 3):
+            case (nameof(QuickFx.DateRange), 3):
                 // 上界的"+1 天"要在参数侧算：两颗边界必须能当场读出 DateOnly 值。
                 // 拿查询行上的成员当边界（ReferencesScope）就得把日期算术落成方言函数，
                 // 共用层不为这一档开方言知识 —— 拒并指路。先判 ReferencesScope 再 Evaluate：
@@ -1361,8 +1361,8 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
                 return new SqlBinaryExpression(BinaryOperator.And, lower,
                     new SqlBinaryExpression(BinaryOperator.LessThan, arguments[0], Value(end.AddDays(1), null)));
 
-            case ("DateIntersection", 4):
-            case ("DateTimeIntersection", 4):
+            case (nameof(QuickFx.DateIntersection), 4):
+            case (nameof(QuickFx.DateTimeIntersection), 4):
                 // 闭端 [begin, end] 两段重叠：{0} <= {3} AND {1} >= {2} —— 旧 SqlSugar 封装的四参模板原样，
                 // 对应手写 s.BeginDate <= To && s.EndDate >= From 的自然语序，口径等价钉逐字节可比。
                 return new SqlBinaryExpression(BinaryOperator.And,
