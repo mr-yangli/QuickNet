@@ -605,6 +605,9 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
         if (Provider.Expressions.TryGetFunction(MethodKey(node.Method), out var registered))
             return new FunctionExpression(registered.Template, [.. arguments]);
 
+        if (node.Method.DeclaringType == typeof(QuickFx) && FxShape(node, arguments, scope) is { } shape)
+            return shape;
+
         throw new UntranslatableExpressionException(node.ToString(),
             $"为 {declaring?.Name}.{node.Method.Name} 注册映射：provider.Expressions.Register(\"{MethodKey(node.Method)}\", new FunctionMapping(\"模板\"))；不想注册就先 ToList()/ToListAsync() 落到内存再调这个方法");
     }
@@ -1320,6 +1323,77 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
             result = Template(QuickFn.Concat, [result, arguments[i]]);
 
         return result;
+    }
+
+    // ── QuickFx 三口（日期范围/交集，文档站 06 篇 §2 末尾那几行） ──────────────
+
+    /// <summary>QuickFx 三口。它们是<b>谓词形状</b>而不是函数调用：译文只由比较与
+    /// <see cref="BinaryOperator.And"/> 组成，十八家方言共用这一份，谁都不用登记模板
+    /// （对照：凡要落 <see cref="FunctionExpression"/> 的形状都得逐家给）。
+    /// 名字/元数认不出时交回 <see langword="null"/>，让调用点走「未登记函数」的那句原话
+    /// —— QuickFx 将来添别的形状时，漏在这颗计数的自动拿到可读的拒而不是静默。</summary>
+    SqlExpression? FxShape(MethodCallExpression node, IReadOnlyList<SqlExpression> arguments, Scope scope)
+    {
+        switch ((node.Method.Name, arguments.Count))
+        {
+            case ("DateRange", 3):
+                // 上界的"+1 天"要在参数侧算：两颗边界必须能当场读出 DateOnly 值。
+                // 拿查询行上的成员当边界（ReferencesScope）就得把日期算术落成方言函数，
+                // 共用层不为这一档开方言知识 —— 拒并指路。先判 ReferencesScope 再 Evaluate：
+                // 引着 scope 的子树直送 Evaluate，会撞「variable 'o' referenced from scope ''」那句没有路的内部错。
+                if (ReferencesScope(node.Arguments[1], scope) || ReferencesScope(node.Arguments[2], scope)
+                    || !TryEvaluateBound(node.Arguments[1], out var begin)
+                    || !TryEvaluateBound(node.Arguments[2], out var end))
+                    throw new UntranslatableExpressionException(node.ToString(),
+                        "DateRange 的两颗边界要能当场读出 DateOnly 值（局部变量、闭包、内联常量都行）——" +
+                        "拿查询行上的成员当边界时，「终态 +1 天」要落成方言日期算术，本库不在共用层做这一档。" +
+                        "请改用 QuickFx.DateIntersection，或手写 date >= begin && date < end.AddDays(1) 自己控制边界。");
+
+                // 闭端进、半开出：下一天在 C# 侧算好，列上零表达式、索引照走。
+                // begin > end 是合法的空段（区间数学的空集：上界不大于下界，整句恒不中），照发不拦。
+                // MaxValue 没有下一天，AddDays 会溢出 —— 上界那半边不发，只留 >= begin。
+                var lower = new SqlBinaryExpression(
+                    BinaryOperator.GreaterThanOrEqual, arguments[0], Value(begin, null));
+
+                if (end == DateOnly.MaxValue)
+                    return lower;
+
+                return new SqlBinaryExpression(BinaryOperator.And, lower,
+                    new SqlBinaryExpression(BinaryOperator.LessThan, arguments[0], Value(end.AddDays(1), null)));
+
+            case ("DateIntersection", 4):
+            case ("DateTimeIntersection", 4):
+                // 闭端 [begin, end] 两段重叠：{0} <= {3} AND {1} >= {2} —— 旧 SqlSugar 封装的四参模板原样，
+                // 对应手写 s.BeginDate <= To && s.EndDate >= From 的自然语序，口径等价钉逐字节可比。
+                return new SqlBinaryExpression(BinaryOperator.And,
+                    new SqlBinaryExpression(BinaryOperator.LessThanOrEqual, arguments[0], arguments[3]),
+                    new SqlBinaryExpression(BinaryOperator.GreaterThanOrEqual, arguments[1], arguments[2]));
+
+            default:
+                return null;
+        }
+    }
+
+    /// <summary>DateRange 的边界求值：能读出 <see cref="DateOnly"/> 就交真值；装在装箱 Convert 里的闭包
+    /// 先剥一层再求值。其余形状（null、的似是而非的型）汇总交 false，由调用点的同一条消息收拢。</summary>
+    static bool TryEvaluateBound(Expression bound, out DateOnly value)
+    {
+        value = default;
+
+        var day = (bound switch
+        {
+            ConstantExpression constant => constant.Value,
+            UnaryExpression { NodeType: ExpressionType.Convert or ExpressionType.ConvertChecked } cover
+                when cover.Type == typeof(DateOnly) || cover.Type == typeof(object) => Evaluate(cover.Operand),
+            _ => Evaluate(bound),
+        }) as DateOnly?;
+
+        if (day is not { } typed)
+            return false;
+
+        value = typed;
+
+        return true;
     }
 
     SqlExpression Template(string symbol, IReadOnlyList<SqlExpression> arguments)

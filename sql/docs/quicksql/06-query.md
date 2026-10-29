@@ -56,6 +56,21 @@ var rows = await orm.Select<Order>()
 
 `x.Id.Equals(id)` / `object.Equals(x, y)` 与 `==` 同形（ABP 常见写法）；两侧不同型的 `Equals` 拒。
 
+**日期三口（`QuickSql.Sql.QuickFx`，SqlSugar `SqlFunc` 日期封装的同族移植）：**
+
+```csharp
+.Where(s => QuickFx.DateRange(s.BeginAt, from, to))                        // 列按天圈进 [from, to]，两端都含
+.Where(s => QuickFx.DateRange(s.BeginDate, from, to))                      // DateOnly 列同闩
+.Where(s => QuickFx.DateIntersection(s.BeginDate, s.EndDate, uFrom, uTo))  // 两段闭区间有无同一天
+.Where(s => QuickFx.DateTimeIntersection(s.BeginAt, s.EndAt, uFrom, uTo))  // DateTime 两端 × 用户给的 DateOnly 段
+```
+
+- 发出的都是**比较 + `AND`**（范围形 `date >= @p0 AND date < @p1`；交集形 `{0} <= {3} AND {1} >= {2}`）：译文里不落任何方言日期函数，十八家 provider 零登记通用；与等价的手写比较**逐字节相同**。
+- `DateRange` 的 `endDate` **传当天就含当天**（终态半开式的"+1 天"由内核在**参数侧**算好——上界参数已是 `to+1 天`，列侧零表达式，索引照走；老 SqlSugar 封装要调用方自己 +1 的那笔账在这里了结）。交集两口本来就是闭端语义，无 +1 可言。
+- `DateRange` 的两颗边界必须能**当场求值**：局部变量、闭包、内联常量都行；拿查询行上的成员当边界要落方言日期算术，当场拒——改用 `DateIntersection`，或手写 `date >= begin && date < end.AddDays(1)` 自己控制。
+- `endDate == DateOnly.MaxValue` 时上界那半边不发（它没有"下一天"）；`begin > end` 是合法的空段照发不拦（区间数学的空集）。列可空时 NULL 行不中——与手写 `>=` 同一比较语义。
+- 三颗方法体没有实现：树外直接调（内存过滤）抛 `NotSupportedException` 并指路——先 `ToList()/ToListAsync()` 落到内存，再用 `DateOnly` 普通算术比。
+
 ## 3. 排序
 
 ```csharp
