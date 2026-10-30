@@ -39,7 +39,7 @@ public sealed class DbSet<T> : QuickSqlQuery<T>, ITrackedSet<T> where T : class
     [RequiresUnreferencedCode("根模型要按 Type 向注册表取实体契约（G2）。")]
     [RequiresDynamicCode("G2 注册表编译读写委托。")]
     internal DbSet(DbContext context)
-        : base(context.Orm.RootEngine(typeof(T), context.Tracker))
+        : base(context.Orm.RootEngine(typeof(T), context.Tracker, context.Gate))
     {
         _tracker = context.Tracker.For<T>();
         _session = context.Tracker;
@@ -65,6 +65,24 @@ public sealed class DbSet<T> : QuickSqlQuery<T>, ITrackedSet<T> where T : class
     [RequiresUnreferencedCode("Load 按运行期 Type 反射读取 FK/PK 值与设置导航属性。")]
     [RequiresDynamicCode("Load 按运行期 Type 反射读取 FK/PK 值与设置导航属性。")]
     async Task<ITrackedSet<T>> LoadAsync<TProp>(Expression<Func<T, TProp>> navigation, CancellationToken ct)
+    {
+        // 补载不经七个执行口（它直接走 QueryInBatchesAsync），所以在这里自己进闸 ——
+        // Load 跑到一半时同一会话上别的操作进场照样被拒。
+        Engine.Gate?.Enter();
+
+        try
+        {
+            return await LoadCore<TProp>(navigation, ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            Engine.Gate?.Exit();
+        }
+    }
+
+    [RequiresUnreferencedCode("Load 按运行期 Type 反射读取 FK/PK 值与设置导航属性。")]
+    [RequiresDynamicCode("Load 按运行期 Type 反射读取 FK/PK 值与设置导航属性。")]
+    async Task<ITrackedSet<T>> LoadCore<TProp>(Expression<Func<T, TProp>> navigation, CancellationToken ct)
     {
         var memberName = ExtractMemberName(navigation.Body);
         var parents = _tracker.SnapshotEntities();

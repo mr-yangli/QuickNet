@@ -229,8 +229,8 @@ public sealed class CapabilityLedgerTests
             // 下面七位今天没有任何消费方或样本：声明它们的是 §9.1/§9.4 的那几家共有说法。
             new(DbCapabilities.Upsert_OnConflict, Provenance.VendorDoc, "位无读者：写侧的一句 upsert 档从本笔起按 IBulkStrategy.UpsertClause 那颗槽分派（槽在血统基类已接，本家一台活库都没有——位与槽是两面，见 MySqlProviderBase 类注释 MultiStatement 那一条），而这一位今天仍然没有消费者"),
             new(DbCapabilities.Cte, Provenance.VendorDoc, "无消费方：共用层没有 WITH 的发射口"),
-            new(DbCapabilities.WindowFunctions, Provenance.VendorDoc, "无消费方：窗口函数没有链式入口"),
-            new(DbCapabilities.Count_Over_Window, Provenance.VendorDoc, "无消费方：同上"),
+            new(DbCapabilities.WindowFunctions, Provenance.VendorDoc, "消费方=QuickFx.RowNumber（行号）：文本由共用层 DialectBase.EmitRowNumber 出、十八家零登记模板，而本家这一格还没有活库对账"),
+            new(DbCapabilities.Count_Over_Window, Provenance.VendorDoc, "无消费方：CountMethod.CountOverWindow 那一档今天在 QueryEngine 里还是那句未接入的抛（窗口函数那一格有行号了，这一格没有）"),
             new(DbCapabilities.Boolean_Type, Provenance.VendorDoc, "类型表 bool→BOOLEAN，但样例模型里没有布尔列，故无样本"),
             new(DbCapabilities.Json_Type, Provenance.VendorDoc, "读侧类型表认 json/jsonb（→string），写侧没有 CLR→JSON 的映射，故无样本"),
             new(DbCapabilities.TempTable, Provenance.VendorDoc, "无消费方：Tp 临时主键走的是真实表而不是临时表（§8.2）"),
@@ -277,8 +277,8 @@ public sealed class CapabilityLedgerTests
             // openGauss 继承的是同一份，本家一位不翻案、不删减（收敛是 §4 的账）。
             new(DbCapabilities.Upsert_OnConflict, Provenance.VendorDoc, "位无读者：写侧的一句 upsert 档从本笔起按 IBulkStrategy.UpsertClause 那颗槽分派（槽在血统基类已接，本家一台活库都没有——位与槽是两面，见 MySqlProviderBase 类注释 MultiStatement 那一条），而这一位今天仍然没有消费者"),
             new(DbCapabilities.Cte, Provenance.VendorDoc, "无消费方：共用层没有 WITH 的发射口"),
-            new(DbCapabilities.WindowFunctions, Provenance.VendorDoc, "无消费方：窗口函数没有链式入口"),
-            new(DbCapabilities.Count_Over_Window, Provenance.VendorDoc, "无消费方：同上"),
+            new(DbCapabilities.WindowFunctions, Provenance.VendorDoc, "消费方=QuickFx.RowNumber（行号）：文本由共用层 DialectBase.EmitRowNumber 出、十八家零登记模板，而本家这一格还没有活库对账"),
+            new(DbCapabilities.Count_Over_Window, Provenance.VendorDoc, "无消费方：CountMethod.CountOverWindow 那一档今天在 QueryEngine 里还是那句未接入的抛（窗口函数那一格有行号了，这一格没有）"),
             new(DbCapabilities.Boolean_Type, Provenance.VendorDoc, "类型表 bool→BOOLEAN，谓词侧 IS TRUE 有对拍见证但那是文本档，类型列本体无样本"),
             new(DbCapabilities.Json_Type, Provenance.VendorDoc, "读侧类型表认 json/jsonb（→string），写侧没有 CLR→JSON 的映射，故无样本"),
             new(DbCapabilities.TempTable, Provenance.VendorDoc, "无消费方：Tp 临时主键走的是真实表而不是临时表（§8.2）"),
@@ -320,8 +320,8 @@ public sealed class CapabilityLedgerTests
             // GaussDB 继承的是同一份，本家一位不翻案、不删减（收敛是 §4 的账）。
             new(DbCapabilities.Upsert_OnConflict, Provenance.VendorDoc, "位无读者：写侧的一句 upsert 档从本笔起按 IBulkStrategy.UpsertClause 那颗槽分派（槽在血统基类已接，本家一台活库都没有——位与槽是两面，见 MySqlProviderBase 类注释 MultiStatement 那一条），而这一位今天仍然没有消费者"),
             new(DbCapabilities.Cte, Provenance.VendorDoc, "无消费方：共用层没有 WITH 的发射口"),
-            new(DbCapabilities.WindowFunctions, Provenance.VendorDoc, "无消费方：窗口函数没有链式入口"),
-            new(DbCapabilities.Count_Over_Window, Provenance.VendorDoc, "无消费方：同上"),
+            new(DbCapabilities.WindowFunctions, Provenance.VendorDoc, "消费方=QuickFx.RowNumber（行号）：文本由共用层 DialectBase.EmitRowNumber 出、十八家零登记模板，而本家这一格还没有活库对账"),
+            new(DbCapabilities.Count_Over_Window, Provenance.VendorDoc, "无消费方：CountMethod.CountOverWindow 那一档今天在 QueryEngine 里还是那句未接入的抛（窗口函数那一格有行号了，这一格没有）"),
             new(DbCapabilities.Boolean_Type, Provenance.VendorDoc, "类型表 bool→BOOLEAN，谓词侧 IS TRUE 有对拍见证但那是文本档，类型列本体无样本"),
             new(DbCapabilities.Json_Type, Provenance.VendorDoc, "读侧类型表认 json/jsonb（→string），写侧没有 CLR→JSON 的映射，故无样本"),
             new(DbCapabilities.TempTable, Provenance.VendorDoc, "无消费方：Tp 临时主键走的是真实表而不是临时表（§8.2）"),
@@ -359,8 +359,8 @@ public sealed class CapabilityLedgerTests
             // 那张表攒来的乐观声明，瀚高继承的是同一份，本家一位不翻案、不删减（收敛是 §4 的账）。
             new(DbCapabilities.Upsert_OnConflict, Provenance.VendorDoc, "位无读者：写侧的一句 upsert 档从本笔起按 IBulkStrategy.UpsertClause 那颗槽分派（槽在血统基类已接，本家一台活库都没有——位与槽是两面，见 MySqlProviderBase 类注释 MultiStatement 那一条），而这一位今天仍然没有消费者"),
             new(DbCapabilities.Cte, Provenance.VendorDoc, "无消费方：共用层没有 WITH 的发射口"),
-            new(DbCapabilities.WindowFunctions, Provenance.VendorDoc, "无消费方：窗口函数没有链式入口"),
-            new(DbCapabilities.Count_Over_Window, Provenance.VendorDoc, "无消费方：同上"),
+            new(DbCapabilities.WindowFunctions, Provenance.VendorDoc, "消费方=QuickFx.RowNumber（行号）：文本由共用层 DialectBase.EmitRowNumber 出、十八家零登记模板，而本家这一格还没有活库对账"),
+            new(DbCapabilities.Count_Over_Window, Provenance.VendorDoc, "无消费方：CountMethod.CountOverWindow 那一档今天在 QueryEngine 里还是那句未接入的抛（窗口函数那一格有行号了，这一格没有）"),
             new(DbCapabilities.Boolean_Type, Provenance.VendorDoc, "类型表 bool→BOOLEAN，谓词侧 IS TRUE 有对拍见证但那是文本档，类型列本体无样本"),
             new(DbCapabilities.Json_Type, Provenance.VendorDoc, "读侧类型表认 json/jsonb（→string），写侧没有 CLR→JSON 的映射，故无样本"),
             new(DbCapabilities.TempTable, Provenance.VendorDoc, "无消费方：Tp 临时主键走的是真实表而不是临时表（§8.2）"),
@@ -398,8 +398,8 @@ public sealed class CapabilityLedgerTests
             // 那张表攒来的乐观声明，GBase 8c 继承的是同一份，本家一位不翻案、不删减（收敛是 §4 的账）。
             new(DbCapabilities.Upsert_OnConflict, Provenance.VendorDoc, "位无读者：写侧的一句 upsert 档从本笔起按 IBulkStrategy.UpsertClause 那颗槽分派（槽在血统基类已接，本家一台活库都没有——位与槽是两面，见 MySqlProviderBase 类注释 MultiStatement 那一条），而这一位今天仍然没有消费者"),
             new(DbCapabilities.Cte, Provenance.VendorDoc, "无消费方：共用层没有 WITH 的发射口"),
-            new(DbCapabilities.WindowFunctions, Provenance.VendorDoc, "无消费方：窗口函数没有链式入口"),
-            new(DbCapabilities.Count_Over_Window, Provenance.VendorDoc, "无消费方：同上"),
+            new(DbCapabilities.WindowFunctions, Provenance.VendorDoc, "消费方=QuickFx.RowNumber（行号）：文本由共用层 DialectBase.EmitRowNumber 出、十八家零登记模板，而本家这一格还没有活库对账"),
+            new(DbCapabilities.Count_Over_Window, Provenance.VendorDoc, "无消费方：CountMethod.CountOverWindow 那一档今天在 QueryEngine 里还是那句未接入的抛（窗口函数那一格有行号了，这一格没有）"),
             new(DbCapabilities.Boolean_Type, Provenance.VendorDoc, "类型表 bool→BOOLEAN，谓词侧 IS TRUE 有对拍见证但那是文本档，类型列本体无样本"),
             new(DbCapabilities.Json_Type, Provenance.VendorDoc, "读侧类型表认 json/jsonb（→string），写侧没有 CLR→JSON 的映射，故无样本"),
             new(DbCapabilities.TempTable, Provenance.VendorDoc, "无消费方：Tp 临时主键走的是真实表而不是临时表（§8.2）"),
@@ -448,8 +448,8 @@ public sealed class CapabilityLedgerTests
             // 位的判据是"有没有读者按这一位分派"，那一个读者今天还是没有。金仓本与另四本一字不动。】
             new(DbCapabilities.Upsert_OnConflict, Provenance.VendorDoc, "位无读者：写侧的一句 upsert 档从本笔起按 IBulkStrategy.UpsertClause 那颗槽分派（槽在本血统已接，ON CONFLICT … DO UPDATE SET … = EXCLUDED. 那一段句尾在本家授权实例上跑过——位与槽是两面，见 MySqlProviderBase 类注释 MultiStatement 那一条），而这一位今天仍然没有消费者"),
             new(DbCapabilities.Cte, Provenance.VendorDoc, "无消费方：共用层没有 WITH 的发射口"),
-            new(DbCapabilities.WindowFunctions, Provenance.VendorDoc, "无消费方：窗口函数没有链式入口"),
-            new(DbCapabilities.Count_Over_Window, Provenance.VendorDoc, "无消费方：同上"),
+            new(DbCapabilities.WindowFunctions, Provenance.VendorDoc, "消费方=QuickFx.RowNumber（行号）：文本由共用层 DialectBase.EmitRowNumber 出、十八家零登记模板，而本家这一格还没有活库对账"),
+            new(DbCapabilities.Count_Over_Window, Provenance.VendorDoc, "无消费方：CountMethod.CountOverWindow 那一档今天在 QueryEngine 里还是那句未接入的抛（窗口函数那一格有行号了，这一格没有）"),
             new(DbCapabilities.Boolean_Type, Provenance.VendorDoc, "类型表 bool→BOOLEAN，谓词侧 IS TRUE 有对拍见证但那是文本档，类型列本体无样本"),
             new(DbCapabilities.Json_Type, Provenance.VendorDoc, "读侧类型表认 json/jsonb（→string），写侧没有 CLR→JSON 的映射，故无样本"),
             new(DbCapabilities.TempTable, Provenance.VendorDoc, "无消费方：Tp 临时主键走的是真实表而不是临时表（§8.2）"),
@@ -908,8 +908,8 @@ public sealed class CapabilityLedgerTests
             // （json/jsonb 两名照登，"血统认什么"的最大集保留），写侧没有 CLR→JSON 的映射，故无样本。
             new(DbCapabilities.Upsert_OnConflict, Provenance.VendorDoc, "位无读者：写侧的一句 upsert 档按 IBulkStrategy.UpsertClause 那颗槽分派（槽在血统基类已接，本家一台活库都没有——位与槽是两面，见 MySqlProviderBase 类注释 MultiStatement 那一条），而这一位今天仍然没有消费者"),
             new(DbCapabilities.Cte, Provenance.VendorDoc, "无消费方：共用层没有 WITH 的发射口"),
-            new(DbCapabilities.WindowFunctions, Provenance.VendorDoc, "无消费方：窗口函数没有链式入口"),
-            new(DbCapabilities.Count_Over_Window, Provenance.VendorDoc, "无消费方：同上"),
+            new(DbCapabilities.WindowFunctions, Provenance.VendorDoc, "消费方=QuickFx.RowNumber（行号）：文本由共用层 DialectBase.EmitRowNumber 出、十八家零登记模板，而本家这一格还没有活库对账"),
+            new(DbCapabilities.Count_Over_Window, Provenance.VendorDoc, "无消费方：CountMethod.CountOverWindow 那一档今天在 QueryEngine 里还是那句未接入的抛（窗口函数那一格有行号了，这一格没有）"),
             new(DbCapabilities.Json_Type, Provenance.VendorDoc, "读侧索引认 json/jsonb（→string，照血统那份原样克隆），写侧没有 CLR→JSON 的映射，故无样本"),
             new(DbCapabilities.TempTable, Provenance.VendorDoc, "无消费方：Tp 临时主键走的是真实表而不是临时表（§8.2）"),
 

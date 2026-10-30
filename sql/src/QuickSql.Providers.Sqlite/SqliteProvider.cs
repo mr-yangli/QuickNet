@@ -119,7 +119,10 @@ namespace QuickSql.Providers.Sqlite;
 /// <item><c>Cte</c>、<c>WindowFunctions</c>、<c>Count_Over_Window</c>：三颗库都会
 /// （<c>WITH</c> 与 <c>COUNT(*) OVER ()</c>【实测·第 2 轮 102 ∶ 1014 ∶ 836】，
 /// <c>ROW_NUMBER() OVER</c>【实测·2144】），而 <c>src/</c> 里既没有 <c>WITH</c> 的发射口，
-/// <c>Count_Over_Window</c> 那一档今天又是在 <c>QueryEngine</c> 里直接抛的那一颗 —— 与另六家同一立场。</item>
+/// <c>Count_Over_Window</c> 那一档今天又是在 <c>QueryEngine</c> 里直接抛的那一颗 —— 与另六家同一立场。
+/// <b>【v0.39 行号之后本条要读两半】</b>窗口函数那一颗有了发射口（<c>QuickFx.RowNumber</c> 落
+/// <c>DialectBase.EmitRowNumber</c>，共用层出文本），而 2144 那一格量的正是本库发得出的那一句形 ——
+/// 本位仍不声明：那一句对声明与不声明的三家发的是同一句，位上没有读者，立场与上面那句一致。</item>
 /// <item><c>SkipLocked</c>、<c>Lock_NoWait</c>：<c>SELECT … FOR UPDATE</c> 是语法错
 /// 【实测·第 2 轮 103 ∶ 2164 同一句 <c>near "UPDATE": syntax error</c>】—— 这一族<em>没有行级锁那一层</em>，
 /// 两颗位没有可指的语句。<see cref="SqliteConcurrency"/> 类注释第四条整段是这一格。</item>

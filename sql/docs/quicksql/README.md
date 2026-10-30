@@ -14,7 +14,7 @@
 | [03 插入数据](03-insert.md) | 单行/批量插入、自增键回填、批量高速层（装载通道）、分块、InsertOrUpdate（upsert） |
 | [04 更新数据](04-update.md) | 按条件更新、按实体稀疏更新、按实体整行批量更新、upsert 档 |
 | [05 删除与软删除](05-delete-and-soft-delete.md) | 按条件/按实体/批量删除、软删除注册与「谁删的」扩展 |
-| [06 查询数据](06-query.md) | 条件、排序、投影、Distinct、分页与计数、存在性探针、聚合、流式读取 |
+| [06 查询数据](06-query.md) | 条件、排序、投影（含行号 `QuickFx.RowNumber`）、Distinct、分页与计数、存在性探针、聚合、流式读取 |
 | [07 联表与导航](07-joins-and-navigation.md) | LeftJoin/InnerJoin、Include/ThenInclude、IncludeMany、引用导航自动联表、拆分查询 |
 | [08 分组与聚合](08-groupby-aggregate.md) | GroupBy/Having、组内聚合、复合键、分组计数 |
 | [09 工作单元与变更跟踪](09-dbcontext-and-tracking.md) | DbContext/DbSet、变更跟踪、SaveChanges、级联（新增/摘行/到位）、共享会话 |

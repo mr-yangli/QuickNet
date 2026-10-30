@@ -468,7 +468,7 @@ public abstract class DialectBase(IdentifierPolicy identifiers, IValueBinder val
                 for (var i = 0; i < union.Branches.Count; i++)
                 {
                     if (i > 0)
-                        writer.Append(" UNION ALL ");
+                        writer.Append(union.All ? " UNION ALL " : " UNION ");
 
                     EmitSelectBody(union.Branches[i], writer);
                 }
@@ -539,7 +539,14 @@ public abstract class DialectBase(IdentifierPolicy identifiers, IValueBinder val
     void EmitOrdering(IReadOnlyList<OrderExpression> ordering, SqlWriter writer)
     {
         writer.Append(" ORDER BY ");
+        EmitOrderingList(ordering, writer);
+    }
 
+    /// <summary>序清单的<em>本体</em>（不含 <c>ORDER BY</c> 那四个字）：外层那句由
+    /// <see cref="EmitOrdering"/> 补前导空格，OVER 里那一段自己写关键字、前后各留一格 ——
+    /// 两处共用的是"逐颗带方向"这一份写法，而 <c>ASC</c> 到底写不写正是两族必须一致的那一格。</summary>
+    protected void EmitOrderingList(IReadOnlyList<OrderExpression> ordering, SqlWriter writer)
+    {
         for (var i = 0; i < ordering.Count; i++)
         {
             if (i > 0)
@@ -548,6 +555,32 @@ public abstract class DialectBase(IdentifierPolicy identifiers, IValueBinder val
             EmitExpression(ordering[i].Node, writer);
             writer.Append(ordering[i].Descending ? " DESC" : " ASC");
         }
+    }
+
+    /// <summary>行号：<c>ROW_NUMBER() OVER (PARTITION BY … ORDER BY …)</c>。与 QuickFx 日期三口同一档分工——
+    /// <b>共用层出文本，方言只出自己的引号</b>，十八家一张模板都不登记（对照：凡带函数名的形状都得逐家给模板）。
+    /// <para>它是 <c>virtual</c> 留的那格<em>不是给"大概相同"的邻居覆写用的</em>，是给将来某一家<em>量出</em>分岔用的
+    /// （函数名大小写敏感的引擎、或走 <c>QUALIFY</c> 的那一系）：今天没有一家有分岔的实证，所以谁都不覆写，
+    /// 而 <c>DbCapabilities.WindowFunctions</c> 那一位也不当事分派点用——口径见
+    /// <see cref="ISqlDialect.SupportsJoinedWrites"/> 头部那句「位表今天零读者，判据落在代码真走到的那一格」。
+    /// 没有活库见证的那几家（§13.5 那本账上的离线档）此处的读数因此仍是「文本钉住了」，不是「库里接得住」，
+    /// 翻档要的是各家的出处，不在这一格里预支。</para></summary>
+    protected virtual void EmitRowNumber(RowNumberExpression rowNumber, SqlWriter writer)
+    {
+        writer.Append("ROW_NUMBER() OVER (");
+
+        if (rowNumber.PartitionBy.Count > 0)
+        {
+            writer.Append("PARTITION BY ");
+            EmitList(rowNumber.PartitionBy, writer);
+            writer.Append(' ');
+        }
+
+        // 序那一半由翻译器保证非空（没有序的行号不是一个问题），所以这里不判空、发得出即成立。
+        writer.Append("ORDER BY ");
+        EmitOrderingList(rowNumber.OrderBy, writer);
+
+        writer.Append(')');
     }
 
     /// <summary>§9.4：<c>Skip/Take</c> 无 <c>OrderBy</c> 时，抛错或补主键序由上游策略决定；
@@ -637,6 +670,10 @@ public abstract class DialectBase(IdentifierPolicy identifiers, IValueBinder val
 
             case FunctionExpression function:
                 EmitFunction(function, writer);
+                break;
+
+            case RowNumberExpression rowNumber:
+                EmitRowNumber(rowNumber, writer);
                 break;
 
             case CastExpression cast:

@@ -3,7 +3,9 @@ using Xunit;
 
 namespace QuickSql.Tests.Dialects;
 
-/// <summary><c>Where(bool, predicate)</c> 那一颗条件入口（§5.4 读侧算子）。
+/// <summary><c>WhereIF(bool, predicate)</c> 那一颗条件入口（§5.4 读侧算子，SqlSugar 的
+/// <c>WhereIF</c> / FreeSql 的 <c>WhereIf</c> 同一形状；2026-10-30 从 bool 重载独立成口，
+/// <c>Where</c> 本名只留给无条件那一颗）。
 ///
 /// <para>要它的人是一个检索表单的常态：十栏里用户填了两栏。<b>没有这一颗时调用方只有两种写法</b>——
 /// 把可选条件折成 <c>|| !cond ||</c> 塞进同一句 lambda（读起来不像业务原话，而且翻译器要为那句合成形状
@@ -26,7 +28,7 @@ public sealed class ConditionalWhereTests
         var city = "上海";
 
         var bare = target.Select<Order>().Where(o => o.Amount > 100m);
-        var withOff = bare.Where(false, o => o.State == state).Where(false, o => o.CustomerName == city);
+        var withOff = bare.WhereIF(false, o => o.State == state).WhereIF(false, o => o.CustomerName == city);
 
         // 假档 ⇒ 同一个实例（返回 this），所以这里连文本都比不出差别，参数表也不许多一颗。
         Assert.Equal(bare.ToSql(), withOff.ToSql());
@@ -37,7 +39,7 @@ public sealed class ConditionalWhereTests
         // 真档与一参那颗逐字同形：这一颗不是第二条路，是同一颗出口的开关。
         Assert.Equal(
             bare.Where(o => o.State == state).ToSql(),
-            bare.Where(true, o => o.State == state).ToSql());
+            bare.WhereIF(true, o => o.State == state).ToSql());
     }
 
     [Fact]
@@ -49,9 +51,9 @@ public sealed class ConditionalWhereTests
 
         var sql = target.Select<Order>()
             .Where(o => o.Amount > 100m)
-            .Where(true, o => o.State == state)
-            .Where(false, o => o.Note == city)
-            .Where(true, o => o.CustomerName == city)
+            .WhereIF(true, o => o.State == state)
+            .WhereIF(false, o => o.Note == city)
+            .WhereIF(true, o => o.CustomerName == city)
             .ToSql();
 
         var amount = sql.IndexOf("[t0].[Amount] > ", StringComparison.Ordinal);
@@ -64,7 +66,7 @@ public sealed class ConditionalWhereTests
         Assert.DoesNotContain("[t0].[Note] = ", sql);
 
         var counted = target.Select<Order>().Where(o => o.Amount > 100m)
-            .Where(true, o => o.State == state).Where(true, o => o.CustomerName == city);
+            .WhereIF(true, o => o.State == state).WhereIF(true, o => o.CustomerName == city);
 
         counted.ToSql(out var args);
 
@@ -81,16 +83,42 @@ public sealed class ConditionalWhereTests
         var two = target.Select<Order>().InnerJoin<Customer>((o, c) => o.CustomerId == c.Id);
         var three = two.InnerJoin<OrderItem>((o, c, i) => i.OrderId == o.Id);
 
-        Assert.Equal(two.ToSql(), two.Where(false, (o, c) => c.City == city).ToSql());
+        Assert.Equal(two.ToSql(), two.WhereIF(false, (o, c) => c.City == city).ToSql());
         Assert.Equal(
             two.Where((o, c) => c.City == city).ToSql(),
-            two.Where(true, (o, c) => c.City == city).ToSql());
+            two.WhereIF(true, (o, c) => c.City == city).ToSql());
 
-        Assert.Equal(three.ToSql(), three.Where(false, (o, c, i) => i.Sku == sku).ToSql());
+        Assert.Equal(three.ToSql(), three.WhereIF(false, (o, c, i) => i.Sku == sku).ToSql());
 
-        var joined = three.Where(true, (o, c, i) => i.Sku == sku).ToSql();
+        var joined = three.WhereIF(true, (o, c, i) => i.Sku == sku).ToSql();
 
         Assert.Contains("[t2].[Sku] = ", joined);
-        Assert.Contains("[t1].[Name] = ", three.Where(true, (o, c, i) => c.Name == city).ToSql());
+        Assert.Contains("[t1].[Name] = ", three.WhereIF(true, (o, c, i) => c.Name == city).ToSql());
+    }
+
+    /// <summary>假档连翻译都不发生：腿里的 lambda 引用一颗"一碰就炸"的闭包成员，假档与 bare 逐字同形、
+    /// 求值根本没发生；真档在 ToSql 那一步当场炸。"省一段 if"省到的是这一层 —— 可选条件里那些
+    /// "没填就为 null"的闭包值，假档连碰都不碰它。</summary>
+    [Fact]
+    public void A_false_leg_never_translates_its_predicate()
+    {
+        var target = orm();
+        var bare = target.Select<Order>().Where(o => o.Amount > 100m);
+        var bomb = new BombHolder();
+
+        var withOff = bare.WhereIF(false, o => o.Note == bomb.Value);
+        Assert.Equal(bare.ToSql(), withOff.ToSql());
+        Assert.Equal(bare.Explain().ModelText, withOff.Explain().ModelText);
+
+        // 求值走反射，异常会包一层 TargetInvocationException —— 钉的是"真档确实发生了求值"，
+        // 不钉包装形状（那是实现细节）。
+        var thrown = Assert.ThrowsAny<Exception>(
+            () => bare.WhereIF(true, o => o.Note == bomb.Value).ToSql());
+        Assert.Contains("假档不该走到这里", $"{thrown.InnerException?.Message ?? thrown.Message}");
+    }
+
+    sealed class BombHolder
+    {
+        public string? Value => throw new InvalidOperationException("假档不该走到这里");
     }
 }

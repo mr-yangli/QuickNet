@@ -87,6 +87,9 @@ namespace QuickSql.Providers.MySqlBase;
 /// 走到的是槽，清账的是位，本笔把这一格从"没走过"改成"走过了而位不动"，与 <c>MultiStatement</c> 并成同一形状的第二个实例。</item>
 /// <item><c>Cte</c>、<c>WindowFunctions</c>、<c>Count_Over_Window</c>、<c>Json_Type</c>、<c>TempTable</c>：
 /// 库里都有（8.0 起 <c>WITH</c> 与窗口函数是真的，<c>JSON</c> 是原生型），但代码里没有对应的发射口。
+/// <b>【v0.39 行号之后本条要读两半】</b>窗口函数那一颗今天有了发射口：<c>QuickFx.RowNumber</c> 落
+/// <c>DialectBase.EmitRowNumber</c>，共用层出文本、本家零登记模板 —— 而那一句<em>不是按这一位分派</em>的
+/// （发得出来的句子对声明与不声明的家是同一句），所以下面那句判据不因这条改动而松动，本位仍不声明。
 /// <b>这一格与 <c>PostgreSqlProviderBase</c> 那一档在同一判据下给出不同答案</b>，那条不一致从 v0.23 起就记在
 /// §4 与 §14 等一次统一清账 —— 这一档跟的是那句判据而不是那一档的掩码。</item>
 /// <item><c>MultiStatement</c> 与 <c>MultiResultSets</c>：一次发送里塞 <c>;</c> 分隔的多条语句在这一家

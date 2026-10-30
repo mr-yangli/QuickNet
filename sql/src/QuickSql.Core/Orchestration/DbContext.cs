@@ -2,6 +2,7 @@ using QuickSql.Execution;
 using QuickSql.Metadata;
 using QuickSql.Tracking;
 using QuickSql.Write;
+using System.Collections.Concurrent;
 using System.Data.Common;
 using System.Diagnostics.CodeAnalysis;
 
@@ -42,7 +43,15 @@ public class DbContext : IAsyncDisposable, IDisposable
     /// 先建后接那一档是 <see cref="UseOrm"/> 的调用帧——宿主恰好也在那一帧里把会话交出去，两档同一口径。</summary>
     IDisposable? _flowWrites;
 
-    readonly Dictionary<Type, object> _sets = [];
+    /// <summary>会话上已经发出去的那些 <see cref="DbSet{T}"/>，按实体类型缓存（§8.1）。
+    /// <b><see cref="ConcurrentDictionary"/> 是 2026-10-30 换的</b>：共享会话的两条分支可以同时
+    /// 首次 <c>Set&lt;T&gt;()</c>，裸 <c>Dictionary</c> 的并发首写是字典内部结构损坏级别的竞态
+    /// （MySQL 真库上被 <c>ThreadConcurrencyPathTests</c> 当场抓到：Operations that change
+    /// non-concurrent collections must have exclusive access）。EF Core 的集缓存
+    /// （<c>IDbSetCache</c>）同一档也是并发字典；<c>GetOrAdd</c> 的工厂在竞态下可能跑多遍，
+    /// 多建的那只 <see cref="DbSet{T}"/> 被丢弃，无害（工厂内只有幂等的挂工厂与档登记）。
+    /// 与 <see cref="SessionConnections"/> 那一格同一条纪律：每句至多一读一写，无锁路径零额外成本。</summary>
+    readonly ConcurrentDictionary<Type, object> _sets = [];
     readonly List<DbConnection> _sessionConnections = [];
 
     /// <summary>先建后接那一档的构造：派生类型由 DI 容器建出来（属性注入这一段归容器），
@@ -90,6 +99,16 @@ public class DbContext : IAsyncDisposable, IDisposable
         "会话还没有接入组装根：跟踪裁判随组装根一起建（主构造那一档在构造时，先建后接那一档在 UseOrm 那一刻）。"
     );
 
+    /// <summary>本会话的并发闸（<see cref="SessionGate"/>，2026-10-30 落地、EF Core 的
+    /// <c>ConcurrencyDetector</c> 同一条语义）：同一只会话上同时只许一个操作在飞，第二个进场被拒成
+    /// 一句听得懂的 <see cref="QuickSqlException"/>，而不是跟踪器深处一颗随机 NRE ——
+    /// 落地前在 SQL Server LocalDB 上的实测（各循环十遍）：并发读 6/10 在 <c>DetectChanges</c> 炸 NRE、
+    /// 4/10 静默；并发写 10/10 把 2 行双倍落成 4 行，全程无异常。闸随 <see cref="DbSet{T}"/> 的根引擎
+    /// 下传，读侧七个执行口与写侧 <see cref="SaveChangesAsync"/>、<c>LoadAsync</c> 进闸；根链没有会话，
+    /// 不进闸。见 <see cref="SessionGate"/> 抬头那两句 EF 同款的实话：尽力检测、抓到即拒 ——
+    /// 结论仍然是"不要共用会话"，不是"有闸就共用"。</summary>
+    internal SessionGate Gate { get; } = new();
+
     /// <summary>§8.2 那个开关。<b>关掉的只有「物化之前」与 <see cref="DbChangeTracker.HasChanges"/> 里那两次自动侦测</b>；
     /// <see cref="SaveChanges"/> 恒定先侦测再写，否则关掉它就等于「只写你显式标过的行」，
     /// 而那是 <c>Attach</c> + <c>Entry(...).State</c> 那条显式路线的语义，不是一个开关该改的东西。</summary>
@@ -108,19 +127,15 @@ public class DbContext : IAsyncDisposable, IDisposable
     [RequiresUnreferencedCode("按 Type 向注册表取实体契约（G2）。")]
     [RequiresDynamicCode("G2 注册表编译读写委托。")]
     public DbSet<T> Set<T>() where T : class
-    {
-        if (_sets.TryGetValue(typeof(T), out var cached))
-            return (DbSet<T>)cached;
+        => (DbSet<T>) _sets.GetOrAdd(typeof(T), _ =>
+        {
+            // 注册会话连接工厂（§8.4）：只是挂一只 delegate，不建连接。
+            // 连接在首条语句执行时由 AdoExecutor.OpenAsync 调工厂懒建。
+            // 竞态下工厂可能跑多遍（字段注释），多建的那只被丢弃 —— 两只 DbSet 挂的是同一颗闸、同一本跟踪器。
+            EnsureSessionFactory();
 
-        // 注册会话连接工厂（§8.4）：只是挂一只 delegate，不建连接。
-        // 连接在首条语句执行时由 AdoExecutor.OpenAsync 调工厂懒建。
-        EnsureSessionFactory();
-
-        var set = new DbSet<T>(this);
-        _sets[typeof(T)] = set;
-
-        return set;
-    }
+            return new DbSet<T>(this);
+        });
 
     // ── 写侧便利方法（§8.3） ────────────────────────────────────────
 
@@ -225,6 +240,23 @@ public class DbContext : IAsyncDisposable, IDisposable
     /// （UoW、接口那一面）拿到的永远是接管后的那一份；同步壳 <see cref="SaveChanges"/> 经虚分派走同一条路，
     /// 不存在"经基类引用一调就绕过宿主概念"的那条暗门。</summary>
     public virtual async Task<SaveChangesReport> SaveChangesAsync(CancellationToken ct = default)
+    {
+        Gate.Enter();
+
+        try
+        {
+            return await SaveChangesCore(ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            Gate.Exit();
+        }
+    }
+
+    /// <summary><see cref="SaveChangesAsync"/> 的本体：从"有没有写的账"到事务提交与兜底回滚全在这一段里，
+    /// 闸门罩住的是它。重载 <see cref="SaveChangesAsync"/> 的派生会话若不回调基类，就不进这颗闸 ——
+    /// 闸只拦"同一条基类路径上的第二次进场"，与 EF Core 的 <c>ConcurrencyDetector</c> 同一口径。</summary>
+    async Task<SaveChangesReport> SaveChangesCore(CancellationToken ct)
     {
         if (!Tracker.WritesAreDue())
             return new SaveChangesReport([], []);

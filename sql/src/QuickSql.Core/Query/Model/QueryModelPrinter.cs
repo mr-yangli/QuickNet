@@ -27,6 +27,15 @@ static class QueryModelPrinter
             b.Append("  SOURCE RAW[").Append(raw.Sql).Append("]{")
              .Append(string.Join(", ", raw.Parameters.Select(p => p.Name))).Append("}\n");
 
+        // 合并的形状要在文本里看得见：关键字（去不去重）与两条腿各自的全文。
+        // 腿打的是内层模型的规范文本 —— §13.2 比的是"会发出去的东西"，腿正是会发出去的东西。
+        if (model.Source is SourceSetOps setOps)
+        {
+            b.Append("  SOURCE ").Append(setOps.All ? "UNION ALL" : "UNION").Append('\n');
+            b.Append("    LEG1\n").Append(Indent(Print(setOps.First)));
+            b.Append("    LEG2\n").Append(Indent(Print(setOps.Second)));
+        }
+
         if (model.DerivedFrom is { } inner)
             b.Append("  DERIVED\n").Append(Indent(Print(inner)));
 
@@ -124,6 +133,11 @@ static class QueryModelPrinter
             _ => throw new UntranslatableExpressionException(u.Operator.ToString(), null),
         },
         FunctionExpression f => f.Template + "(" + Join(f.Arguments) + ')',
+        // 行号在规范文本里要能看出 OVER 里那两段各有什么（分堆可空、序带方向），与上面 ORDER 那一行的写法同调。
+        // 这一格漏了，Explain() 里看不见行号，而 §13.2 那句"模型文本里没有 = 等价性测试静默漏判"就在这儿兑现。
+        RowNumberExpression w => "ROW_NUMBER OVER[PART(" + Join(w.PartitionBy) + ") ORD("
+                                 + string.Join(", ", w.OrderBy.Select(o => Expr(o.Node) + (o.Descending ? " DESC" : " ASC")))
+                                 + ")]",
         CastExpression c => "CAST(" + Expr(c.Operand) + " AS " + c.StoreType + ')',
         InExpression i => i.Subquery is { } sub
             ? "(" + Expr(i.Target) + (i.Negated ? " NOT IN " : " IN ") + "SUB(" + Sub(sub) + "))"

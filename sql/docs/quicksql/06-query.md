@@ -1,6 +1,6 @@
 # 06 · 查询数据
 
-> 本篇解决：条件、排序（含按名字排序）、投影、Distinct、分页与总数、计数与存在性探针、顶层聚合、流式读取、无序分页策略。
+> 本篇解决：条件、排序（含按名字排序）、投影（含行号）、Distinct、分页与总数、计数与存在性探针、顶层聚合、流式读取、无序分页策略。
 
 读侧链是 `IQuery<T>`，从 `orm.Select<T>()` 起手。它**刻意不是 `IQueryable`**——不能塞进 LINQ 生态，也没有非泛型口。所有能力都是链上的显式方法，出口才连库。
 
@@ -96,6 +96,25 @@ var rows = await orm.Select<Order>()
 ```
 
 投影里读引用导航的成员会自动补 `LEFT JOIN`（见 [07 篇](07-joins-and-navigation.md)）。`Distinct()` 去重；`As("o")` 改主表别名（一般不用）。
+
+**行号（`QuickSql.Sql.QuickFx.RowNumber`，与本篇 §2 末尾那三颗日期口同族，形状是投影而不是谓词）：**
+
+```csharp
+.Select(o => new { Rn = QuickFx.RowNumber(o.Id) })                        // 整集按 Id 排，从 1 连续发号
+.Select(o => new { Rn = QuickFx.RowNumber(o.CreatedAt, true) })           // 同一句形，那一列改倒序
+.Select(o => new { Rn = QuickFx.RowNumber(o.CustomerId, o.Id) })          // 按客户分堆，每堆各自从 1 数
+.Select(o => new { Rn = QuickFx.RowNumber(o.CustomerId, o.Id, true) })    // 分堆 + 倒序
+.Select(o => new { o.Id, Rn = QuickFx.RowNumber(o.Id) })                  // 与列并排选出行号
+```
+
+- 发出的是 `ROW_NUMBER() OVER (PARTITION BY … ORDER BY … ASC|DESC)`：与日期三口同一档分工——**共用层出文本，方言只出自己的引号**，十八家 provider 一张模板都不登记（`[t0]` 与 `"t0"` 与 `` `t0` `` 三家各是各的字形，OVER 骨架逐字同形）。
+- **序键必填**（没有序的行号不是一个问题：SQL Server 那一族连 `OVER ()` 都不收），分堆那颗可省，方向 `bool` 要**能当场读出值**——序是句子的形状，不是每行各问一次的东西。
+- 行号就是一个普通投影槽位：物化按列序读它，读回 `int`/`long` 由 DTO 那一侧的声明类型定；它自己一颗参数都不发（`ORDER BY` 里挂的是列）。
+- **只能当列选出来，不能拿来筛行、也不能当值写进去**：`Where` / `Having` / 连接条件 / 全局过滤器 / `GROUP BY` 的键（单列与复合两条同判据）/ 聚合的参数位 / `Distinct()` 同框 / 分组链的投影位，以及写侧 `Set(列, o => …)` 的值位——九格都在**组合时当场拒**（分表跨片那一格在编译时拒，要走到 `ToSql`），不等库报错。筛行的那两条出路是内层句交 `WithSql`、或整句走 [14 篇原生 SQL](14-raw-sql.md)；写侧那条是先把行读出来、在内存里编号，再走 `UpdateRange`/`SaveChanges`。外层 `ORDER BY` 里带着 `OVER` 各家都认（那一格排在窗口值算完之后），不收这一问。
+- **序键有同值时，同值之间的号不保证稳定**（`ROW_NUMBER` 在哪家都是这一档语义）：要可复现的编号就拿唯一列当序键，或先在链上把序定死再取号。
+- 分表实体跨片读没有这一格：外层是每片一条 SELECT 串起来的 `UNION ALL`，`OVER` 因此在每片各自从 1 数起（那不是任何人要的数），当场抛并指回单片那一档。
+- 四颗方法体没有实现：树外直接调（内存里"顺手取个号"）抛 `NotSupportedException` 并指路——先 `ToList()/ToListAsync()` 落到内存，再按下标自己数。
+
 
 ## 5. 分页与总数
 

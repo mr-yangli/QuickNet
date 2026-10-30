@@ -1,5 +1,6 @@
 using QuickSql.Aop;
 using QuickSql.Metadata;
+using System.Collections.Concurrent;
 
 namespace QuickSql.Tracking;
 
@@ -10,18 +11,35 @@ namespace QuickSql.Tracking;
 /// （<c>db.Set&lt;T&gt;()</c>、<c>db.Add&lt;T&gt;()</c>、<c>SaveChangesAsync</c> 里 <c>Rows&lt;TResult&gt;</c> 的那一次），
 /// 运行期只按 <see cref="Type"/> 查一张表 —— §1.2 原则 3 那条「加载可以反射，调用不行」的分界线画在这里。
 ///
-/// <b>非线程安全</b>：一个会话同一时刻只归一个执行流（§7 生命周期表里那句「<c>DbContext</c> 才需要 Scoped」的
-/// 实现含义）。身份映射与 <c>_byRef</c> 都没有加锁，跨线程共用一个会话会得到「同一行两只实例」而不是异常。</summary>
+/// <b>非线程安全，且 2026-10-30 起有人替它守门</b>：一个会话同一时刻只归一个执行流（§7 生命周期表里
+/// 那句「<c>DbContext</c> 才需要 Scoped」的实现含义）。身份映射与 <c>_byRef</c> 都没有加锁——跨线程共用
+/// 一个会话会得到「同一行两只实例」甚至随机 NRE；<see cref="Orchestration.SessionGate"/>（EF Core 的
+/// <c>ConcurrencyDetector</c> 同一条语义）把"同时两个操作"当场拒掉，本类的<em>档登记</em>
+/// （<see cref="_byType"/>/_orderView）按构造并发安全，逐实体的账则由那颗闸单一在飞保证独占。</summary>
 sealed class ChangeTracker(QuickSqlOrm orm) : DbChangeTracker
 {
     /// <summary>按<b>调用点上的静态类型</b>（<c>Set&lt;T&gt;()</c> 的那个 <c>T</c>）分档。
     /// 键不是 <c>GetType()</c>：一只派生实例经 <c>Set&lt;Base&gt;()</c> 进会话时，它写出去的是基类那张表的列，
-    /// 而 <see cref="Entries"/> 也得在同一条档里看得见它 —— 两边用同一个键才自洽。</summary>
-    readonly Dictionary<Type, ITypeTracker> _byType = new();
+    /// 而 <see cref="Entries"/> 也得在同一条档里看得见它 —— 两边用同一个键才自洽。
+    /// <b><see cref="ConcurrentDictionary"/> 是 2026-10-30 换的</b>：档的<em>登记</em>要能与一只已在飞的
+    /// 操作并发（共享会话的两条分支同时首次 <c>Set&lt;T&gt;()</c>，MySQL 真库上被
+    /// <c>ThreadConcurrencyPathTests</c> 当场抓到裸 <c>Dictionary</c> 的并发首写炸"exclusive access"），
+    /// 与 <see cref="Orchestration.SessionGate"/> 的分工是——<b>登记这一格按构造并发安全</b>（含
+    /// <see cref="_orderView"/> 那半边），<b>逐实体的账</b>（身份映射、快照、脏掩码）仍然一锁不锁、
+    /// 由会话闸单一在飞保证独占。</summary>
+    readonly ConcurrentDictionary<Type, ITypeTracker> _byType = new();
 
-    /// <summary>类型的<em>首次出现序</em>，报告与 <see cref="Entries"/> 都按它走。
-    /// 字典的枚举序不保证，所以这一份列表不是可有可无的。</summary>
+    /// <summary>类型的<em>首次出现序</em>的<b>建造名单</b>：只在 <see cref="_registryGate"/> 里追加，
+    /// 追加完重铸 <see cref="_orderView"/>。枚举一律走视图，不摸这份名单。</summary>
     readonly List<ITypeTracker> _order = [];
+
+    /// <summary><see cref="_order"/> 的只读投影视图：登记侧在锁里重铸，读侧（侦测、报告、保存序）
+    /// 不加锁枚举这一份不可变数组 —— 迭代中途来了新档，旧视图照样自洽，下一轮自然看见。</summary>
+    volatile ITypeTracker[] _orderView = [];
+
+    /// <summary>档登记那道锁。只护 <see cref="_order"/>/_orderView/_hasCollections 这三格建造账，
+    /// 不护任何逐实体的账 —— 那些归会话闸。</summary>
+    readonly object _registryGate = new();
 
     /// <summary>级联欠着的外键（<see cref="CascadeLink"/>）。<b>懒建</b>：绝大多数会话一次级联都没有，
     /// 而这一串的生命周期只到<em>子那一档的 Insert 语句建出来</em>为止 —— 用完即摘，不留跨保存的账。
@@ -54,7 +72,7 @@ sealed class ChangeTracker(QuickSqlOrm orm) : DbChangeTracker
         {
             var count = 0;
 
-            foreach (var tracker in _order)
+            foreach (var tracker in _orderView)
                 count += tracker.Count;
 
             return count;
@@ -78,7 +96,7 @@ sealed class ChangeTracker(QuickSqlOrm orm) : DbChangeTracker
 
     public override IEnumerable<EntityEntry> Entries()
     {
-        foreach (var tracker in _order.ToArray())
+        foreach (var tracker in _orderView)
             // 这一处留拷贝是故意的：Entries() 是调用方手里的诊断视图，而"在枚举里改会话"（一边看一边 Remove）
             // 是公开口能承诺的形状；内核那六处遍历走 TrackedNodes，不付这一份。
             foreach (var node in tracker.TrackedNodes.ToArray())
@@ -97,7 +115,7 @@ sealed class ChangeTracker(QuickSqlOrm orm) : DbChangeTracker
         if (_hasCollections)
             changed += DiffDetachedChildren();
 
-        foreach (var tracker in _order.ToArray())
+        foreach (var tracker in _orderView)
             changed += tracker.DetectChanges();
 
         return changed;
@@ -107,7 +125,7 @@ sealed class ChangeTracker(QuickSqlOrm orm) : DbChangeTracker
     /// 才不会再撞上「档不存在」。之后 <c>Set&lt;T&gt;()</c> 拿到的还是同一份空跟踪器。</summary>
     public override void Clear()
     {
-        foreach (var tracker in _order)
+        foreach (var tracker in _orderView)
             tracker.Clear();
 
         // 级联欠的键跟着数据一起清：实体都离开会话了，那些引用指向的是不存在的账。
@@ -119,19 +137,26 @@ sealed class ChangeTracker(QuickSqlOrm orm) : DbChangeTracker
     /// <c>InsertEngine&lt;T&gt;</c>，这些是编译期参数而不是运行期能补的东西。</summary>
     internal EntityTracker<T> For<T>() where T : class
     {
-        if (_byType.TryGetValue(typeof(T), out var known))
-            return (EntityTracker<T>) known;
+        // 登记在锁里：_byType 读侧虽是并发字典，但 _order 的追加与视图重铸必须与登记一一对应，
+        // 两次并发首登记只许留一份档（双建会让同一类型两条档、保存序与报告各算一遍）。
+        // 竞态下的双建多半成对，但 _order 不撒谎这一格不由运气担保。
+        lock (_registryGate)
+        {
+            if (_byType.TryGetValue(typeof(T), out var known))
+                return (EntityTracker<T>) known;
 
-        var tracker = new EntityTracker<T>(orm, this);
-        _byType[typeof(T)] = tracker;
-        _order.Add(tracker);
+            var tracker = new EntityTracker<T>(orm, this);
+            _byType[typeof(T)] = tracker;
+            _order.Add(tracker);
+            _orderView = [.. _order];
 
-        // 摘行那一次遍历的闸门：会话里出现过一条集合边才可能有人被摘掉。
-        // 它只朝"要扫"的方向偏（建过档就不撤），因为档本身也不撤 —— Clear() 留档。
-        if (tracker.Contract.Collections.Count > 0)
-            _hasCollections = true;
+            // 摘行那一次遍历的闸门：会话里出现过一条集合边才可能有人被摘掉。
+            // 它只朝"要扫"的方向偏（建过档就不撤），因为档本身也不撤 —— Clear() 留档。
+            if (tracker.Contract.Collections.Count > 0)
+                _hasCollections = true;
 
-        return tracker;
+            return tracker;
+        }
     }
 
     /// <summary>级联：顺这一张实体的集合边把子实体带进会话（插入档）或标成删除（删除档）。
@@ -176,7 +201,7 @@ sealed class ChangeTracker(QuickSqlOrm orm) : DbChangeTracker
         List<Detached>? due = null;
 
         // 这一趟只<em>判</em>，不动 _order（动手在 due 那一趟），所以直接枚举档表。
-        foreach (var tracker in _order)
+        foreach (var tracker in _orderView)
         {
             if (tracker.Contract.Collections.Count == 0)
                 continue;
@@ -293,7 +318,7 @@ sealed class ChangeTracker(QuickSqlOrm orm) : DbChangeTracker
     {
         var held = new Dictionary<object, (Type, string)>(ReferenceEqualityComparer.Instance);
 
-        foreach (var tracker in _order)
+        foreach (var tracker in _orderView)
         {
             if (tracker.Contract.Collections.Count == 0)
                 continue;
@@ -547,7 +572,7 @@ sealed class ChangeTracker(QuickSqlOrm orm) : DbChangeTracker
     {
         get
         {
-            foreach (var tracker in _order)
+            foreach (var tracker in _orderView)
                 if (tracker.HasTempKeys)
                     return true;
 
@@ -582,7 +607,7 @@ sealed class ChangeTracker(QuickSqlOrm orm) : DbChangeTracker
 
     bool AnyDue()
     {
-        foreach (var tracker in _order)
+        foreach (var tracker in _orderView)
         {
             if (!tracker.MayHaveWrites)
                 continue;
@@ -606,7 +631,7 @@ sealed class ChangeTracker(QuickSqlOrm orm) : DbChangeTracker
 
         // 快照一份档列表：写的时候要是最开始那几档，中途不接纳新登记的类型。
         // 排序只动档内的类型先后，三档的先后（§8.2 那句"先插再改最后删"）只在下面那一格提前。
-        var trackers = OrderedByDependency(_order.ToArray());
+        var trackers = OrderedByDependency(_orderView);
 
         // 「同一张表这一轮既插又删」把那一段删除提前（触发条件见 <see cref="ITypeTracker.HasInsertsAndDeletes"/>）。
         //
@@ -679,7 +704,7 @@ sealed class ChangeTracker(QuickSqlOrm orm) : DbChangeTracker
     /// <summary>这一批的关系边排不排得出先后 —— <b>只判、一条语句都不发</b>。<c>SaveChangesAsync</c>
     /// 把它放在开事务之前：排不出顺序是元数据的事，而 <c>BeginTransaction</c> 会先一步去碰驱动，
     /// 于是"连不上库"那句盖住了成因（离线场景更是永远测不到这一格）。</summary>
-    internal void EnsureWriteOrderResolvable() => OrderedByDependency(_order.ToArray());
+    internal void EnsureWriteOrderResolvable() => OrderedByDependency(_orderView);
 
     /// <summary>分表实体与跟踪器互斥（§16.4 那一格的裁决）。<b>判据取"这一行此刻会不会被写出去"</b>，
     /// 与 <see cref="AnyDue"/> 同一颗 <see cref="ITypeTracker.WillWrite"/>：只把分表实体<em>读</em>进会话
@@ -691,7 +716,7 @@ sealed class ChangeTracker(QuickSqlOrm orm) : DbChangeTracker
     /// 出路写在消息里（写侧那三条链按行的分片键值定表，本来就不需要会话）。</para></summary>
     internal void EnsureNoSplitWrites()
     {
-        foreach (var tracker in _order)
+        foreach (var tracker in _orderView)
         {
             if (!tracker.MayHaveWrites || tracker.Contract.Table.Split is not { } split)
                 continue;
@@ -722,7 +747,7 @@ sealed class ChangeTracker(QuickSqlOrm orm) : DbChangeTracker
     {
         string? cluster = null;
 
-        foreach (var tracker in _order)
+        foreach (var tracker in _orderView)
         {
             if (!tracker.MayHaveWrites)
                 continue;
@@ -877,7 +902,7 @@ sealed class ChangeTracker(QuickSqlOrm orm) : DbChangeTracker
     /// 一条<em>根本不该存在</em>的档（继承映射没接线，§8.2）—— 而实例其实好好地待在基类那一档里。</summary>
     internal ITypeTracker? OwnerOf(object entity)
     {
-        foreach (var tracker in _order)
+        foreach (var tracker in _orderView)
             if (tracker.Owns(entity))
                 return tracker;
 

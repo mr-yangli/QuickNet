@@ -51,8 +51,11 @@ namespace QuickSql.Providers.OracleBase;
 /// 所以"为 false 时的退路"这一档在五家里是<b>两颗位 ∶ 三家</b>，而不是这一族独一份的一条。</item>
 /// <item><c>MultiStatement</c> 与 <c>MultiResultSets</c>：与 PG 系同一条理由（一次发送里塞 <c>;</c> 分隔的多条语句
 /// 在这一家同样不成立），而 <c>OracleCodeFirst.EmitCreateTable</c> 尾部那条 <c> ; </c> 串联因此只能走 §9.5 的脚本路径。</item>
-/// <item><c>Cte</c>、<c>WindowFunctions</c>、<c>Count_Over_Window</c>：库里都有，但代码里没有 ——
+/// <item><c>Cte</c>、<c>WindowFunctions</c>、<c>Count_Over_Window</c>：库里都有，但代码里没有按这些位分派的发射口 ——
 /// <c>CountMethod.CountOverWindow</c> 在 <c>QueryEngine</c> 里今天就是那句"未接入"的抛，而 WITH 没有任何发射口。
+/// <b>【v0.39 行号之后本条要读两半】</b>窗口函数那一颗有了发射口（<c>QuickFx.RowNumber</c> 落
+/// <c>DialectBase.EmitRowNumber</c>，共用层出文本、本家零登记模板），但它对声明与不声明的家发的是同一句，
+/// 所以"没有读者按位分派"那一条判据没被这条改动松动，本位仍不声明。
 /// <b>PG 那一档把这三位声明了</b>（v0.22 按 §4 原稿继承），于是两档在同一个判据下给出不同答案。本版本不动那一档
 /// （改它等于同时改两份掩码、台账计数与一句"原稿就是这么写的"），把这一格不一致记进 §4 与 §14，等一次统一清账。</item>
 /// </list></para>

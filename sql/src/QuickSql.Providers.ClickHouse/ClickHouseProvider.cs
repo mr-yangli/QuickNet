@@ -57,8 +57,13 @@ namespace QuickSql.Providers.ClickHouse;
 /// 批量退回链自然从 L3 起（§12.1）。</item>
 /// <item><c>MultiStatement</c>/<c>MultiResultSets</c>/<c>TempTable</c>/<c>Json_Type</c>/<c>Array_Type</c>/
 /// <c>Cte</c>/<c>WindowFunctions</c>/<c>Count_Over_Window</c>/<c>SkipLocked</c>/<c>Lock_NoWait</c>/
-/// <c>RefCursor</c>/<c>Truncate_Cascade</c>：<c>src/</c> 一行没发过 —— 声明一颗没有消费者的"支持"
-/// 正是 §13.5 那本台账要避免的东西。</item>
+/// <c>RefCursor</c>/<c>Truncate_Cascade</c>：按这些位分派的发射口一个都没有 —— 声明一颗没有消费者的"支持"
+/// 正是 §13.5 那本台账要避免的东西。
+/// <b>【v0.39 行号之后本条要读两半，而本家这一半比另几家多一格】</b><c>WindowFunctions</c> 那颗有了共用层的
+/// 发射口（<c>QuickFx.RowNumber</c> 落 <c>DialectBase.EmitRowNumber</c>，本家零登记模板），发的是大写的
+/// <c>ROW_NUMBER() OVER (…)</c>；而本家的<em>型名</em>按大小写敏感记着（<c>ClickHouseSchemaReader</c> 头部那一格），
+/// <em>函数名</em>是不是同一档今天两档出处都没读过 —— 于是这一句在这一家收不收，
+/// 是下一次真库复点要答的第一问（记 §14，本笔不动掩码：位上没有读者那条判据照旧）。</item>
 /// </list></para>
 ///
 /// <para>每一位的出处记在 §13.5 第十七本台账里，而本家的档位与已落地的每一族同形：<b>整层

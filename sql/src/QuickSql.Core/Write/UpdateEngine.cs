@@ -196,8 +196,17 @@ sealed class UpdateEngine<T> : IUpdate<T> where T : class
     public IUpdate<T> Set<TProp>(Expression<Func<T, TProp>> column, Expression<Func<T, TProp>> value)
     {
         var target = ColumnOf(column.Body);
+        var node = _orm.Expressions.Visit(value.Body, ScopeOf(value));
 
-        return Append(target, _orm.Expressions.Visit(value.Body, ScopeOf(value)));
+        // SET 的值位不收行号：读侧那一族有 <c>WindowGuard.RejectRowNumber</c> 那条统一出路（WithSql ∶ 原生 SQL），
+        // 这一格两样都接不上 —— 写侧没有"换个表源"可言，所以这里给的是它自己的那条路。
+        // 判在翻译之后：值的形状先照读侧同一条尺子翻（§5.5 单一真相），翻完才知道里面有没有 OVER。
+        if (WindowGuard.HasRowNumber(node))
+            throw new UntranslatableExpressionException(value.Body.ToString(),
+                "SET 的值位里没有行号的落点：UPDATE 的 SET 收不了 OVER（十八家都不认，宁可抛也不要发一句库不认的句子）。" +
+                "要按行号写值就先把行读出来、在内存里编号，再走 UpdateRange/SaveChanges 那一条写链。");
+
+        return Append(target, node);
     }
 
     public IUpdate<T> Where(Expression<Func<T, bool>> predicate)

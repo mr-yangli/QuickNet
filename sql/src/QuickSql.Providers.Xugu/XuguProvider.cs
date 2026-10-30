@@ -78,8 +78,12 @@ namespace QuickSql.Providers.Xugu;
 /// 它是这一版三处"文档推翻我们写过的话"之一（另两颗：<c>OFFSET</c> 哨兵、<c>text</c> 那颗守卫）。</item>
 /// <item><c>Sequences</c>、<c>Cte</c>、<c>WindowFunctions</c>、<c>Count_Over_Window</c>、<c>TempTable</c>、
 /// <c>Array_Type</c>、<c>RefCursor</c>、<c>SkipLocked</c>、<c>Lock_NoWait</c>、<c>Truncate_Cascade</c>：
-/// 两档出处里要么没有、要么本次没读到，而代码里没有对应的发射口 —— 与另四族同一立场，
-/// 声明一颗没有消费者的"支持"正是 §13.5 那本台账要避免的东西。</item>
+/// 两档出处里要么没有、要么本次没读到，而代码里没有按这些位分派的发射口 —— 与另四族同一立场，
+/// 声明一颗没有消费者的"支持"正是 §13.5 那本台账要避免的东西。
+/// <b>【v0.39 行号添的一格待复点】</b><c>WindowFunctions</c> 那一颗今天有了共用层的发射口
+/// （<c>QuickFx.RowNumber</c> 落 <c>DialectBase.EmitRowNumber</c>，本家零登记模板），而这一家的实例在场、
+/// 那一句<em>没在实例上发过</em>：本家的行号读数今天只到"离线文本钉住了"（金标 <c>golden/xugu/fx-rown-*</c>），
+/// 出处里又没读到这一格 —— 两件事叠在一起，翻不翻档、能不能翻都要先跑那一句，记 §14。</item>
 /// <item><c>Guid_Raw16</c>：与 <c>CHAR(36)</c> 那颗是二选一（两边都有出处，见 <see cref="XuguTypes"/> 那一格），
 /// 取文本那一支的代价与理由都在那里。</item>
 /// <item><c>Paging_RowNum</c> 与 <c>Paging_OffsetFetch</c>：这一家两样都不是它的形状（<c>LIMIT…OFFSET</c>），

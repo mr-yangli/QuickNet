@@ -101,10 +101,14 @@ public interface IQuery<T> : IAsyncEnumerable<T>
 
     /// <summary><b>条件成立才贴这一条谓词</b>：给"筛选条件是可选的"那一类调用方（检索表单里用户没填的那一栏）。
     /// <paramref name="condition"/> 为假时返回<em>自己</em>，一个字节的模型都不改，所以它与"根本没写过这一句"逐字同形
-    /// （<see cref="Explain"/> 的模型文本、发出去的 SQL 与参数编号都不变）。<b>它不是开关而是省一段 <c>if</c></b>：
-    /// 三个参数的入口与 <see cref="Where(Expression{Func{T, bool}})"/> 同一颗咽喉，翻译失败照样在编译期之前响。
-    /// 多条可选条件就是连着写几句，<c>AND</c> 的顺序 = 书写的顺序。</summary>
-    IQuery<T> Where(bool condition, Expression<Func<T, bool>> predicate);
+    /// （<see cref="Explain"/> 的模型文本、发出去的 SQL 与参数编号都不变）——连腿里的 lambda 都不翻译，
+    /// 闭包成员求值那一步根本不会发生。<b>它不是开关而是省一段 <c>if</c></b>：真档与
+    /// <see cref="Where(Expression{Func{T, bool}})"/> 同一颗咽喉，翻译失败照样在编译期之前响。
+    /// 多条可选条件就是连着写几句，<c>AND</c> 的顺序 = 书写的顺序。
+    /// <b>2026-10-30 独立成口</b>：这一颗从此叫 <see cref="WhereIF"/>，<c>Where</c> 本名只留给无条件那一颗 ——
+    /// 条件拼接在名字上就该是条件口（<b>IF 大写，与 SqlSugar 的 <c>WhereIF</c> 逐字同形</b>；FreeSql 那颗
+    /// 是小写的 <c>WhereIf</c>，名字跟 SqlSugar 走），不再以 bool 重载的形态占着 <c>Where</c> 的名字。</summary>
+    IQuery<T> WhereIF(bool condition, Expression<Func<T, bool>> predicate);
 
     IQuery<T> AsNoTracking();
 
@@ -140,6 +144,20 @@ public interface IQuery<T> : IAsyncEnumerable<T>
     /// 而<em>没被点名</em>的 mandatory 不受影响（那一条本来就要贴进句子，没什么可拦的）。
     /// 与上面那颗同样只落在 arity 1 这一档。</para></summary>
     IQuery<T> IgnoreQueryFilter<TFilter>() where TFilter : class;
+
+    /// <summary>把另一条<b>同型</b>的查询并进来（<c>UNION ALL</c>，不去重）：两腿各自完整发一句
+    /// SELECT，整串占一个表位（与分表读侧同一种形状）。<b>序与分页只长在外层</b> —— 腿里点了
+    /// <c>OrderBy/Skip/Take</c> 当场拒（"每腿各取 N 行"与"合并后取 N 行"是两种语义，本家不替调用方挑，
+    /// 也不照 SqlSugar <c>Clone()</c> 那样把分页悄悄复制进每一腿）；急切加载（<c>Include</c>/
+    /// <c>IncludeMany</c>）与分表腿同样当场拒（前者的列清单会变，后者选片之后自己已经是一只 UNION）。
+    /// 全局过滤器落在<b>合并后的整串</b>上（行谓词与合并、去重可交换，结果与按腿过滤一致）；
+    /// 腿上点名的 <c>IgnoreQueryFilters</c> 当场拒 —— 免过滤的口径要在整条链上定，不给"点了名却
+    /// 被外层压掉"的暗门。</summary>
+    IQuery<T> UnionAll(IQuery<T> other);
+
+    /// <summary>同 <see cref="UnionAll"/>，关键字换 <c>UNION</c>：整句去重。两腿重叠的行只留一份 ——
+    /// 去重发生在合并之后、外层谓词与序之前，与 SQL 的子句次序一致。</summary>
+    IQuery<T> Union(IQuery<T> other);
 
     IQuery<T> AsSplitQuery(int navigateBatchSize = 20);
 
@@ -370,8 +388,8 @@ public interface IQuery<T1, T2>
 {
     IQuery<T1, T2> Where(Expression<Func<T1, T2, bool>> predicate);
 
-    /// <summary>条件成立才贴这一条谓词，为假时返回自己；口径同 <see cref="IQuery{T}.Where(bool, Expression{Func{T, bool}})"/>。</summary>
-    IQuery<T1, T2> Where(bool condition, Expression<Func<T1, T2, bool>> predicate);
+    /// <summary>条件成立才贴这一条谓词，为假时返回自己；口径同 <see cref="IQuery{T}.WhereIF(bool, Expression{Func{T, bool}})"/>。</summary>
+    IQuery<T1, T2> WhereIF(bool condition, Expression<Func<T1, T2, bool>> predicate);
 
     IQuery<T1, T2, T3> LeftJoin<T3>(Expression<Func<T1, T2, T3, bool>> on) where T3 : class;
 
@@ -400,8 +418,8 @@ public interface IQuery<T1, T2, T3>
 {
     IQuery<T1, T2, T3> Where(Expression<Func<T1, T2, T3, bool>> predicate);
 
-    /// <summary>条件成立才贴这一条谓词，为假时返回自己；口径同 <see cref="IQuery{T}.Where(bool, Expression{Func{T, bool}})"/>。</summary>
-    IQuery<T1, T2, T3> Where(bool condition, Expression<Func<T1, T2, T3, bool>> predicate);
+    /// <summary>条件成立才贴这一条谓词，为假时返回自己；口径同 <see cref="IQuery{T}.WhereIF(bool, Expression{Func{T, bool}})"/>。</summary>
+    IQuery<T1, T2, T3> WhereIF(bool condition, Expression<Func<T1, T2, T3, bool>> predicate);
 
     IQuery<TResult> Select<TResult>(Expression<Func<T1, T2, T3, TResult>> projector);
 

@@ -1,5 +1,6 @@
 using QuickSql.Metadata;
 using QuickSql.Sql;
+using QuickSql.Query.Model;
 using QuickSql.Sql.Ast;
 using System.Diagnostics.CodeAnalysis;
 using System.Linq.Expressions;
@@ -55,7 +56,7 @@ public class QuickSqlQuery<T> : IQuery<T>, IEngineCarrier
 
     public IQuery<T> Where(Expression<Func<T, bool>> predicate) => new QuickSqlQuery<T>(Engine.Where(predicate));
 
-    public IQuery<T> Where(bool condition, Expression<Func<T, bool>> predicate)
+    public IQuery<T> WhereIF(bool condition, Expression<Func<T, bool>> predicate)
         => condition ? Where(predicate) : this;
 
     public IQuery<TResult> Select<TResult>(Expression<Func<T, TResult>> projector)
@@ -104,6 +105,80 @@ public class QuickSqlQuery<T> : IQuery<T>, IEngineCarrier
     /// <summary>两颗点名角色的口径都在 <see cref="IQuery{T}"/> 上（§16.4）：这里只是把 <see cref="ChainChoice"/>
     /// 落进模型，判"能不能"的那一处是执行时取连接的那个门口，不在链上。</summary>
     public IQuery<T> FromPrimary() => new QuickSqlQuery<T>(Engine.Role(ChainChoice.Primary));
+
+    /// <inheritdoc/>
+    public IQuery<T> UnionAll(IQuery<T> other) => SetOps(other, all: true);
+
+    /// <inheritdoc/>
+    public IQuery<T> Union(IQuery<T> other) => SetOps(other, all: false);
+
+    /// <summary>合并的本体：形状守卫在链上当场把"发了也不会对"的形状拦掉，外层只换 FROM 位 ——
+    /// 谓词、序、分页、投影、聚合都留给合并之后的那条链，它们落在外层就是落在整串 UNION 上
+    /// （对账形状与分表读侧同一种，那里已经钉过"物化按腿的列序走"这一格）。</summary>
+    IQuery<T> SetOps(IQuery<T> other, bool all)
+    {
+        ArgumentNullException.ThrowIfNull(other);
+
+        var first = Engine.Model;
+        var second = other is IEngineCarrier carrier
+            ? carrier.Engine.Model
+            : throw new QuickSqlException(
+                $"Union 的参数要是一条本库的查询链（IQuery<{typeof(T).Name}>），收到的是 {other.GetType().Name}。");
+
+        // 腿上点过 IgnoreQueryFilters 的当场拒：过滤器名单不进模型，合并之后外层的 Effective()
+        // 会把过滤器压回整串 —— 点了名的腿静默失效正是本仓库最不肯做的形状。要免过滤就整条链一起免。
+        if (Engine.IgnoredFilters is not null || other is IEngineCarrier otherCarrier && otherCarrier.Engine.IgnoredFilters is not null)
+            throw new QuickSqlException(
+                "UNION 的腿不接 IgnoreQueryFilters/IgnoreQueryFilter<T>()：全局过滤器落在合并后的整串上，" +
+                "腿上点名的免过滤会被外层静默压掉。要免过滤就在合并之前把整条链的口径定好（或合并之后整串点）。");
+
+        EnsureLeg(first);
+        EnsureLeg(second);
+
+        // 外层只出"SELECT 列 FROM (两腿)"这一件事：腿自带的谓词与 Distinct 已经编译进各自的分支
+        // （谓词在腿里过滤，Distinct 在腿里去重），留在模型顶层就是把第一条腿的条件再打到整串上 ——
+        // 实测就是"UNION ALL 六行回来三十行、外层 WHERE 用了第三颗参数"那种对不上账的形状。
+        // 序/分页/分组三格由形状守卫保证为空，不必再动。
+        return new QuickSqlQuery<T>(Engine.Derive(first with
+        {
+            Source = new SourceSetOps(first.Root, first, second, all),
+            Predicates = [],
+            Distinct = false,
+        }));
+    }
+
+    static void EnsureLeg(QueryModel leg)
+    {
+        if (leg.Plan is not EntityProjection { TableIndex: 0 })
+            throw new QuickSqlException(
+                "UNION 的腿必须是实体整行投影：外层按腿的列序物化，投影/聚合腿的列清单与实体列对不上。" +
+                "要先合并再投影（UnionAll(...).Select(...)），不要把 Select 写进腿里。");
+
+        if (leg.Source is not null || leg.DerivedFrom is not null)
+            throw new QuickSqlException(
+                "UNION 的腿不接套娃：腿自己已经是一只 UNION（或 WithSql 覆盖源/派生表）时，" +
+                "内外两层各自的列对齐是三份形状的事，这一档今天不到。");
+
+        if (leg.Includes.Count > 0 || leg.IncludeManys.Count > 0)
+            throw new QuickSqlException(
+                "UNION 的腿不接急切加载（Include/IncludeMany）：JOIN 展开列会让两腿的列清单不再同形，" +
+                "外层按位置物化就是静默串列。要子实体就合并之后按主查询另发一条。");
+
+        if (leg.Ordering.Count > 0 || leg.Offset is not null || leg.Limit is not null)
+            throw new QuickSqlException(
+                "UNION 的腿不接序与分页：序与分页只长在外层（合并不去重时「每腿各取 N 行」与" +
+                "「合并后取 N 行」是两种语义，本家不替调用方挑）。把 OrderBy/Skip/Take 挪到 UnionAll 之后。");
+
+        if (leg.GroupBy.Count > 0 || leg.Having is not null)
+            throw new QuickSqlException(
+                "UNION 的腿不接分组：分组腿的选列是键加聚合，与实体列对不上（同 Include 那一格）。" +
+                "要按合并后的行分组就写 UnionAll(...).GroupBy(...) —— 那落在外层，语义正确。");
+
+        if (leg.Root.Table.Split is not null)
+            throw new QuickSqlException(
+                "UNION 的腿不接分表实体：选片之后那条腿自己已经是一只 UNION，两层合并的语义要单独立账" +
+                "（§16.4 的选片机器管第一层）。");
+    }
 
     public IQuery<T> FromReplica() => new QuickSqlQuery<T>(Engine.Role(ChainChoice.Replica));
 
@@ -276,7 +351,7 @@ class QuickSqlJoinQuery<T1, T2> : IQuery<T1, T2>
     public IQuery<T1, T2> Where(Expression<Func<T1, T2, bool>> predicate)
         => new QuickSqlJoinQuery<T1, T2>(Engine.Where(predicate));
 
-    public IQuery<T1, T2> Where(bool condition, Expression<Func<T1, T2, bool>> predicate)
+    public IQuery<T1, T2> WhereIF(bool condition, Expression<Func<T1, T2, bool>> predicate)
         => condition ? Where(predicate) : this;
 
     public IQuery<T1, T2> Skip(int count) => new QuickSqlJoinQuery<T1, T2>(Engine.Skip(count));
@@ -321,7 +396,7 @@ class QuickSqlJoinQuery<T1, T2, T3> : IQuery<T1, T2, T3>
     public IQuery<T1, T2, T3> Where(Expression<Func<T1, T2, T3, bool>> predicate)
         => new QuickSqlJoinQuery<T1, T2, T3>(Engine.Where(predicate));
 
-    public IQuery<T1, T2, T3> Where(bool condition, Expression<Func<T1, T2, T3, bool>> predicate)
+    public IQuery<T1, T2, T3> WhereIF(bool condition, Expression<Func<T1, T2, T3, bool>> predicate)
         => condition ? Where(predicate) : this;
 
     public IQuery<T1, T2, T3> Skip(int count) => new QuickSqlJoinQuery<T1, T2, T3>(Engine.Skip(count));

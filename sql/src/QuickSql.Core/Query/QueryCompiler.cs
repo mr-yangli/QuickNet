@@ -3,6 +3,7 @@ using QuickSql.Providers;
 using QuickSql.Query.Model;
 using QuickSql.Sql;
 using QuickSql.Sql.Ast;
+using QuickSql.Translation;
 
 namespace QuickSql.Query;
 
@@ -34,7 +35,9 @@ public sealed class QueryCompiler(IDbProvider provider)
         // 以及照旧的根表位。内层走的是同一个 Compile，所以内层的分页、Include、方言无关的剥序全部原样成立。
         var from = model.DerivedFrom is { } inner
             ? new SourceDerived(model.Root, Compile(inner))
-            : model.Source ?? new SourceTable(model.Root);
+            : model.Source is SourceSetOps setOps
+                ? new SourceUnion(setOps.Ref, [Compile(setOps.First), Compile(setOps.Second)], setOps.All)
+                : model.Source ?? new SourceTable(model.Root);
 
         var where = Fold(model.Predicates);
         IReadOnlyList<OrderExpression> ordering = model.StripsOrdering ? [] : [.. model.Ordering];
@@ -169,6 +172,14 @@ public sealed class QueryCompiler(IDbProvider provider)
         if (model.Joins.Count > 0 || model.Includes.Count > 0 || model.IncludeManys.Count > 0)
             throw new QuickSqlException($"分表实体跨 {shards.Count} 片不做连接与急切加载（JOIN / Include）：每片各连一遍会把“一条主行配几份子行”变成片内的事，而那不是同一次查询。");
 
+        // 行号跨片要的是"整集上的序号"，而这里的外层只端一个 * ：选列里那颗 OVER 长在每片各自的那一句里，
+        // 于是每片都从 1 数一遍——那不是任何人要的数，而它绿得动、发得出，只能在这一格停。
+        // 只问选列：外层那句的 ORDER BY 长在 UNION ALL 之外、排的是合并完的行集，那一格跨片成立、不收这一问。
+        if (WindowGuard.HasRowNumber(model.Plan))
+            throw new QuickSqlException($"分表实体跨 {shards.Count} 片不行号（QuickFx.RowNumber）：外层是每片一条 SELECT 串起来的 UNION ALL，" +
+               "选列里那颗 OVER 因此在每片各自从 1 数起，而调用方要的是一个集上的序号。" +
+               "单片不受这一格限制——把范围收到一片就是一句普通的 OVER；要整集行号请先落回一张表或走原生 SQL（文档站 14 篇）。");
+
         var branches = new SelectStatement[shards.Count];
 
         for (var i = 0; i < shards.Count; i++)
@@ -278,6 +289,11 @@ public sealed class QueryCompiler(IDbProvider provider)
         // 「SELECT 1 … 取第一行」，不经过聚合映射）。这一格留着 Any→COUNT 的映射只是把枚举语义配齐，
         // 公开枚举面上那颗成员删不删是 §5.12 的裁决，不在实现侧顺手做。
         var countLike = aggregate.Kind is AggregateKind.Count or AggregateKind.LongCount or AggregateKind.Any;
+
+        // 顶层聚合的参数位不收行号：SUM(ROW_NUMBER() OVER (…)) 是"窗口值还没算完就要开始数"的句子，
+        // 各家都不认。COUNT 那一支不问，因为它的参数不进句子（发出去的是 *）。
+        if (!countLike)
+            WindowGuard.RejectRowNumber(aggregate.Node, "顶层聚合的参数位");
 
         var key = (countLike, aggregate.Distinct) switch
         {

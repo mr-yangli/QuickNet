@@ -28,8 +28,11 @@ public sealed record SourceDerived(TableRef Ref, SelectStatement Query) : TableS
 /// <see cref="Branches"/> 里每条都不许带 ORDER BY 与分页：那些只长在外层，否则
 /// 「取前 10 行」会变成「每片各取 10 行」，而两家的语法都执行得动（SqlSugar 的 <c>Clone()</c>
 /// 把 <c>Take/Skip/OrderBy</c> 原样复制进每一片，正是这一格的反面教材）。
-/// 别名沿用根表位那一个（<c>t0</c>），所以外层的谓词与选列不必重写。</summary>
-public sealed record SourceUnion(TableRef Ref, IReadOnlyList<SelectStatement> Branches) : TableSource(Ref);
+/// 别名沿用根表位那一个（<c>t0</c>），所以外层的谓词与选列不必重写。
+/// <para><see cref="All"/> 是 2026-10-30 添的：链式合并那一口（<c>UnionAll</c>/<c>Union</c>）的
+/// 第二档要的是<b>整句去重</b>的 <c>UNION</c>，分表那一档照旧 <c>UNION ALL</c>。两个关键字在任何一家
+/// 都是句子级的东西，没有方言分岔，所以它进形状（AST）而不进方言。</summary>
+public sealed record SourceUnion(TableRef Ref, IReadOnlyList<SelectStatement> Branches, bool All = true) : TableSource(Ref);
 
 /// <summary>FROM 位换成一整段<b>用户自己写的</b> SELECT 文本（<c>WithSql</c>，规格 §11 的表源那一格）。
 /// 与 <see cref="RawExpression"/> 同一前提：文本一颗不动，只在外面包一层括号再挂别名，
@@ -68,6 +71,17 @@ public sealed record SqlUnaryExpression(UnaryOperator Operator, SqlExpression Op
 /// <summary>函数节点。<see cref="Template"/> 是 provider 已经解析过的 SQL 模板（<c>DATEADD(day, {0}, {1})</c>），
 /// 实参按 <c>{i}</c> 填入。C# 方法名到模板的映射在 <c>IExpressionRules</c> 完成，方言层不再认 CLR 方法名（§4）。</summary>
 public sealed record FunctionExpression(string Template, IReadOnlyList<SqlExpression> Arguments) : SqlExpression;
+
+/// <summary>行号（<c>ROW_NUMBER</c>）：OVER 里那两段是句子的形状而不是模板的填充料，所以它不是
+/// 一颗 <see cref="FunctionExpression"/>——模板走 <c>string.Format</c>，而 <c>PARTITION BY</c> 与
+/// <c>ORDER BY</c> 各是一段带关键字的清单（清单可空、方向逐颗），填进 <c>{i}</c> 要把语法塞进 provider 的模板里。
+///
+/// <para><b>它与方言的关系与日期三口同档</b>：共用层出文本，十八家只出自己的引号（列名走
+/// <c>EmitExpression</c> 的既有步法），一张模板都不登记。<see cref="PartitionBy"/> 可空 =
+/// 整集一序号；<see cref="OrderBy"/> <b>不可空</b>——SQL Server 那一族要求 OVER 里至少一颗序，
+/// 而"没有序的行号"在任何一家都不是一个能回答的问题，所以这一格由翻译器保证有序，方言层不必再判。
+/// 两颗清单里的列引用都归<em>外层那一句</em>的表位，本节点不引入新的 FROM 位。</para></summary>
+public sealed record RowNumberExpression(IReadOnlyList<SqlExpression> PartitionBy, IReadOnlyList<OrderExpression> OrderBy) : SqlExpression;
 
 public sealed record CastExpression(SqlExpression Operand, string StoreType) : SqlExpression;
 

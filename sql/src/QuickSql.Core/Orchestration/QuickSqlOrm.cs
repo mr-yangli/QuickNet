@@ -216,14 +216,16 @@ public sealed class QuickSqlOrm
     /// <param name="tracker">会话的跟踪器，null 就是这一条链不跟踪（§8.1「跟踪与否不是两套 API」的落点）。
     /// 它<em>不</em>进模型：模型文本里没有跟不跟踪这一行，所以 <c>orm.Select&lt;T&gt;()</c> 与
     /// <c>db.Set&lt;T&gt;().AsNoTracking()</c> 的 <c>Explain().ModelText</c> 逐字节相等（§13.2 ②）。</param>
+    /// <param name="gate">会话的那颗并发闸（<see cref="SessionGate"/>），null 就是根链 —— 根链没有会话，
+    /// 每条链各是各的操作，不进闸。</param>
     [RequiresUnreferencedCode("按 Type 向注册表取实体契约（G2）。")]
     [RequiresDynamicCode("G2 注册表编译读写委托。")]
-    internal QueryEngine RootEngine(Type clrType, ChangeTracker? tracker = null)
+    internal QueryEngine RootEngine(Type clrType, ChangeTracker? tracker = null, SessionGate? gate = null)
     {
         var table = NewTableRef(clrType, 0);
         var model = new QueryModel { Tables = [table], Plan = new EntityProjection(0) };
 
-        return new QueryEngine(this, model, tracker);
+        return new QueryEngine(this, model, tracker, gate: gate);
     }
 
     /// <summary>造一个会话（§7 那行 <c>orm.CreateDbContext&lt;AppDbContext&gt;()</c>）。
@@ -332,6 +334,16 @@ public sealed class QuickSqlOrm
     /// 于是同一只 <see cref="IInsertOrUpdate{T}"/> 可以先 <c>.SetSource(一只)</c> 再换一批。<b>主键由库给值而
     /// 调用方没带键时当场拒</b>——那种键的冲突判定出不来，逐家形态与"哪几家只到文本层"记 §9.1 与使用册那一节。</para></summary>
     public IInsertOrUpdate<T> InsertOrUpdate<T>() where T : class => new InsertOrUpdateEngine<T>(this);
+
+    /// <summary>集合同步链（SqlSugar 的 <c>Storageable</c> 同一语义，2026-10-30 落地）：给一个集合、
+    /// 给一把键（不给就用实体主键，自增键"没填"的行直接进新增桶），与库对账出<b>新增 / 修改 / 删除</b>三个桶；
+    /// 对账只发读（<c>ToStorage</c>），执行与否、执行哪几桶由调用方挑
+    /// （<c>ExecuteInsertAsync</c> / <c>ExecuteUpdateAsync</c> / <c>ExecuteDeleteAsync</c> /
+    /// <c>ExecuteCommandAsync</c>，最后那颗一口气做，顺序固定删 → 改 → 增）。键点名、删除桶、
+    /// 分块对账的形状与如实记账全在 <see cref="IStorageable{T}"/> 抬头。</summary>
+    [RequiresUnreferencedCode("对账要按 Type 解析实体契约（G2）并编译键读口。")]
+    [RequiresDynamicCode("键读口编译成委托。")]
+    public IStorageable<T> Storageable<T>(IEnumerable<T> rows) where T : class => new StorageableChain<T>(this, rows);
 
     /// <summary>UPDATE 链（§6 示例里那句 <c>orm.Update&lt;Item&gt;().Set(...).ExecuteAffrowsAsync(ct)</c>）。
     /// <b>这一条链与 <see cref="Select{T}"/> 一样要付 RUC/RDC 入口税</b>，而 <see cref="Insert{T}"/> 不付：

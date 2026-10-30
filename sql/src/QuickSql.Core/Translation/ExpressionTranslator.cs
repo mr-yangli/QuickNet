@@ -31,7 +31,14 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
 
     /// <summary>谓词位：bool 列要补成 <c>[flag] = 1</c>，SQL Server 不接受裸 bit 列作条件。</summary>
     public SqlExpression Predicate(LambdaExpression lambda, Scope scope)
-        => Booleanized(lambda.Body, Visit(lambda.Body, scope));
+    {
+        var node = Visit(lambda.Body, scope);
+
+        // 行号不能拿来筛行——这一问在组合时就判，不等库报错（判据与两条出路在 <see cref="WindowGuard"/>）。
+        WindowGuard.RejectRowNumber(node, "谓词位（WHERE / HAVING / 连接条件 / 全局过滤器）");
+
+        return Booleanized(lambda.Body, node);
+    }
 
     public SqlExpression Visit(Expression node, Scope scope, ColumnContract? hint = null)
     {
@@ -515,6 +522,13 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
 
         var declaring = node.Method.DeclaringType;
 
+        // 行号四颗在"逐颗 Visit 实参"那一段之前先接走。两件事都在这里定：① 这一颗的三档分工要看<em>原始</em>实参
+        // （方向那颗要当场求值，落成参数就改了句子的形状）；② 报错点必须是这一颗自己的指路 —— 晚一步的话，
+        // 第二颗实参里一颗本家不认的表达式（如 o.Name.PadRight(3).Length > 0）会抢先把消息换成
+        // "为 String.PadRight 注册映射"，用户看到的是隔壁那一格，而重载决议走错档这件事从头到尾没被说过。
+        if (declaring == typeof(QuickFx) && node.Method.Name == nameof(QuickFx.RowNumber))
+            return RowNumber(node, scope);
+
         // 分组链上的 Enumerable 方法先判掉（§5.3）：`g.Count()` 落 COUNT(*)、`g.Sum(o => o.列)` 落 SUM(那一列)，
         // 其余那几颗（Any/First/Distinct…）在 GROUP BY 语义下没有对应物，要给出的是这个理由，而不是
         // 下面那句"为 Enumerable.X 注册映射"——那里指错了地方：缺的不是方言模板。
@@ -800,6 +814,10 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
         // 与集合导航那条路（TryNavigationSubquery 里另起一个表位 + 关联条件）是两种形状。
         var argument = Visit(selector.Body, scope.Derive(grouping.Table, selector.Parameters[0]));
 
+        // SUM(ROW_NUMBER() OVER (…)) 是"窗口值还没算完就要开始数"的句子，库里那一格不收。
+        // 位置名与顶层那一颗（"顶层聚合的参数位"）分开写：两处的改写建议不一样，消息撞在一起就分不出是谁拒的。
+        WindowGuard.RejectRowNumber(argument, "分组聚合的参数位");
+
         return Template(symbol, [argument]);
     }
 
@@ -1069,6 +1087,12 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
             case SqlBinaryExpression b: CollectTableRefs(b.Left, map); CollectTableRefs(b.Right, map); break;
             case SqlUnaryExpression u: CollectTableRefs(u.Operand, map); break;
             case FunctionExpression f: foreach (var a in f.Arguments) CollectTableRefs(a, map); break;
+            // OVER 里那两段引用的是外层句子的表位（本节点不开新 FROM 位），下钻漏一段，
+            // 子查询捕获改名时内层就少改一颗列前缀 —— 得到的是一句指错列的 SQL，而不是一句报错。
+            case RowNumberExpression w:
+                foreach (var p in w.PartitionBy) CollectTableRefs(p, map);
+                foreach (var o in w.OrderBy) CollectTableRefs(o.Node, map);
+                break;
             case CastExpression ca: CollectTableRefs(ca.Operand, map); break;
             case InExpression ie:
                 CollectTableRefs(ie.Target, map);
@@ -1113,7 +1137,7 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
             SourceTable => new SourceTable(newRef),
             SourceSubquery sub => new SourceSubquery(newRef, RemapStatement(sub.Query, map)),
             SourceDerived derived => new SourceDerived(newRef, RemapStatement(derived.Query, map)),
-            SourceUnion union => new SourceUnion(newRef, [.. union.Branches.Select(b => RemapStatement(b, map))]),
+            SourceUnion union => new SourceUnion(newRef, [.. union.Branches.Select(b => RemapStatement(b, map))], union.All),
             // 原生文本这一形没有可改名的列引用（那一段一颗不动），但<em>别名要跟着改</em>：外层那句的
             // WHERE 里的 [t1000].[Amount] 已经被改名，而 FROM (…) 挂的名字若还停在 [t0]，
             // 得到的是一句"无法绑定多部分标识符"。
@@ -1142,6 +1166,12 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
             case FunctionExpression f:
                 var fa = f.Arguments.Select(a => RemapExpression(a, map)).ToArray();
                 return fa.SequenceEqual(f.Arguments) ? expr : new FunctionExpression(f.Template, fa);
+            case RowNumberExpression w:
+                // 与 CollectTableRefs 那一段成对：那里收的下钻，这里必须给对应的改写，
+                // 否则 OVER 里的列前缀停在旧别名，而外层改过名之后那一句指的是不存在的表。
+                var wp = w.PartitionBy.Select(a => RemapExpression(a, map)).ToArray();
+                var wo = w.OrderBy.Select(o => o with { Node = RemapExpression(o.Node, map) }).ToArray();
+                return wp.SequenceEqual(w.PartitionBy) && wo.SequenceEqual(w.OrderBy) ? expr : new RowNumberExpression(wp, wo);
             case CastExpression ca:
                 var co = RemapExpression(ca.Operand, map);
                 return ReferenceEquals(co, ca.Operand) ? expr : new CastExpression(co, ca.StoreType);
@@ -1372,6 +1402,77 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
             default:
                 return null;
         }
+    }
+
+    /// <summary>行号四颗 → 一颗 <see cref="RowNumberExpression"/>。入口在 <c>Call</c> 的最上面（早于逐颗 Visit 实参那一段），
+    /// 留在这里的是三档分工本身。判据取<em>方法签名上第二颗形参的型</em>：<c>(orderKey, bool)</c> 是方向档、
+    /// <c>(partitionKey, orderKey)</c> 是分堆档，两档同元数而实参的型分不开它们 —— 调用方拿一颗 bool 表达式当第二颗
+    /// 实参写时，C# 的重载决议已经把那颗送上 bool 档了，此处照签名读到的就是它去的那一档，
+    /// 于是拿到的是"方向那颗读不出值"这条指路，而不是一句静默的错句。</summary>
+    SqlExpression RowNumber(MethodCallExpression node, Scope scope)
+    {
+        var signature = node.Method.GetParameters();
+        var partitioned = signature.Length switch
+        {
+            1 => false,
+            2 => signature[1].ParameterType != typeof(bool),
+            3 => true,
+            // 元数这一道判据今天只能在这里：入口那颗只按名字分派（早于逐颗 Visit 实参那一段），
+            // 少了这一行，将来添一颗四元的重载就会把多出来的实参静默丢掉。
+            _ => throw new UntranslatableExpressionException(node.ToString(),
+                $"RowNumber 只认 1~3 元这一族，这一颗是 {signature.Length} 元：多键分区与多键序今天都没有句形，不接。"),
+        };
+
+        var orderKey = partitioned ? node.Arguments[1] : node.Arguments[0];
+        var order = WindowKey(orderKey, scope, "序键");
+
+        IReadOnlyList<SqlExpression> partition = partitioned ? [WindowKey(node.Arguments[0], scope, "分堆键")] : [];
+
+        var descending = (partitioned, signature.Length) switch
+        {
+            (false, 2) => WindowDirection(node.Arguments[1], scope),
+            (true, 3) => WindowDirection(node.Arguments[2], scope),
+            _ => false,
+        };
+
+        return new RowNumberExpression(partition, [new OrderExpression(order, descending)]);
+    }
+
+    /// <summary>OVER 里的一颗键：先问它挂不挂在查询行上，再翻，翻完不许里面已经藏了一颗行号。
+    /// <b>常量序键在这里就是拒，不是发</b>：<c>ORDER BY @p0</c> 在库里是一句能执行的话，
+    /// 而它给的是"任意序"，行号于是随执行计划漂——那种句子绿在测试里、错在报表上（§5.8 禁的正是这一格）。
+    /// 判 <see cref="ReferencesScope"/> 早于 <see cref="Visit"/>：引着行的子树直送 Visit 各按各的路走，
+    /// 而不引用行的那颗到了 Visit 会折成参数，报错的人就变成库里那个人了。</summary>
+    SqlExpression WindowKey(Expression key, Scope scope, string role)
+    {
+        if (!ReferencesScope(key, scope))
+            throw new UntranslatableExpressionException(key.ToString(),
+                $"行号的{role}要落在查询行上（列，或列的可翻译表达式）：不引用行的实参进库是一颗常量，" +
+                "按常量排出来的行号没有可复现的序。整集行号就写 RowNumber(o.主键)，只要头一行请改用 FirstOrDefault()。");
+
+        var node = Visit(key, scope);
+
+        if (WindowGuard.HasRowNumber(node))
+            throw new UntranslatableExpressionException(key.ToString(),
+                "OVER 里再套 OVER（行号的序键或分堆键自己又是一颗行号）不是任何一家的合法句子。" +
+                "要两级序号就分两句：内层先出第一级、外层再按那一列排，而内层那一句今天只能走 WithSql 或原生 SQL（文档站 14 篇）。");
+
+        return node;
+    }
+
+    /// <summary>方向那颗要当场读得出值：<c>ORDER BY 列 DESC</c> 是句子的形状，不是每行各问一次的东西。
+    /// 落在行上的 bool 成员在这一档已经被重载决议送进来了（<see cref="RowNumber"/> 头部那句），
+    /// 所以这句要把那条重载的分岔说出来，否则用户看到的是"我明明写的是排序键"。</summary>
+    static bool WindowDirection(Expression node, Scope scope)
+    {
+        if (ReferencesScope(node, scope))
+            throw new UntranslatableExpressionException(node.ToString(),
+                "RowNumber 的第二颗是方向（bool），要能当场读出值（局部变量、闭包、内联常量都行）：" +
+                "一句 SELECT 里只能有一种序。想按一颗 bool 列排行号，换一元那颗 RowNumber(orderKey: …)，" +
+                "它没有方向位、也就没有这一问；要分堆又按它排就写具名实参 " +
+                "RowNumber(partitionKey: …, orderKey: …)——具名之后重载决议才认得你想要哪一颗。");
+
+        return Evaluate(node) is true;
     }
 
     /// <summary>DateRange 的边界求值：能读出 <see cref="DateOnly"/> 就交真值；装在装箱 Convert 里的闭包

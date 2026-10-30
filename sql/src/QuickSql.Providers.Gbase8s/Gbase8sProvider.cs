@@ -81,10 +81,14 @@ namespace QuickSql.Providers.Gbase8s;
 /// 记 §14 与 <c>DialectSql</c> 那条分句路径。</item>
 /// <item><c>Upsert_*</c>、<c>Sequences</c>、<c>Cte</c>、<c>WindowFunctions</c>、<c>Count_Over_Window</c>、
 /// <c>Json_Type</c>、<c>Array_Type</c>、<c>RefCursor</c>、<c>SkipLocked</c>、<c>Lock_NoWait</c>、
-/// <c>TempTable</c>、<c>Truncate_Cascade</c>：手册里读到过名字而 <c>src/</c> 一行没发过，
+/// <c>TempTable</c>、<c>Truncate_Cascade</c>：手册里读到过名字而按这些位分派的发射口一个都没有，
 /// 要么压根没读到 —— 与另五族同一立场，声明一颗没有消费者的"支持"正是 §13.5 那本台账要避免的东西。
 /// <b>本家这一列比另五家长</b>：手册里 <c>SEQUENCE</c> 与 <c>SKIP LOCKED</c> 都读到了名字
-/// 【文档·IBM】，而"读到名字"离"发得出这条语句"还差一份语法页，本层不跨这一步。</item>
+/// 【文档·IBM】，而"读到名字"离"发得出这条语句"还差一份语法页，本层不跨这一步。
+/// <b>【v0.39 行号之后本条要读两半】</b><c>WindowFunctions</c> 那一颗有了共用层的发射口
+/// （<c>QuickFx.RowNumber</c> 落 <c>DialectBase.EmitRowNumber</c>，本家零登记模板），于是本家对这一格的读数
+/// 从"一行没发过"改成"发过文本、没有库可证"（金标 <c>golden/gbase8s/fx-rown-*</c> 与整层同档）；
+/// 位仍不声明：那一句对声明与不声明的几家发的是同一句，位上没有读者。</item>
 /// <item><c>Guid_Raw16</c>：与 <c>CHAR(36)</c> 那颗在本家<em>不是二选一</em>（没有原生 16 字节那一型），
 /// 所以这一位是第四种情形：<b>另一支候选在这一家压根不存在</b>，与 <see cref="Gbase8sTypes.GetLengthSemantics"/>
 /// 那条"分档那一支没有对象"同一形。</item>

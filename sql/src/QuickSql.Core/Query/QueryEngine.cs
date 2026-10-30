@@ -79,9 +79,16 @@ sealed class QueryEngine
     /// 引用了不存在表位的错句。所以每颗 lambda 一份现场（<see cref="Scout"/>），落地时才延长这一份。</para></summary>
     readonly IReadOnlyList<NavigationJoin> _navigation;
 
+    /// <summary>会话的那颗并发闸（<see cref="SessionGate"/>，2026-10-30 落地、EF Core 的
+    /// <c>ConcurrencyDetector</c> 同一条语义）。null 就是根链 —— 根链没有会话，不进闸。
+    /// 闸口收在七个公开执行口上（List/Array/Capped/Aggregate/Any/Paged/Stream），
+    /// 内部路径（私有 <c>Rows</c>、<c>QueryInBatchesAsync</c>、<c>TotalCount</c>）都不再进闸，
+    /// 所以闸内嵌套不存在 —— 拆分 include 的子读与分页的 count 都在同一个被闸住的操作里发生。</summary>
+    readonly SessionGate? _gate;
+
     public QueryEngine(QuickSqlOrm orm, QueryModel model, ChangeTracker? tracker = null,
         IReadOnlyList<Type>? ignoredFilters = null, GroupingShape? grouping = null,
-        IReadOnlyList<NavigationJoin>? navigation = null)
+        IReadOnlyList<NavigationJoin>? navigation = null, SessionGate? gate = null)
     {
         Orm = orm;
         Model = model;
@@ -89,6 +96,7 @@ sealed class QueryEngine
         _ignoredFilters = ignoredFilters;
         _grouping = grouping;
         _navigation = navigation ?? [];
+        _gate = gate;
         _tables = [.. model.Tables.Select(t => t.Table.Name)];
         _cluster = DataSourceRouting.ClusterOf(model.Root.Table);
     }
@@ -97,7 +105,17 @@ sealed class QueryEngine
 
     public QueryModel Model { get; }
 
-    public QueryEngine Derive(QueryModel next) => new(Orm, next, _tracker, _ignoredFilters, _grouping, _navigation);
+    /// <summary>会话的并发闸（可为 null —— 根链没有会话）。<see cref="DbSet{T}.Load"/> 那条补载路
+    /// 不经七个执行口（它直接走 <see cref="QueryInBatchesAsync"/>），所以由 <c>DbSet</c> 在
+    /// <c>LoadAsync</c> 入口自行进闸；内部其余路径一律不摸这一格，闸内无嵌套。</summary>
+    internal SessionGate? Gate => _gate;
+
+    /// <summary>这条链上被点名跳过的过滤器清单（null = 没点过名）。合并链的形状守卫读它：
+    /// 过滤器名单不进模型，落在腿上的 IgnoreQueryFilters 在合并之后会被外层过滤器静默压掉 ——
+    /// 守卫探到它就拒，不给"点了名却不生效"的暗门。</summary>
+    internal IReadOnlyList<Type>? IgnoredFilters => _ignoredFilters;
+
+    public QueryEngine Derive(QueryModel next) => new(Orm, next, _tracker, _ignoredFilters, _grouping, _navigation, _gate);
 
     /// <summary>分组那一步专用：模型与形状同时换。<b>不写成 <c>Derive(next) with grouping</c></b>——
     /// 形状在引擎上而不在模型上，派生一次只会把刚立起来的分组丢掉。</summary>
@@ -144,8 +162,30 @@ sealed class QueryEngine
         var scout = Scout(Model);
         var plan = Orm.Projections.Translate(projector, Binding(projector, scout));
 
+        // 分组链与 DISTINCT 两格各拦一句：它们都是"发得出去、绿得动、而答案是错的"那一型，不是翻译不出来。
+        // 判在翻译之后：形状先照读侧同一条尺子翻（§5.5），翻完才知道选列里有没有 OVER。
+        if (Model.GroupBy.Count > 0 && WindowGuard.HasRowNumber(plan))
+            throw RowNumberOnGroupedChain();
+
+        if (Model.Distinct && WindowGuard.HasRowNumber(plan))
+            throw DistinctWithRowNumber();
+
         return Advanced(scout, Model with { Plan = plan });
     }
+
+    /// <summary>分组链的投影位不落行号。库的规矩是 <c>OVER</c> 的键要么本身是组级表达式、要么进 <c>GROUP BY</c>，
+    /// 而这两半在本库今天都没有判据可分（发出去得到的是"能执行、数的范围却不对"的那一句），所以整格停住。</summary>
+    static QuickSqlException RowNumberOnGroupedChain() => new(
+        "分组链的投影里不落行号：OVER 的键要么写成组级表达式、要么进 GROUP BY，而这一格本库不替你猜要哪一半——" +
+        "猜错的那一半是一句能执行、数的范围却不对的句子（§5.8）。" +
+        "组内编号今天走 WithSql 或原生 SQL（文档站 14 篇）；组与组之间排号请用分组之后的 OrderBy。");
+
+    /// <summary>DISTINCT 与行号同框的拒绝。两个书写顺序（先 Distinct 后 Select ∶ 先 Select 后 Distinct）
+    /// 拿到的是同一句话，所以这一颗被 <see cref="Project"/> 与 <see cref="Distinct"/> 各调一次。</summary>
+    static QuickSqlException DistinctWithRowNumber() => new(
+        "DISTINCT 与行号不同框：行号把每一行都变成唯一行，DISTINCT 因此在库里静默变成空操作——" +
+        "去重一次都没发生，而一句报错也不会有（§5.8 禁的正是这一格）。" +
+        "要真去重就别把行号选进来；要先去重再编号，把内层那句交 WithSql 或走原生 SQL（文档站 14 篇）。");
 
     /// <summary>分组（§5.3）。键的表达式落进 <see cref="QueryModel.GroupBy"/>（那是 SQL 侧的真相，
     /// <c>Explain()</c> 的文本里有它），而「<c>g.Key</c> 怎么落回去」这份 CLR 侧的对照表留在引擎的
@@ -181,6 +221,9 @@ sealed class QueryEngine
         {
             var key = Orm.Expressions.Visit(body, scope);
 
+            // 分组键那一格与谓词位同一条闸门：行号是"算完全部行才有"的值，而 GROUP BY 问的正是"按什么分行"。
+            WindowGuard.RejectRowNumber(key, "GROUP BY 的键");
+
             return Advanced(scout, Model with { GroupBy = [key] }, new GroupingShape(table, key, null));
         }
 
@@ -190,6 +233,8 @@ sealed class QueryEngine
         foreach (var (name, expression) in members)
         {
             var node = Orm.Expressions.Visit(expression, scope);
+
+            WindowGuard.RejectRowNumber(node, "GROUP BY 的键");
 
             keys.Add(node);
             map[name] = node;
@@ -339,7 +384,14 @@ sealed class QueryEngine
 
     public QueryEngine Take(int count) => Derive(Model with { Limit = count });
 
-    public QueryEngine Distinct() => Derive(Model with { Distinct = true });
+    public QueryEngine Distinct()
+    {
+        // 写在 Select 之后那一头的写法在这里判，写在 Select 之前那一头的由 Project 那一句接住。
+        if (WindowGuard.HasRowNumber(Model.Plan))
+            throw DistinctWithRowNumber();
+
+        return Derive(Model with { Distinct = true });
+    }
 
     /// <summary><c>AsNoTracking()</c> 的落点：<b>模型一个字都不改，只把手里那份会话松开</b>。
     /// 所以它产出的是「同一条查询的无跟踪视图」而不是「另一条查询」—— §8.3 那句「前两行只差一个标记位」
@@ -364,7 +416,7 @@ sealed class QueryEngine
 
         Orm.Filters.AssertIgnorable(Model.Tables, ignored);
 
-        return new QueryEngine(Orm, Model, _tracker, ignored, _grouping, _navigation);
+        return new QueryEngine(Orm, Model, _tracker, ignored, _grouping, _navigation, _gate);
     }
 
     public QueryEngine Cache(string cacheKey, TimeSpan ttl) => Derive(Model with { CacheKey = cacheKey, CacheTtl = ttl });
@@ -995,7 +1047,19 @@ sealed class QueryEngine
 
     // ── 执行 ──────────────────────────────────────────────────────────
 
-    public Task<List<TResult>> ListAsync<TResult>(CancellationToken ct) => Rows<TResult>(Effective(), ct);
+    public async Task<List<TResult>> ListAsync<TResult>(CancellationToken ct)
+    {
+        _gate?.Enter();
+
+        try
+        {
+            return await Rows<TResult>(Effective(), ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            _gate?.Exit();
+        }
+    }
 
     /// <summary><see cref="ListAsync"/> 的数组形态：同一条 <see cref="Rows{TResult}"/>，只在末尾多一次整段拷贝。
     /// <b>写 <c>ToArray()</c> 而不是 <c>[.. rows]</c> 是读法上的取舍，钱上逐字相同</b>：源已经是一只
@@ -1006,16 +1070,36 @@ sealed class QueryEngine
     /// 拷贝落在这一层而不是链式对象上，为的是 "交出去的那一只不是缓存里那一只" 这件事全仓只有一处说法
     /// （缓存那格 <c>Store</c> 存的是 <c>List&lt;TResult&gt;</c> 本身，所以命中时列表口交出去的就是它）。</summary>
     public async Task<TResult[]> ArrayAsync<TResult>(CancellationToken ct)
-        => (await Rows<TResult>(Effective(), ct).ConfigureAwait(false)).ToArray();
+    {
+        _gate?.Enter();
+
+        try
+        {
+            return (await Rows<TResult>(Effective(), ct).ConfigureAwait(false)).ToArray();
+        }
+        finally
+        {
+            _gate?.Exit();
+        }
+    }
 
     /// <summary>内部行数帽（<c>First</c> 取 1、<c>Single</c> 取 2 判重复，§5.7）。帽不走 §9.4 的序策略：
     /// "任意一行"本来就是 LINQ 语义，为此要求用户补序只会变成噪音（方言侧的占位序见
     /// <c>DialectBase.EmitPagingOrdering</c>）。</summary>
-    public Task<List<TResult>> CappedAsync<TResult>(int rows, CancellationToken ct)
+    public async Task<List<TResult>> CappedAsync<TResult>(int rows, CancellationToken ct)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(rows, 1);
 
-        return Rows<TResult>(Effective() with { Limit = rows }, ct);
+        _gate?.Enter();
+
+        try
+        {
+            return await Rows<TResult>(Effective() with { Limit = rows }, ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            _gate?.Exit();
+        }
     }
 
     async Task<List<TResult>> Rows<TResult>(QueryModel model, CancellationToken ct)
@@ -1526,23 +1610,34 @@ sealed class QueryEngine
 
     async IAsyncEnumerable<TResult> Streamed<TResult>(QueryModel model, [EnumeratorCancellation] CancellationToken ct)
     {
-        Detect(model);
+        // 流式那颗闸从第一次 MoveNext 抓到枚举收尾：for-each 中途别的操作进场照样被拒，
+        // 读到一半的游标不会被另一条查询偷换连接。finally 在枚举 Dispose 那一刻放闸。
+        _gate?.Enter();
 
-        var tracker = _tracker;
-        var rows = Orm.Ado.StreamAsync(Build(model, out _), Reader<TResult>(model), Tag("stream"), ct);
-
-        // 流式与整批走同一份登记规则：一次查询在两种出口下"进没进身份映射"必须一致，
-        // 否则 foreach (var o in db.Set<T>()) 之后 Entry(o) 会问它不在会话里，而 ToListAsync 之后又在。
-        if (tracker is not null && EntityClrType(model) is { } streamedType)
+        try
         {
+            Detect(model);
+
+            var tracker = _tracker;
+            var rows = Orm.Ado.StreamAsync(Build(model, out _), Reader<TResult>(model), Tag("stream"), ct);
+
+            // 流式与整批走同一份登记规则：一次查询在两种出口下"进没进身份映射"必须一致，
+            // 否则 foreach (var o in db.Set<T>()) 之后 Entry(o) 会问它不在会话里，而 ToListAsync 之后又在。
+            if (tracker is not null && EntityClrType(model) is { } streamedType)
+            {
+                await foreach (var row in rows.WithCancellation(ct).ConfigureAwait(false))
+                    yield return (TResult) tracker.TrackEntity(row!, streamedType);
+
+                yield break;
+            }
+
             await foreach (var row in rows.WithCancellation(ct).ConfigureAwait(false))
-                yield return (TResult) tracker.TrackEntity(row!, streamedType);
-
-            yield break;
+                yield return row;
         }
-
-        await foreach (var row in rows.WithCancellation(ct).ConfigureAwait(false))
-            yield return row;
+        finally
+        {
+            _gate?.Exit();
+        }
     }
 
     // ── 跟踪接缝（§8.2） ───────────────────────────────────────────
@@ -1578,12 +1673,21 @@ sealed class QueryEngine
     /// 的高频事故在这里不可能复现。</summary>
     public async Task<T> AggregateAsync<T>(AggregateKind kind, LambdaExpression? key, CancellationToken ct)
     {
-        var model = AggregateModel(Effective(), kind, key);
+        _gate?.Enter();
 
-        // 聚合查询恒定返回一行（COUNT/SUM/MIN 都是如此），所以"零行"不是空结果而是实现或方言错误。
-        // 报出来比给 default 好：给 0 会让一个漏了 GROUP BY 的聚合看起来像"确实没有数据"。
-        return await Orm.Ado.FirstAsync(Build(model, out _), Reader<T>(model), Tag(kind.ToString().ToLowerInvariant()), ct).ConfigureAwait(false)
-               ?? throw new QuickSqlException($"{kind} 的聚合查询没有返回任何行：聚合恒定一行，这是方言发射或模型派生的缺陷，不是空结果集。");
+        try
+        {
+            var model = AggregateModel(Effective(), kind, key);
+
+            // 聚合查询恒定返回一行（COUNT/SUM/MIN 都是如此），所以"零行"不是空结果而是实现或方言错误。
+            // 报出来比给 default 好：给 0 会让一个漏了 GROUP BY 的聚合看起来像"确实没有数据"。
+            return await Orm.Ado.FirstAsync(Build(model, out _), Reader<T>(model), Tag(kind.ToString().ToLowerInvariant()), ct).ConfigureAwait(false)
+                   ?? throw new QuickSqlException($"{kind} 的聚合查询没有返回任何行：聚合恒定一行，这是方言发射或模型派生的缺陷，不是空结果集。");
+        }
+        finally
+        {
+            _gate?.Exit();
+        }
     }
 
     public Task<int> CountAsync(CancellationToken ct) => AggregateAsync<int>(AggregateKind.Count, null, ct);
@@ -1605,17 +1709,26 @@ sealed class QueryEngine
     /// 旧版那句「COUNT(*) &gt; 0，语义对但没到最优」的记账到此结清。</para></summary>
     public async Task<bool> AnyAsync(CancellationToken ct)
     {
-        var model = Effective() with
+        _gate?.Enter();
+
+        try
         {
-            Plan = new ValueProjection(new InlineLiteral("1"), typeof(int)),
-            Ordering = [],
-            Limit = 1,
-        };
+            var model = Effective() with
+            {
+                Plan = new ValueProjection(new InlineLiteral("1"), typeof(int)),
+                Ordering = [],
+                Limit = 1,
+            };
 
-        // int? 那一档是判据本身：FirstAsync 对空集交回 default，只有可空型才分得开"没有行"与"值为 1 的那一行"。
-        var row = await Orm.Ado.FirstAsync(Build(model, out _), Reader<int?>(model), Tag("any"), ct).ConfigureAwait(false);
+            // int? 那一档是判据本身：FirstAsync 对空集交回 default，只有可空型才分得开"没有行"与"值为 1 的那一行"。
+            var row = await Orm.Ado.FirstAsync(Build(model, out _), Reader<int?>(model), Tag("any"), ct).ConfigureAwait(false);
 
-        return row.HasValue;
+            return row.HasValue;
+        }
+        finally
+        {
+            _gate?.Exit();
+        }
     }
 
     public Task<TResult> SumAsync<TResult>(LambdaExpression key, CancellationToken ct) => AggregateAsync<TResult>(AggregateKind.Sum, key, ct);
@@ -1699,6 +1812,23 @@ sealed class QueryEngine
         if (size <= 0)
             throw new ArgumentOutOfRangeException(nameof(size), "页大小必须为正：0 会写成 FETCH NEXT 0 ROWS，读回来是空页而不是全量。");
 
+        _gate?.Enter();
+
+        try
+        {
+            return await PagedCore<TResult>(page, size, options, ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            _gate?.Exit();
+        }
+    }
+
+    /// <summary><see cref="PagedAsync{TResult}(int,int,PagedOptions,CancellationToken)"/> 的本体：取页行与
+    /// 探下一页（必要时再补一记 count）都在这一段里发生，闸门罩住的是它 —— 参数校验留在闸外，那是
+    /// 调用方的错，不是一次操作。</summary>
+    async Task<PagedResult<TResult>> PagedCore<TResult>(int page, int size, PagedOptions? options, CancellationToken ct)
+    {
         var source = Effective();
         var method = Resolve(page, options?.CountMethod ?? CountMethod.Auto);
 
