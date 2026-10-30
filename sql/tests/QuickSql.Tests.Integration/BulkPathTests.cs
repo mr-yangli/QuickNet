@@ -1,5 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
+using MySqlConnector;
 using QuickSql.Aop;
 using QuickSql.Metadata;
 using QuickSql.Providers;
@@ -121,22 +122,25 @@ public sealed class BulkPathTests
     [Fact]
     public async Task The_local_infile_gate_moves_the_batch_to_l3_and_names_the_parameter_it_needs()
     {
-        // 这一条用的是缝给的**原始**那一颗串（不补 AllowLoadLocalInfile），判的是"闸门在选层之前就把这一家
+        // 这一条显式关闭 AllowLoadLocalInfile，判的是"闸门在选层之前就把这一家
         // 挪到 L3"，而不是"驱动在执行当场抛 NotSupportedException"（那句是补参数之前对照量具第一趟的红）。
-        // 原始串与补好的串是同一台实例、同一座库、同一批表，差的只有那颗客户端开关 —— 分岔的出处
-        // 写在 Database.BulkConnectionString 的抬头。
+        // 与启用后的串是同一台实例、同一座库、同一批表，差的只有那颗客户端开关；本机配置可默认启用它。
         Database.Ready();
         Assert.SkipWhen(Database.Family != Database.Target.MySql,
             $"{Database.Family} 这一家的装载通道不欠连接串参数（MySQL 血统走 LOAD DATA LOCAL 才要客户端放行），" +
             "这一格在本家没有对象；通道本身由下面那几条判。");
 
+        var noLocalInfile = new MySqlConnectionStringBuilder(Database.ConnectionString)
+        {
+            AllowLoadLocalInfile = false,
+        }.ConnectionString;
         var note = tag("no-infile");
         var seen = new List<BulkDegradedEvent>();
         var aop = new QuickSqlAop();
 
         aop.BulkDegraded = seen.Add;
 
-        var report = await Database.OrmWith(aop).InsertRange(rows(note, 5))
+        var report = await Database.OrmWith(aop, connectionString: noLocalInfile).InsertRange(rows(note, 5))
             .ExecuteBulkAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(BulkMethod.MultiValue, report.Method);
@@ -158,7 +162,7 @@ public sealed class BulkPathTests
 
         // 同一条请求在 Never 那一档要响，而且响的话与留痕的那句是同一句（Never 不给"悄悄退一层"留余地）。
         var refused = await Assert.ThrowsAsync<QuickSqlException>(
-            async () => await Database.OrmWith().InsertRange(rows(tag("no-infile-never"), 2))
+            async () => await Database.OrmWith(connectionString: noLocalInfile).InsertRange(rows(tag("no-infile-never"), 2))
                 .WithBulk(BulkMethod.CopyChannel, FallbackPolicy.Never)
                 .ExecuteBulkAsync(TestContext.Current.CancellationToken));
 

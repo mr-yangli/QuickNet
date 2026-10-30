@@ -197,8 +197,10 @@ static class Database
 
     static string WithLocalInfile(string value)
     {
-        if (value.Contains("AllowLoadLocalInfile", StringComparison.OrdinalIgnoreCase)
-            || value.Contains("UseLocalInfile", StringComparison.OrdinalIgnoreCase))
+        if (value.Contains("AllowLoadLocalInfile", StringComparison.OrdinalIgnoreCase))
+            return Regex.Replace(value, "(?i)(^|;)AllowLoadLocalInfile\\s*=\\s*[^;]*", "$1AllowLoadLocalInfile=true");
+
+        if (value.Contains("UseLocalInfile", StringComparison.OrdinalIgnoreCase))
             return value;
 
         return value.TrimEnd(';', ' ') + ";AllowLoadLocalInfile=true";
