@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- Dashboard 挂 aspnetcore 共享框架：不算第三方 NuGet 依赖（框架自带），家规「核心只依赖
+         DI Abstractions」仍然成立 —— 本包只加这颗 FrameworkReference，不引任何 ASP.NET 包。 -->
+    <Description>QuickJob 看板：内置登录（OpenID Connect / 通用 OAuth2，cookie 会话）、任务注册表、等待/在跑队列、执行历史与操作端点，单文件嵌入 UI（无静态文件目录）。</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\QuickJob\QuickJob.csproj" />
+  </ItemGroup>
+
+  <!-- EventRing.Wire / QuickJobDashboardOptions.MountRoot 是内部面：测试套件直接驱动它们。 -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="QuickJob.Tests" />
+  </ItemGroup>
+
+</Project>

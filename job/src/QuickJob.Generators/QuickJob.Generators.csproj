@@ -1,0 +1,47 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- 源生成器跑在编译器进程里，只能 netstandard2.0。根 props 的「netstandard2.0 就关掉
+         trim/AOT 分析器」那条开关救不了这里：Directory.Build.props 先于本文件的
+         TargetFramework 求值，那时它还是空的，NETSDK1210 会直接变成错误，所以四个值在这里显式压掉。 -->
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <IsAotCompatible>false</IsAotCompatible>
+    <EnableTrimAnalyzer>false</EnableTrimAnalyzer>
+    <EnableSingleFileAnalyzer>false</EnableSingleFileAnalyzer>
+    <EnableAotAnalyzer>false</EnableAotAnalyzer>
+    <!-- LangVersion 从根 props 继承来的 preview 在 netstandard2.0 生成器上没问题（编译器是编译我们
+         的那颗 SDK），但生成器输出要写 netstandard2.0 稳定语法，这里只声明我们自己的档位。 -->
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>QuickJob.Generators</RootNamespace>
+    <Description>[QuickJob] 静态方法的编译期登记生成器：五种 handler 形状校验、Cron/时长文本预检，发射 [ModuleInitializer] 调 PendingRegistrations.Add —— 零反射、AOT 干净。</Description>
+    <EnforceExtendedAnalyzerRules>true</EnforceExtendedAnalyzerRules>
+    <IsRoslynComponent>true</IsRoslynComponent>
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <!-- IncludeBuildOutput=false ⇒ lib/ 是空的，而 nuspec 仍按 netstandard2.0 点了一颗依赖组，
+         NU5128 说的就是这一格对不上（仓库上游 TreatWarningsAsErrors 家规）。生成器没有运行期
+         依赖要声明（两颗 Roslyn 包是 PrivateAssets=all 的编译期件），压掉依赖组而不是补一颗假 lib。 -->
+    <SuppressDependenciesWhenPacking>true</SuppressDependenciesWhenPacking>
+  </PropertyGroup>
+
+  <!-- RS2008（分析器必须登记发布跟踪）在仓库上游 TreatWarningsAsErrors 下是错误。
+       这里登记七条诊断：ID 一对外公布就改不动了，所以先写清楚。 -->
+  <ItemGroup>
+    <AdditionalFiles Include="AnalyzerReleases.Shipped.md" />
+    <AdditionalFiles Include="AnalyzerReleases.Unshipped.md" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.CodeAnalysis.Analyzers" PrivateAssets="all" />
+  </ItemGroup>
+
+  <!-- 生成器不引用 QuickJob 运行时程序集：产出的代码里一律写 global:: 全名。
+       不引用就不会把「生成器版本」与「运行时版本」锁成一对，那是 NuGet 上最难解的组合。 -->
+
+  <!-- IncludeBuildOutput=false 让 lib/ 那一格是空的，所以打包必须显式点这一颗：
+       生成器 dll 走 analyzer/dotnet/cs，不然发出去的是一份只有 nuspec 的空包。 -->
+  <ItemGroup>
+    <None Include="$(TargetPath)" Pack="true" PackagePath="analyzers/dotnet/cs" Visible="false" />
+  </ItemGroup>
+
+</Project>

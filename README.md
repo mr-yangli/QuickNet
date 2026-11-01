@@ -1,6 +1,6 @@
 # QuickNet
 
-基于 **.NET 10** 的四个独立库的同仓集合：**QuickSql**（多数据库 ORM）、**QuickExcel**（.xlsx 导入导出）及其姊妹库 QuickWord / QuickPdf（.docx 与 PDF）。四库**互相零引用**、各自零第三方依赖（QuickSql 仅依赖 Microsoft.Extensions.DependencyInjection.Abstractions），全程流式处理，MIT 协议。
+基于 **.NET 10** 的五个独立库的同仓集合：**QuickSql**（多数据库 ORM）、**QuickExcel**（.xlsx 导入导出）及其姊妹库 QuickWord / QuickPdf（.docx 与 PDF），以及 **QuickJob**（任务调度）。五库**互相零引用**、各自零第三方依赖（QuickSql 与 QuickJob 仅依赖 Microsoft.Extensions.DependencyInjection.Abstractions），全程流式处理，MIT 协议。
 
 | 库 | NuGet | 一句话 |
 | --- | --- | --- |
@@ -8,6 +8,7 @@
 | **QuickExcel** | `QuickExcel` | 高性能 .xlsx 流式导入导出：DataAnnotations 验证、图片、模板填充 |
 | **QuickWord** | `QuickWord` | .docx 表格导出 + 文档读回 + 不改版式填模板 |
 | **QuickPdf** | `QuickPdf` | PDF 报表导出：CJK 字体嵌入、续页表头、可选中可复制的真实文本 |
+| **QuickJob** | `QuickJob` + `QuickJob.Generators` + `QuickJob.Dashboard` | 定时任务/后台作业调度：cron + interval + 一次性 + 按需四类 job，重试/并发门/重叠档，[QuickJob] 编译期登记，OAuth 登录仪表盘 |
 
 > 全家均为 `-beta` 预发布档：`dotnet add package` 需带 `--prerelease`，或在 `PackageReference` 里写死版本号。
 
@@ -137,6 +138,50 @@ Pdf.SaveAs("multi.pdf", new List<PdfSheet> { new("员工", staff), new("字典",
 
 📚 [QuickPdf 使用文档](pdf/docs/quickpdf-usage.md)
 
+## QuickJob — 任务调度
+
+```bash
+dotnet add package QuickJob --prerelease
+dotnet add package QuickJob.Generators --prerelease   # [QuickJob] 特性路需要
+```
+
+```csharp
+using QuickJob;
+
+// 路 1：[QuickJob] 特性 —— 生成器编译期登记（零反射、AOT 干净）
+public sealed class Housekeeping
+{
+    [QuickJob("daily-roll", Cron = "0 2 * * *",
+              MaxRetries = 2, OnOverlap = OverlapPolicy.Skip)]
+    public static async Task Roll(CancellationToken ct) => await DayRoller.RollAsync(ct);
+}
+
+// 路 2：DSL 现场挂名 —— 两种登记产出同一定义，dashboard/store 同构
+var scheduler = QuickJobScheduler.Create(b =>
+{
+    b.Interval("beat", TimeSpan.FromSeconds(30),
+        ctx => { ctx.Report("flat pulse"); return ValueTask.CompletedTask; });
+    b.OnDemand("invoice", async ctx =>
+    {
+        var order = await ctx.PayloadAs<InvoiceOrder>()!;   // payload = UTF-8 JSON
+        await Invoicer.IssueAsync(order, ctx.Token);
+    }, o => { o.MaxRetries = 4; o.RetryBackoff = RetryBackoff.Exponential; });
+});
+
+await scheduler.StartAsync();
+var (accepted, runId) = await scheduler.TriggerNowAsync("invoice", new InvoiceOrder(7));
+await scheduler.StopAsync();
+```
+
+- 四类 job 一家收：cron（5–7 字段、命名月周日、@daily 别名、按时区壁钟游走）/ interval 固定步长 / once 指定时刻 / on-demand 纯接待
+- 重试四件套：`MaxRetries` × `Fixed/Linear/Exponential` × 基阶/上钳 × 抖动；同一 ExecutionId、Attempt 递增，走尽才终局
+- 并发门按 job 一颗：`MaxConcurrentPerJob` + `Skip/Queue/RunAnyway`（默认串行+跳），外加 scheduler 级 `MaxParallelism` 与三级优先
+- 迟到档策略齐活： soaked `RunWithinGrace`（默认 5min）/ `SkipLate` / `CatchUpLatest`，夏令时拨快不炸、回拨不重复
+- Dashboard 挂件：`/quickjob` 挂载、环表 200 条事件窗、OAuth 登录档（`DashboardAuthMode.OAuth2`）、`ReadOnly` 关闸
+- 全引擎两个接缝：`Time`（TimeProvider，一切定时与重试延迟的出处）+ `Store`（IJobStore，默认内存库存、历史环 2000）——换假钟推测试永确定性
+
+📚 [QuickJob 使用文档](job/docs/quickjob-usage.md)
+
 ---
 
 ## 开发
@@ -149,6 +194,7 @@ dotnet build Quick.slnx
 dotnet test excel/tests/QuickExcel.Tests
 dotnet test word/tests/QuickWord.Tests
 dotnet test pdf/tests/QuickPdf.Tests
+dotnet test job/tests/QuickJob.Tests
 
 # QuickSql 测试（离线方言册：构建后直接运行 exe）
 dotnet build sql/tests/QuickSql.Tests.Dialects

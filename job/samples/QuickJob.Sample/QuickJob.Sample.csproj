@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- TFM/LangVersion/Nullable/ImplicitUsings 见 job/Directory.Build.props -->
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>QuickJob.Sample</RootNamespace>
+    <Description>QuickJob 示例：[QuickJob] 特性（生成器编译期登记）与 DSL 双路登记同一调度器，演示定时拍、手动触发、重试与事件流。</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\QuickJob\QuickJob.csproj" />
+    <!-- [QuickJob] 特性的编译期登记走生成器 —— 示例工程按 analyzer 挂进来。 -->
+    <ProjectReference Include="..\..\src\QuickJob.Generators\QuickJob.Generators.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="true" />
+  </ItemGroup>
+
+</Project>

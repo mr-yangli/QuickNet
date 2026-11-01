@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- TFM/LangVersion/Nullable/ImplicitUsings 见 job/Directory.Build.props -->
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+
+    <PackageId>QuickJob</PackageId>
+    <Description>Zero-dependency high-performance job scheduler for .NET 10: cron + interval recurring jobs, one-shot timers, background queue, retries, per-function concurrency gates and overlap policies. Compile-time registration via the companion QuickJob.Generators analyzer (zero reflection, AOT-clean). In-memory by design, with an IJobStore seam for later node coordination.</Description>
+    <PackageTags>jobs;scheduler;cron;background-tasks;retries;dotnet10</PackageTags>
+    <RepositoryType>git</RepositoryType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 与 QuickSql.Core 唯一的依赖画像保持一致：只 DI 抽象，不引实现，repos 端不替宿主选容器。 -->
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+  </ItemGroup>
+
+</Project>

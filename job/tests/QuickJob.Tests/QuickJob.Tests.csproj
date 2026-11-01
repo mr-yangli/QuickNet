@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- TFM/LangVersion/Nullable/ImplicitUsings 见 job/Directory.Build.props -->
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+    <!-- 生成器的内存编译测试直接驱动 Roslyn API，版本与生成器同基线（CPM 里那颗 4.14.0）。 -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\QuickJob\QuickJob.csproj" />
+    <ProjectReference Include="..\..\src\QuickJob.Dashboard\QuickJob.Dashboard.csproj" />
+    <!-- 生成器按 analyzer 挂进来，测试用 Roslyn 内存编译直接驱动 ISourceGenerator。 -->
+    <ProjectReference Include="..\..\src\QuickJob.Generators\QuickJob.Generators.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="true" />
+  </ItemGroup>
+
+</Project>

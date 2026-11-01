@@ -1,0 +1,21 @@
+<Project>
+
+  <!-- job/ 子树的集中包管理（CPM）。src/QuickJob 只依赖 DI 抽象（与 QuickSql.Core 同一条家规：
+       只 Abstractions，不引实现容器——src/ 不替宿主选容器）。生成器两颗 Roslyn 是编译期件
+       （PrivateAssets=all），版本基线与 sql/src/QuickSql.Generators 同一口径：低于本 SDK 自带的
+       Roslyn 才安全。xunit 四件套与 pdf/ 同一族（2.9.x），sql 的 v3 系只属于 sql 测试那家。 -->
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageVersion Include="Microsoft.CodeAnalysis.Analyzers" Version="3.11.0" />
+    <PackageVersion Include="Microsoft.CodeAnalysis.CSharp" Version="4.14.0" />
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="9.0.0" />
+    <PackageVersion Include="coverlet.collector" Version="6.0.4" />
+    <PackageVersion Include="xunit" Version="2.9.3" />
+    <PackageVersion Include="xunit.runner.visualstudio" Version="3.1.4" />
+  </ItemGroup>
+
+</Project>

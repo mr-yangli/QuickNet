@@ -6,6 +6,12 @@
     <Project Path="sql/src/QuickSql.Abstractions/QuickSql.Abstractions.csproj" />
     <Project Path="sql/src/QuickSql.Core/QuickSql.Core.csproj" />
     <Project Path="sql/src/QuickSql.Generators/QuickSql.Generators.csproj" />
+    <!-- 第五家（本笔）：调度库 QuickJob —— 引擎本体。
+         [QuickJob] 特性走生成器编译期登记（零反射、AOT 干净）；库存默认内存（IJobStore 缝留给节点盘）；
+         仪表盘挂件独立成包（OAuth 档），本族与 sql 家共同的「依赖画像单行注」风格在这里只指 DI 抽象一颗。 -->
+    <Project Path="job/src/QuickJob/QuickJob.csproj" />
+    <Project Path="job/src/QuickJob.Generators/QuickJob.Generators.csproj" />
+    <Project Path="job/src/QuickJob.Dashboard/QuickJob.Dashboard.csproj" />
     <!-- 方言族：SqlServer（单层） -->
     <Project Path="sql/src/QuickSql.Providers.SqlServer/QuickSql.Providers.SqlServer.csproj" />
     <!-- 方言族：PostgreSQL（血统 + 五叶 + 本尊） -->
@@ -46,6 +52,7 @@
     <Project Path="excel/tests/QuickExcel.Tests/QuickExcel.Tests.csproj" />
     <Project Path="word/tests/QuickWord.Tests/QuickWord.Tests.csproj" />
     <Project Path="pdf/tests/QuickPdf.Tests/QuickPdf.Tests.csproj" />
+    <Project Path="job/tests/QuickJob.Tests/QuickJob.Tests.csproj" />
     <Project Path="sql/tests/QuickSql.Tests.Dialects/QuickSql.Tests.Dialects.csproj" />
     <Project Path="sql/tests/QuickSql.Tests.Integration/QuickSql.Tests.Integration.csproj" />
   </Folder>
@@ -54,6 +61,7 @@
     <Project Path="excel/samples/QuickExcel.Sample/QuickExcel.Sample.csproj" />
     <Project Path="word/samples/QuickWord.Sample/QuickWord.Sample.csproj" />
     <Project Path="pdf/samples/QuickPdf.Sample/QuickPdf.Sample.csproj" />
+    <Project Path="job/samples/QuickJob.Sample/QuickJob.Sample.csproj" />
   </Folder>
   <Folder Name="/benchmarks/">
     <Project Path="excel/benchmarks/QuickExcel.Benchmarks/QuickExcel.Benchmarks.csproj" />

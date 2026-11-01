@@ -1,0 +1,29 @@
+<Project>
+
+  <!-- 接回仓库根那一棵（作者 / 许可 / 工程页 / 仓库地址五家共用）；顺序不能反过来。 -->
+  <Import Project="..\Directory.Build.props" />
+
+  <!-- job/ 子树闸门。与 pdf/excel/word 同形状（TFM / 语言 / 可空性）；刻意不带 sql 的
+       TreatWarningsAsErrors + trim/AOT 分析器（理由见 excel/Directory.Build.props 头注）。
+       本库本体虽走源生成器登记（零反射），但调度器线程一路与 Dashboard 的 aspnetcore 墙
+       都不适合在第一版就开始和告警闸门较劲——先把调度内核写对。 -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>preview</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <!-- NuGet 打包元数据里本子树独有的那三颗。版本从 0.1.0-beta.1 起（预发布档），
+       理由见 excel/Directory.Build.props 那段注释。 -->
+  <PropertyGroup>
+    <Version>0.1.0-beta.1</Version>
+    <PackageReadmeFile>quickjob-usage.md</PackageReadmeFile>
+    <PackageTags>jobs;scheduler;cron;background-tasks</PackageTags>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="$(MSBuildThisFileDirectory)docs/quickjob-usage.md" Pack="true" PackagePath="/" Visible="false" />
+  </ItemGroup>
+
+</Project>
