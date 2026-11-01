@@ -16,8 +16,10 @@ static class DashboardEndpoints
         EventRing ring,
         bool authWall)
     {
-        // ---- 页面（壳；数据全部走下面的 JSON API）
-        app.MapGet(root, () => Results.Text(DashboardAssets.Html, "text/html; charset=utf-8"));
+        // ---- 页面（壳；数据全部走下面的 JSON API）。
+        // @ROOT@ 由 JS 侧 fetch 面认领 —— 看板不再要求挂根 "/"；壳整页只替换一次。
+        var page = DashboardAssets.Html.Replace("@ROOT@", root);
+        app.MapGet(root, () => Results.Text(page, "text/html; charset=utf-8"));
 
         // ---- 登录面（非匿名档才有）
         if (authWall)

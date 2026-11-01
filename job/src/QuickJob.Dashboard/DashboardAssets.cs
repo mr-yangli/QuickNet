@@ -19,6 +19,10 @@ internal static class DashboardAssets
             --ink: #d7dee9; --dim: #8b97a8; --acc: #4cc38a; --warn: #e3b341; --err: #f85149; --link: #58a6ff;
             font-size: 14px;
           }
+          :root[data-theme="light"] {
+            --bg: #ffffff; --panel: #f6f8fa; --panel2: #eef1f5; --line: #d0d7de;
+            --ink: #1f2328; --dim: #656d76; --acc: #1a7f37; --warn: #9a6700; --err: #cf222e; --link: #0969da;
+          }
           * { box-sizing: border-box; }
           body { margin: 0; background: var(--bg); color: var(--ink); font-family: "Segoe UI", system-ui, sans-serif; }
           header { display: flex; align-items: center; gap: 14px; padding: 10px 18px; background: var(--panel); border-bottom: 1px solid var(--line); }
@@ -71,6 +75,7 @@ internal static class DashboardAssets
           <span class="chip" id="conn">connecting</span>
           <span class="chip" id="who"></span>
           <span class="space"></span>
+          <button id="themebtn" title="toggle light/dark">dark</button>
           <a id="authlink" href="#"></a>
         </header>
         <main>
@@ -99,7 +104,7 @@ internal static class DashboardAssets
             <h2>Execution history</h2>
             <div style="padding: 8px 10px; display:flex; gap:8px; align-items:center;">
               <select id="jobpick"><option value="">all jobs</option></select>
-              <button onclick="history()">refresh</button>
+              <button onclick="loadHistory()">refresh</button>
             </div>
             <table id="history"><thead><tr>
               <th>Job</th><th>Outcome</th><th>Attempt</th><th>Scheduled</th><th>Started</th><th>Finished</th><th>Error / Progress</th>
@@ -125,6 +130,7 @@ internal static class DashboardAssets
         <script>
         (function () {
           "use strict";
+          var ROOT = "@ROOT@"; // 服务端发版时替换成挂载根 —— fetch 面与登录链路全走它
           var readOnly = false;
           var $ = function (id) { return document.getElementById(id); };
           var dlg = $("dlg");
@@ -141,8 +147,24 @@ internal static class DashboardAssets
           var OVERLAP = { 1: "Skip", 2: "Queue", 3: "RunAnyway" };
           var EVENTNAME = { 1: "started", 2: "completed", 3: "failed", 4: "retrying", 5: "anomaly", 6: "skipped" };
 
+          // theme: localStorage 记忆 → 首访看 prefers-color-scheme → 都没有就暗板。
+          // 按钮文案 = 可切去的模式（与 pause/resume 标签同语义）。
+          function applyTheme(t) {
+            document.documentElement.setAttribute("data-theme", t);
+            try { localStorage.setItem("qj.theme", t); } catch (e) {}
+            $("themebtn").textContent = t === "light" ? "dark" : "light";
+          }
+          var firstTheme = null;
+          try { firstTheme = localStorage.getItem("qj.theme"); } catch (e) {}
+          if (firstTheme !== "light" && firstTheme !== "dark")
+            firstTheme = (window.matchMedia && matchMedia("(prefers-color-scheme: light)").matches) ? "light" : "dark";
+          applyTheme(firstTheme);
+          $("themebtn").onclick = function () {
+            applyTheme($("themebtn").textContent === "light" ? "light" : "dark");
+          };
+
           function api(path, body) {
-            return fetch(path, body === undefined ? {} : {
+            return fetch(ROOT + path, body === undefined ? {} : {
               method: "POST",
               headers: { "content-type": "application/json" },
               body: JSON.stringify(body)
@@ -196,9 +218,9 @@ internal static class DashboardAssets
               if (!readOnly) {
                 actions =
                   '<button onclick="ui.pauseToggle(' + "'" + jsq(j.name) + "'," + (j.paused ? "1" : "0") + ')">' + (j.paused ? "resume" : "pause") + '</button> ' +
-                  '<button onclick="ui.openDialog(' + "'" + jsq(j.name) + "','trigger')">trigger</button> ' +
-                  (j.kind === 4 ? "" : '<button onclick="ui.openDialog(' + "'" + jsq(j.name) + "','schedule')">schedule once</button> ') +
-                  '<button class="danger" onclick="ui.remove(' + "'" + jsq(j.name) + ')">remove</button>';
+                  '<button onclick="ui.openDialog(' + "'" + jsq(j.name) + "','" + "trigger" + "')\">" + "trigger</button> " +
+                  (j.kind === 4 ? "" : '<button onclick="ui.openDialog(' + "'" + jsq(j.name) + "','" + "schedule" + "')\">" + "schedule once</button> ") +
+                  '<button class="danger" onclick="ui.remove(' + "'" + jsq(j.name) + '\')">remove</button>';
               }
               return "<tr>" +
                 '<td class="mono"><b>' + esc(j.name) + "</b>" + (o.description ? '<br><span class="dim">' + esc(o.description) + "</span>" : "") + "</td>" +
@@ -279,14 +301,14 @@ internal static class DashboardAssets
             });
           }
 
-          fetch("/me").then(function (r) { return r.json(); }).then(function (me) {
+          fetch(ROOT + "/me").then(function (r) { return r.json(); }).then(function (me) {
             readOnly = !!me.readOnly;
             var who = $("who"), link = $("authlink");
             if (me.authMode && me.authMode !== "Anonymous") {
               who.textContent = me.authenticated ? (me.name || "signed in") : "not signed in";
               who.className = "chip" + (me.authenticated ? " ok" : " failed");
               link.textContent = me.authenticated ? "sign out" : "sign in";
-              link.href = me.authenticated ? "/logout" : "/login";
+              link.href = ROOT + (me.authenticated ? "/logout" : "/login");
             } else {
               who.textContent = "anonymous";
             }
@@ -299,7 +321,7 @@ internal static class DashboardAssets
             setInterval(tick, 4000);
           });
 
-          window.history = loadHistory;
+          window.loadHistory = loadHistory; // history 是只读原生 History —— 严格模式赋值会抛 TypeError
 
           window.ui = {
             pauseToggle: function (job, paused) {
