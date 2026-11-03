@@ -842,9 +842,20 @@ internal sealed class Pipeline
                 hit = true;
             }
         }
-        if (!hit) _cancelled[runId] = 0; // 已 claim 未在岗：claim loop 处理
-        _ = ct;
-        return hit;
+        if (hit) return true;
+
+        // 未到站的档（定时一次 / once / 重试等待）还躺在库存里 —— 当场摘掉才算真取消，
+        // 摘不动（已被别的实例 claim）才落到 claim 端的补刀标记。
+        var dropped = await _store.DropDueRunAsync(runId, ct).ConfigureAwait(false);
+        if (dropped is { } run)
+        {
+            Interlocked.Increment(ref _stats.Cancelled);
+            await RecordDropAsync(run, "Cancelled-by-user").ConfigureAwait(false);
+            return true;
+        }
+
+        _cancelled[runId] = 0; // 已 claim 未在岗：claim loop 处理
+        return false;
     }
 
     // 诊断视图

@@ -181,7 +181,7 @@ using var tap = scheduler.Events.Observe(e =>
 | `Remove(name)` | 摘 job（定义 + 存档契约同去，已在飞 run 走自然收音） |
 | `Pause` / `Resume` | 泻放键（slot 不等也不丢，被打标的档跳过） |
 | `ListJobs()` | 定义面快照 |
-| `PendingRuns()` / `RunningRuns()` | 队列面 / 在飞面（dashboard 同源） |
+| `PendingRuns()` / `RunningRuns()` | 队列面 / 在飞面（dashboard 同源）；**未到站**的档不在这里，在库存的 due 队列（`IJobStore.PeekDueRunsAsync` 可选面） |
 | `Stats` | `QuickJobStats`：started / completed / failed / retried / skipped / cancelled / pending / running |
 | `Diagnostics` | 出怪异时给一条字符串（如 claim 失败、定义 unreadable） |
 
@@ -202,6 +202,8 @@ app.MapQuickJobDashboard();                       // 默认挂在 /quickjob，UI
 ```
 
 - 首页即可观看：`/stats`、`/jobs`、`/runs/pending`、`/runs/running`、`/executions`、`/events`、`/me`；事件窗取环表 200 条。
+- 待跑面两条来源：已到站卡在并发门上的（`PendingRuns()`）＋未到站的（库存 due 队列，走 `PeekDueRunsAsync`，行尾标「未到站」）。cron/interval 的下一槽不预置进库存，所以这里只见 定时一次 / once / 入队 / 重试等待 这类真·未来档。「丢弃」对未到站的档当场摘除并记 `Skipped:Cancelled-by-user`；自研库存不实现这两面也无妨 —— 面板只是少这一列。
+- 弹窗：点遮罩即关；弹窗开着时外侧整页钉死，滚动条占宽垫回不跳版。
 - 鉴权：`DashboardAuthMode` = `Anonymous`（默认）或 `OAuth2`（ClientId/Secret/三腔 endpoint + `UserIsAllowed` 裁员 + 8h 会话）。`ReadOnly` 关掉手动触发面的写入端。
 - 静态挂载可换根：`o.PathPrefix = "/ops/jobs"`。
 - 任务行「详情」弹定义快照（调度/时区/并发/重叠/优先级/超时/宽限/重试体系）与最近 20 条运行。特性档（`[QuickJob]`）带「声明来源」＝ 命名空间.类.方法（生成器编译期搬进登记），DSL 登记的任务标 DSL。

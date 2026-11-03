@@ -109,8 +109,9 @@ public sealed record ExecutionQuery
 /// <summary>
 /// The scheduler-facing seam for persistence and cross-instance coordination. The in-memory
 /// implementation ships in this package; a node-coordinated implementation (SQLite / SQL Server) is
-/// a matter of implementing the same five verbs. Preserve these shapes when implementing it:
-/// the claim (PutDueRun → ClaimDueRuns → FinishLease) is where cross-node CAS lives.
+/// a matter of implementing the same five verbs — plus the two optional read/remove faces below,
+/// which the dashboard uses for runs that have not come due yet. Preserve these shapes when
+/// implementing it: the claim (PutDueRun → ClaimDueRuns → FinishLease) is where cross-node CAS lives.
 /// </summary>
 public interface IJobStore
 {
@@ -141,6 +142,17 @@ public interface IJobStore
     /// <summary>Atomically claims up to <paramref name="max"/> runs whose <see cref="StoredDueRun.DueAt"/> has arrived.
     /// A claimed run must be invisible to other claimers until lease finishes (or expires).</summary>
     ValueTask<IReadOnlyList<LeasedDueRun>> ClaimDueRunsAsync(string? instanceId, int max, CancellationToken ct = default);
+
+    /// <summary>Optional read face: runs still unclaimed, soonest due first — the dashboard's 未到站 column.
+    /// Default is an empty list, so a store that cannot answer simply shows nothing.</summary>
+    ValueTask<IReadOnlyList<StoredDueRun>> PeekDueRunsAsync(int take, CancellationToken ct = default)
+        => ValueTask.FromResult<IReadOnlyList<StoredDueRun>>([]);
+
+    /// <summary>Optional removal face: forgets an unclaimed run and hands it back so the caller can record
+    /// the drop; null when the run is absent (already claimed or gone). Default declines, which leaves
+    /// cancelling a not-yet-due run to the claim-time cancellation marker.</summary>
+    ValueTask<StoredDueRun?> DropDueRunAsync(Guid runId, CancellationToken ct = default)
+        => ValueTask.FromResult<StoredDueRun?>(null);
 
     /// <summary>Releases a lease with its outcome — the run is now history's business.</summary>
     ValueTask FinishLeaseAsync(LeasedDueRun lease, DueRunOutcome outcome, CancellationToken ct = default);

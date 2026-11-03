@@ -202,6 +202,34 @@ public class JobStoreTests
     }
 
     [Fact]
+    public async Task Peek_lists_unclaimed_soonest_first_and_drop_forgets_them()
+    {
+        var time = new FakeTimeProvider();
+        IJobStore store = NewStore(time);
+        var later = Guid.NewGuid();
+        var sooner = Guid.NewGuid();
+        var middle = Guid.NewGuid();
+        await store.PutDueRunAsync(new StoredDueRun { RunId = later, JobName = "a", DueAt = time.GetUtcNow() + TimeSpan.FromMinutes(5), Origin = JobTrigger.Scheduled });
+        await store.PutDueRunAsync(new StoredDueRun { RunId = sooner, JobName = "a", DueAt = time.GetUtcNow() + TimeSpan.FromMinutes(1), Origin = JobTrigger.Retry });
+        await store.PutDueRunAsync(new StoredDueRun { RunId = middle, JobName = "a", DueAt = time.GetUtcNow() + TimeSpan.FromMinutes(3), Origin = JobTrigger.Enqueued });
+
+        Assert.Equal([sooner, middle, later], (await store.PeekDueRunsAsync(10)).Select(r => r.RunId).ToArray()); // 最近的排前头
+        Assert.Equal([sooner, middle], (await store.PeekDueRunsAsync(2)).Select(r => r.RunId).ToArray());         // take 钳得住
+
+        var dropped = await store.DropDueRunAsync(later);
+        Assert.Equal(later, dropped?.RunId);
+        Assert.Null(await store.DropDueRunAsync(later));                                                        // 二次摘空
+        Assert.Equal([sooner, middle], (await store.PeekDueRunsAsync(10)).Select(r => r.RunId).ToArray());
+
+        time.Advance(TimeSpan.FromMinutes(2));                                                                  // 认领走的：看得见但摘不着
+        var lease = (await store.ClaimDueRunsAsync("inst", 1)).Single();
+        Assert.Equal(sooner, lease.Run.RunId);
+        Assert.Null(await store.DropDueRunAsync(sooner));
+        Assert.Equal([middle], (await store.PeekDueRunsAsync(10)).Select(r => r.RunId).ToArray());
+        await store.FinishLeaseAsync(lease, DueRunOutcome.Completed);
+    }
+
+    [Fact]
     public async Task Trim_releases_records_older_than_the_instant()
     {
         IJobStore store = NewStore(new FakeTimeProvider());

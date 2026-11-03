@@ -60,8 +60,9 @@ internal static class DashboardAssets
           button:hover { border-color: var(--acc); color: var(--acc); }
           button.danger:hover { border-color: var(--err); color: var(--err); }
           input, select { background: var(--bg); color: var(--ink); border: 1px solid var(--line); border-radius: 7px; padding: 5px 8px; font-size: 12px; }
-          dialog { background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 12px; padding: 16px; min-width: 380px; }
+          dialog { background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 12px; padding: 16px; min-width: 380px; overscroll-behavior: contain; }
           dialog::backdrop { background: rgba(0,0,0,.55); }
+          html:has(dialog[open]) { overflow: hidden; padding-right: var(--sbw, 0px); } // 弹窗开着钉死外侧滚动，--sbw 垫回滚动条宽度免跳版
           dialog h3 { margin: 0 0 10px; font-size: 14px; }
           dialog .row { margin-bottom: 10px; display: flex; gap: 8px; align-items: center; }
           dialog textarea { width: 100%; height: 90px; background: var(--bg); color: var(--ink); border: 1px solid var(--line); border-radius: 7px; font-family: Consolas, monospace; font-size: 12px; padding: 6px; }
@@ -70,6 +71,10 @@ internal static class DashboardAssets
           .errbar { color: var(--err); min-height: 18px; font-size: 12px; margin: 6px 0; }
           .events { max-height: 220px; overflow: auto; font-size: 12px; }
           .events div { padding: 3px 10px; border-bottom: 1px solid var(--line); font-family: Consolas, monospace; }
+          .history-scroll, .runs-scroll { overflow: auto; }
+          .history-scroll { max-height: 320px; }
+          .runs-scroll { max-height: 240px; }
+          .history-scroll th, .runs-scroll th { position: sticky; top: 0; background: var(--panel2); box-shadow: 0 1px 0 var(--line); }
         </style>
         </head>
         <body>
@@ -110,9 +115,9 @@ internal static class DashboardAssets
               <select id="jobpick"><option value="" data-i18n="allJobs">all jobs</option></select>
               <button onclick="loadHistory()" data-i18n="refresh">refresh</button>
             </div>
-            <table id="history"><thead><tr>
+            <div class="history-scroll"><table id="history"><thead><tr>
               <th data-i18n="thJob">Job</th><th data-i18n="thOutcome">Outcome</th><th data-i18n="thAttempt">Attempt</th><th data-i18n="thScheduled">Scheduled</th><th data-i18n="thStarted">Started</th><th data-i18n="thFinished">Finished</th><th data-i18n="thErrorProgress">Error / Progress</th>
-            </tr></thead><tbody></tbody></table>
+            </tr></thead><tbody></tbody></table></div>
           </section>
           <section>
             <h2 data-i18n="tagEvents">Event stream</h2>
@@ -162,6 +167,25 @@ internal static class DashboardAssets
           var MISSED = { 1: "msRun", 2: "msSkipLate", 3: "msCatchUp" };
           var EVENTNAME = { 1: "evStarted", 2: "evCompleted", 3: "evFailed", 4: "evRetrying", 5: "evAnomaly", 6: "evSkipped" };
 
+          // ---- 点遮罩关弹窗：::backdrop 的点击命中 dialog 自身（伪元素没有独立事件靶），dialog 自己的
+          // padding 边框带同样命中 —— 所以只认落在自身矩形之外的点，免得拖选 payload 松手在边缘把输入连框关掉。
+          function bindBackdrop(d) {
+            d.addEventListener("click", function (e) {
+              if (e.target !== d) return;
+              var r = d.getBoundingClientRect();
+              if (e.clientX < r.left || e.clientX >= r.right || e.clientY < r.top || e.clientY >= r.bottom) d.close();
+            });
+          }
+          // 滚动条占宽另测：页面此刻还没撑高时 innerWidth-clientWidth 恒为 0，得拿离屏探针量。
+          var sbwProbe = document.createElement("div");
+          sbwProbe.style.cssText = "position:absolute;top:-9999px;width:100px;height:100px;overflow:scroll;";
+          document.body.appendChild(sbwProbe);
+          var sbw = sbwProbe.offsetWidth - sbwProbe.clientWidth; // overlay 滚动条下为 0
+          sbwProbe.remove();
+          if (sbw > 0) document.documentElement.style.setProperty("--sbw", sbw + "px");
+          bindBackdrop(dlg);
+          bindBackdrop($("ddlg"));
+
           // ---- i18n:中英双词典,页面文案一律走 T()/TF() 取词,静态骨架用 data-i18n 标注。
           var connState = "connecting", connSeconds = "2s";
           var meData = null, currentTheme = "dark";
@@ -196,7 +220,7 @@ internal static class DashboardAssets
               dlgErrJson: "payload is not JSON: {x}", dlgErrPick: "pick a moment",
               confirmRemove: "Remove registration of '{x}'? Due runs already dispatched finish or drop.",
               noJobs: "no jobs registered — declare [QuickJob] static methods or use AddQuickJob DSL",
-              nothingInFlight: "nothing in flight", queueEmpty: "queue empty", noHistory: "no history", noEvents: "no events yet",
+              nothingInFlight: "nothing in flight", queueEmpty: "queue empty", noHistory: "no history", noEvents: "no events yet", pAhead: "not due yet",
               attemptN: "attempt {x}", delayX: "delay {x}",
               btnDetail: "detail",
               dTitle: "Job detail — {x}", dDef: "definition", dRuns: "recent runs (last {x})",
@@ -240,7 +264,7 @@ internal static class DashboardAssets
               dlgErrJson: "载荷不是合法 JSON:{x}", dlgErrPick: "请先选时刻",
               confirmRemove: "移除登记任务 '{x}'?已派发的到期运行会跑完或丢弃。",
               noJobs: "无已登记任务 — 用 [QuickJob] 静态方法特性或 AddQuickJob DSL 登记",
-              nothingInFlight: "无执行中", queueEmpty: "队列空", noHistory: "暂无历史", noEvents: "暂无事件",
+              nothingInFlight: "无执行中", queueEmpty: "队列空", noHistory: "暂无历史", noEvents: "暂无事件", pAhead: "未到站",
               attemptN: "尝试 {x}", delayX: "延迟 {x}",
               btnDetail: "详情",
               dTitle: "任务详情 — {x}", dDef: "定义", dRuns: "近期运行(最近 {x} 条)",
@@ -418,7 +442,7 @@ internal static class DashboardAssets
 
           function pendingView(list) {
             $("pending").tBodies[0].innerHTML = (list || []).map(function (r) {
-              return "<tr><td class=mono>" + esc(r.jobName) + "</td><td class=dim>" + (TRIGGER[r.trigger] ? T(TRIGGER[r.trigger]) : esc(String(r.trigger))) + "</td><td>" + when(r.scheduledAt) + "</td>" +
+              return "<tr><td class=mono>" + esc(r.jobName) + "</td><td class=dim>" + (TRIGGER[r.trigger] ? T(TRIGGER[r.trigger]) : esc(String(r.trigger))) + "</td><td>" + when(r.scheduledAt) + (r.state === "scheduled" ? ' <span class="tag">' + T("pAhead") + "</span>" : "") + "</td>" +
                 '<td class="act">' + (!readOnly ? '<button class="danger" onclick="ui.cancel(' + "'" + esc(r.executionId) + '\')">' + T("btnDrop") + "</button>" : "") + "</td></tr>";
             }).join("") || '<tr><td colspan="4" class="dim">' + T("queueEmpty") + "</td></tr>";
           }
@@ -491,12 +515,12 @@ internal static class DashboardAssets
             html += '<div class="dim" style="padding:10px 0 6px;">' + TF("dRuns", detailTake) + "</div>";
             if (rows === null || rows === undefined) html += "";
             else if (!rows.length) html += '<div class="dim">' + T("dNoRuns") + "</div>";
-            else html += "<table><thead><tr><th>" + T("thOutcome") + "</th><th>" + T("thAttempt") + "</th><th>" + T("thStarted") + "</th><th>" + T("thErrorProgress") + "</th></tr></thead><tbody>" +
+            else html += '<div class="runs-scroll"><table><thead><tr><th>' + T("thOutcome") + "</th><th>" + T("thAttempt") + "</th><th>" + T("thStarted") + "</th><th>" + T("thErrorProgress") + "</th></tr></thead><tbody>" +
               rows.map(function (e) {
                 return "<tr>" +
                   "<td>" + outcomeTag(e.outcome || "") + "</td><td>" + e.attempt + "</td><td>" + when(e.startedAt) + "</td>" +
                   '<td class="mono dim" style="max-width:280px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">' + esc(e.error || e.progress || "") + "</td></tr>";
-              }).join("") + "</tbody></table>";
+              }).join("") + "</tbody></table></div>";
             return html;
           }
           function paintDetail() {

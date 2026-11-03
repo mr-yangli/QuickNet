@@ -48,9 +48,30 @@ static class DashboardEndpoints
         // ---- 观察面
         app.MapGet(root + "/stats", () => Results.Json(scheduler.Stats));
         app.MapGet(root + "/jobs", () => Results.Json(scheduler.ListJobs()));
-        app.MapGet(root + "/runs/pending", () => Results.Json(scheduler.PendingRuns()));
+        // 待跑面两条来源：已认领卡在并发门上的（管线内存量）+ 未到站的（库存 due 队列）。
+        // cron/interval 的下一槽不预置进库存（到点才 Put），所以后者只剩 定时一次/once/排队/重试等待 这类真·未来档。
+        app.MapGet(root + "/runs/pending", async (CancellationToken ct) =>
+        {
+            var now = scheduler.Options.Time.GetUtcNow();
+            var queued = scheduler.PendingRuns().Select(r => new
+            {
+                executionId = r.ExecutionId, jobName = r.JobName, attempt = r.Attempt, trigger = r.Trigger,
+                scheduledAt = r.ScheduledAt, state = "queued",
+            });
+            var ahead = await scheduler.Options.Store.PeekDueRunsAsync(200, ct).ConfigureAwait(false);
+            var scheduled = ahead.Where(d => d.DueAt > now).Select(d => new
+            {
+                executionId = d.RunId, jobName = d.JobName, attempt = d.Attempt, trigger = d.Origin,
+                scheduledAt = d.DueAt, state = "scheduled",
+            });
+            return Results.Json(queued.Concat(scheduled).OrderBy(r => r.scheduledAt).ToList());
+        });
+
         app.MapGet(root + "/runs/running", () => Results.Json(scheduler.RunningRuns()));
-        app.MapGet(root + "/events", (int? take) => Results.Json(ring.Recent(take ?? 50)));
+        // 事件是抽象基类的派生 record —— 按 IReadOnlyList<QuickJobEvent> 声明序列化时 STJ 只写基类的
+        // Kind/At，JobName/Error/Delay 全丢（面板事件流只能显 "?"）。抬成 object 元素让它走运行时类型。
+        app.MapGet(root + "/events", (int? take) => Results.Json(
+            ring.Recent(take ?? 50).Select(static e => (object)e).ToList()));
 
         app.MapGet(root + "/executions", async (string? job, int? take, CancellationToken ct) =>
         {

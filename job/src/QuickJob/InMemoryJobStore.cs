@@ -77,6 +77,27 @@ public sealed class InMemoryJobStore : IJobStore
         return ValueTask.CompletedTask;
     }
 
+    ValueTask<IReadOnlyList<StoredDueRun>> IJobStore.PeekDueRunsAsync(int take, CancellationToken ct)
+    {
+        StoredDueRun[] snapshot;
+        lock (_gate) snapshot = [.. _due.OrderBy(r => r.DueAt).Take(Math.Max(0, take))];
+        return ValueTask.FromResult<IReadOnlyList<StoredDueRun>>(snapshot);
+    }
+
+    ValueTask<StoredDueRun?> IJobStore.DropDueRunAsync(Guid runId, CancellationToken ct)
+    {
+        StoredDueRun? dropped;
+        lock (_gate)
+        {
+            var index = _due.FindIndex(r => r.RunId == runId);
+            if (index < 0) return ValueTask.FromResult<StoredDueRun?>(null);
+            dropped = _due[index];
+            _due.RemoveAt(index);
+            ReschedulePumpLocked(); // 摆可能正指着这一条，摘掉要重拨
+        }
+        return ValueTask.FromResult<StoredDueRun?>(dropped);
+    }
+
     ValueTask<IReadOnlyList<LeasedDueRun>> IJobStore.ClaimDueRunsAsync(string? instanceId, int max, CancellationToken ct)
     {
         var leases = new List<LeasedDueRun>();

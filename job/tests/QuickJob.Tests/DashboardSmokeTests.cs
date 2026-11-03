@@ -2,6 +2,7 @@ namespace QuickJob.Tests;
 
 using QuickJob;
 using QuickJob.Dashboard;
+using System.Text.Json;
 
 /// <summary>
 /// Dashboard 的冒烟档：EventRing 的容量滚动/取序/接线幂等、选项的规范化、页面字符串的完整性。
@@ -93,6 +94,25 @@ public class DashboardSmokeTests
         Assert.Contains("/events", html);
         Assert.Contains("/me", html);
         Assert.Contains("data", html); // 连接徽标的落点
+    }
+
+    [Fact]
+    public async Task Event_face_keeps_the_derived_fields_when_typed_as_object()
+    {
+        var scheduler = QuickJobScheduler.Create(b => b.OnDemand("probe", _ => ValueTask.CompletedTask));
+        var ring = new EventRing();
+        ring.Wire(scheduler);
+        await scheduler.StartAsync();
+        await scheduler.TriggerNowAsync("probe");
+        await WaitUntil(() => scheduler.Stats.RunsCompleted >= 1, TimeSpan.FromSeconds(20));
+        await scheduler.StopAsync();
+
+        // 端点把元素抬成 object 再序列化：按 IReadOnlyList<QuickJobEvent> 的基类声明走，STJ 只写
+        // Kind/At，JobName/Error 全丢 —— 面板事件流就只剩一排 "?"。这里钉住抬型这一手。
+        var json = JsonSerializer.Serialize(ring.Recent(10).Select(static e => (object)e).ToList());
+        Assert.Contains("probe", json);
+        Assert.Contains("JobName", json);
+        Assert.Contains("ExecutionId", json);
     }
 
     private static async Task WaitUntil(Func<bool> done, TimeSpan limit)

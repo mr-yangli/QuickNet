@@ -265,18 +265,48 @@ public class PipelineTests
     public async Task Enqueue_at_future_instant_waits_for_due()
     {
         var time = new FakeTimeProvider();
+        IJobStore store = new InMemoryJobStore(time); // 假钟档下库存也得吃同一颗表，否则"+5 分钟"对它而言是历史时刻
         var seen = new Collector();
         var scheduler = QuickJobScheduler.Create(b => b.OnDemand("later", ct => { seen.Increment(); return ValueTask.CompletedTask; }),
-            options: new QuickJobOptions { Time = time });
+            options: new QuickJobOptions { Store = store, Time = time });
         await scheduler.StartAsync();
 
         var (accepted, runId) = await scheduler.EnqueueAsync("later", payload: null, at: time.GetUtcNow() + TimeSpan.FromMinutes(5));
         Assert.True(accepted);
         Assert.True(runId.HasValue);
         Assert.Equal(0, seen.Value); // 未到站一条都不会跑
+        Assert.Single(await store.PeekDueRunsAsync(10)); // 且确实还压在库存里等摆钟
 
         time.Advance(TimeSpan.FromMinutes(5) + TimeSpan.FromSeconds(1));
         await WaitUntil(() => seen.Value >= 1, TimeSpan.FromSeconds(10));
+        await scheduler.StopAsync();
+    }
+
+    [Fact]
+    public async Task Cancel_of_a_future_run_forgets_it_before_it_is_due()
+    {
+        var time = new FakeTimeProvider();
+        IJobStore store = new InMemoryJobStore(time); // 库存得自己吃假钟：默认那只对系统表，"+5 分钟"在它眼里早过站
+        var seen = new Collector();
+        var scheduler = QuickJobScheduler.Create(b => b.OnDemand("later", ct => { seen.Increment(); return ValueTask.CompletedTask; }),
+            options: new QuickJobOptions { Store = store, Time = time });
+        await scheduler.StartAsync();
+
+        var (_, runId) = await scheduler.EnqueueAsync("later", payload: null, at: time.GetUtcNow() + TimeSpan.FromMinutes(5));
+        Assert.True(runId.HasValue);
+        Assert.Empty(scheduler.PendingRuns());                          // 未到站不进管线队列
+        Assert.Single(await store.PeekDueRunsAsync(10));                // 但库存面看得见
+
+        Assert.True(await scheduler.CancelAsync(runId!.Value));         // 当场摘掉，不等 claim 端补刀
+        Assert.Empty(await store.PeekDueRunsAsync(10));
+        Assert.Equal(1, scheduler.Stats.RunsCancelled);
+
+        time.Advance(TimeSpan.FromMinutes(6));                          // 过站也不复活
+        await Task.Delay(150);                                          // 给 claim loop 一次摆动的位置
+        Assert.Equal(0, seen.Value);
+
+        var rows = await store.ReadExecutionsAsync(new ExecutionQuery { JobName = "later" });
+        Assert.Contains(rows, r => r.Outcome == "Skipped:Cancelled-by-user");
         await scheduler.StopAsync();
     }
 
