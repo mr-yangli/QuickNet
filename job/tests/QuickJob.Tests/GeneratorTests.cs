@@ -51,6 +51,7 @@ public class GeneratorTests
 
         Assert.Contains("[global::System.Runtime.CompilerServices.ModuleInitializer]", text);
         Assert.Contains("Name = \"tick\"", text);
+        Assert.Contains("DeclaringType = \"Probe.Jobs.Tick\"", text);
         Assert.Contains("Cron = \"0 3 * * *\"", text);
         Assert.Contains("Every = \"5m\"", text);
         Assert.Contains("MaxRetries = 2", text);

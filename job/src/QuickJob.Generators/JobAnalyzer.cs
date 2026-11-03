@@ -28,6 +28,7 @@ static class JobAnalyzer
         model.Location = method.Locations.Length > 0 ? method.Locations[0] : Location.None;
         var shortForm = ShortForm(method);
         var named = attr.NamedArguments;
+        model.Source = DeclaredForm(method);
 
         // ---- QJ0001: static
         if (!method.IsStatic)
@@ -274,6 +275,13 @@ static class JobAnalyzer
     static string ShortForm(IMethodSymbol method)
     {
         var owner = method.ContainingType is null ? "" : method.ContainingType.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat);
+        return owner.Length == 0 ? method.Name : owner + "." + method.Name;
+    }
+
+    /// <summary>声明处展示全名（命名空间.类型链.方法）—— 登记元数据给看板标注任务出处；诊断用 ShortForm，两者不混。</summary>
+    static string DeclaredForm(IMethodSymbol method)
+    {
+        var owner = method.ContainingType is null || method.ContainingType.IsImplicitlyDeclared ? "" : method.ContainingType.ToDisplayString();
         return owner.Length == 0 ? method.Name : owner + "." + method.Name;
     }
 

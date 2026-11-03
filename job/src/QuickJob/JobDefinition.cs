@@ -29,6 +29,11 @@ public sealed class JobDefinition
     /// <summary>Currently paused? Controls live on the scheduler, mirrored here for snapshots.</summary>
     public bool Paused { get; set; }
 
+    /// <summary>Compile-time provenance ("Namespace.TypeChain.Method") — filled by the generator for
+    /// [QuickJob] sites; DSL/company registrations leave it null. Metadata only (sort, filters,
+    /// dashboard display); the scheduler never reads it.</summary>
+    public string? Source { get; init; }
+
     /// <summary>Returns a copy with the same schedule/options — the store-serialisable projection.</summary>
     internal JobDefinition Snapshot() => new()
     {
@@ -39,6 +44,7 @@ public sealed class JobDefinition
         RunAt = RunAt,
         Options = Options.CloneShallow(),
         Paused = Paused,
+        Source = Source,
     };
 }
 

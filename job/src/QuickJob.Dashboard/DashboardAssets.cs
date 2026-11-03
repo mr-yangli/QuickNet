@@ -65,6 +65,8 @@ internal static class DashboardAssets
           dialog h3 { margin: 0 0 10px; font-size: 14px; }
           dialog .row { margin-bottom: 10px; display: flex; gap: 8px; align-items: center; }
           dialog textarea { width: 100%; height: 90px; background: var(--bg); color: var(--ink); border: 1px solid var(--line); border-radius: 7px; font-family: Consolas, monospace; font-size: 12px; padding: 6px; }
+          #ddlg { min-width: 560px; max-width: 92vw; }
+          #ddlg td { padding: 4px 10px; }
           .errbar { color: var(--err); min-height: 18px; font-size: 12px; margin: 6px 0; }
           .events { max-height: 220px; overflow: auto; font-size: 12px; }
           .events div { padding: 3px 10px; border-bottom: 1px solid var(--line); font-family: Consolas, monospace; }
@@ -129,6 +131,14 @@ internal static class DashboardAssets
             <button id="dlgGo" class="danger" onclick="dlgAction()" data-i18n="btnGo">go</button>
           </div>
         </dialog>
+        <dialog id="ddlg">
+          <h3 id="ddlgTitle"></h3>
+          <div id="ddlgBody"></div>
+          <div class="errbar" id="ddlgErr"></div>
+          <div style="text-align:right;">
+            <button onclick="ddlg.close()" data-i18n="dClose">close</button>
+          </div>
+        </dialog>
         <script>
         (function () {
           "use strict";
@@ -147,6 +157,9 @@ internal static class DashboardAssets
           var KIND = { 1: "kCron", 2: "kInterval", 3: "kOnce", 4: "kOnDemand" };
           var TRIGGER = { 1: "trgCron", 2: "trgInterval", 3: "trgScheduled", 4: "trgManual", 5: "trgEnqueued", 6: "trgRetry" };
           var OVERLAP = { 1: "ovSkip", 2: "ovQueue", 3: "ovRunAny" };
+          var BACKOFF = { 1: "bkFixed", 2: "bkLinear", 3: "bkExponential" };
+          var PRIO = { 0: "prLow", 1: "prNormal", 2: "prHigh" };
+          var MISSED = { 1: "msRun", 2: "msSkipLate", 3: "msCatchUp" };
           var EVENTNAME = { 1: "evStarted", 2: "evCompleted", 3: "evFailed", 4: "evRetrying", 5: "evAnomaly", 6: "evSkipped" };
 
           // ---- i18n:中英双词典,页面文案一律走 T()/TF() 取词,静态骨架用 data-i18n 标注。
@@ -184,7 +197,18 @@ internal static class DashboardAssets
               confirmRemove: "Remove registration of '{x}'? Due runs already dispatched finish or drop.",
               noJobs: "no jobs registered — declare [QuickJob] static methods or use AddQuickJob DSL",
               nothingInFlight: "nothing in flight", queueEmpty: "queue empty", noHistory: "no history", noEvents: "no events yet",
-              attemptN: "attempt {x}", delayX: "delay {x}"
+              attemptN: "attempt {x}", delayX: "delay {x}",
+              btnDetail: "detail",
+              dTitle: "Job detail — {x}", dDef: "definition", dRuns: "recent runs (last {x})",
+              dNoRuns: "no executions recorded", dClose: "close", dTzDefault: "system default", dNone: "—",
+              dKKind: "kind", dKSched: "schedule", dKTz: "timezone", dKDesc: "description",
+              dKSource: "declared in", dDsl: "DSL-registered",
+              dKConc: "max concurrent", dKOverlap: "on overlap", dKQueue: "overlap queue limit",
+              dKPrio: "priority", dKRetries: "max retries", dKBackoff: "retry backoff", dKDelay: "retry delays",
+              dKJitter: "retry jitter", dKTimeout: "timeout", dKGrace: "grace", dKMissed: "missed slot", dKState: "state",
+              bkFixed: "fixed", bkLinear: "linear", bkExponential: "exponential",
+              prLow: "low", prNormal: "normal", prHigh: "high",
+              msRun: "run within grace", msSkipLate: "skip late", msCatchUp: "catch up latest"
             },
             zh: {
               thTheme: "切换浅色/深色", thLang: "切换语言",
@@ -217,7 +241,18 @@ internal static class DashboardAssets
               confirmRemove: "移除登记任务 '{x}'?已派发的到期运行会跑完或丢弃。",
               noJobs: "无已登记任务 — 用 [QuickJob] 静态方法特性或 AddQuickJob DSL 登记",
               nothingInFlight: "无执行中", queueEmpty: "队列空", noHistory: "暂无历史", noEvents: "暂无事件",
-              attemptN: "尝试 {x}", delayX: "延迟 {x}"
+              attemptN: "尝试 {x}", delayX: "延迟 {x}",
+              btnDetail: "详情",
+              dTitle: "任务详情 — {x}", dDef: "定义", dRuns: "近期运行(最近 {x} 条)",
+              dNoRuns: "暂无执行记录", dClose: "关闭", dTzDefault: "系统默认", dNone: "—",
+              dKKind: "类型", dKSched: "调度", dKTz: "时区", dKDesc: "描述",
+              dKSource: "声明来源", dDsl: "DSL 登记",
+              dKConc: "单任务并发", dKOverlap: "重叠档", dKQueue: "重叠排队上限",
+              dKPrio: "优先级", dKRetries: "重试上限", dKBackoff: "重试退避", dKDelay: "重试间隔",
+              dKJitter: "重试抖动", dKTimeout: "超时", dKGrace: "错档宽限", dKMissed: "错过档", dKState: "状态",
+              bkFixed: "固定", bkLinear: "线性", bkExponential: "指数",
+              prLow: "低", prNormal: "中", prHigh: "高",
+              msRun: "宽限内照跑", msSkipLate: "迟过即弃", msCatchUp: "至多补跑一次"
             }
           };
           var lang = "en";
@@ -266,6 +301,7 @@ internal static class DashboardAssets
             if (currentTheme) applyTheme(currentTheme);
             tick();
             loadHistory();
+            if ($("ddlg").open) paintDetail();
           }
 
           // theme: localStorage 记忆 → 首访看 prefers-color-scheme → 都没有就暗板。
@@ -334,8 +370,11 @@ internal static class DashboardAssets
             }).join("");
           }
 
+          var jobsCache = []; // 详情面板的定义快照取自这里(jobsView 每拍刷新)
+
           function jobsView(list) {
             list = list || [];
+            jobsCache = list;
             var pick = $("jobpick");
             var keep = pick.value;
             pick.innerHTML = '<option value="">' + T("allJobs") + '</option>' + list.map(function (j) {
@@ -347,9 +386,9 @@ internal static class DashboardAssets
               var o = j.options || {};
               var state = (o.enabled === false ? '<span class="tag">' + T("disabled") + '</span> ' : "") +
                 (j.paused ? '<span class="tag paused">' + T("paused") + '</span>' : '<span class="tag enabled">' + T("live") + '</span>');
-              var actions = "";
+              var actions = '<button onclick="ui.detail(' + "'" + jsq(j.name) + '\')">' + T("btnDetail") + "</button> ";
               if (!readOnly) {
-                actions =
+                actions +=
                   '<button onclick="ui.pauseToggle(' + "'" + jsq(j.name) + "'," + (j.paused ? "1" : "0") + ')">' + (j.paused ? T("btnResume") : T("btnPause")) + '</button> ' +
                   '<button onclick="ui.openDialog(' + "'" + jsq(j.name) + "','" + "trigger" + "')\">" + T("btnTrigger") + "</button> " +
                   (j.kind === 4 ? "" : '<button onclick="ui.openDialog(' + "'" + jsq(j.name) + "','" + "schedule" + "')\">" + T("btnScheduleOnce") + "</button> ") +
@@ -384,21 +423,24 @@ internal static class DashboardAssets
             }).join("") || '<tr><td colspan="4" class="dim">' + T("queueEmpty") + "</td></tr>";
           }
 
+          // 后端 outcome 是显示文本(可能带后缀,如 "Retrying #2")——语义键与样式类从词头判出,
+          // 显示文本走词典 + 尾件原样;翻译不参与判定,切语言不会破样式。历史表与详情面板共用。
+          function outcomeTag(raw) {
+            var tail = raw.replace(/^[A-Za-z]+/, "");
+            var key = null, cls = "";
+            if (raw.indexOf("Completed") === 0) { key = "outCompleted"; cls = "completed"; }
+            else if (raw.indexOf("Failed") === 0) { key = "outFailed"; cls = "failed"; }
+            else if (raw.indexOf("Retrying") === 0) { key = "outRetrying"; cls = "retrying"; }
+            else if (raw.indexOf("Skipped") === 0) { key = "outSkipped"; cls = "cancelled"; }
+            else if (raw.indexOf("Cancelled") === 0) { key = "outCancelled"; cls = "cancelled"; }
+            if (!key) return raw ? '<span class="tag">' + esc(raw) + "</span>" : "";
+            return '<span class="tag ' + cls + '">' + esc(T(key)) + esc(tail) + "</span>";
+          }
+
           function history(rows) {
             $("history").tBodies[0].innerHTML = (rows || []).map(function (e) {
-              // 后端 outcome 是显示文本(可能带后缀,如 "Retrying #2")——语义键与样式类从词头判出,
-              // 显示文本走词典 + 尾件原样;翻译不参与判定,切语言不会破样式。
-              var raw = e.outcome || "";
-              var tail = raw.replace(/^[A-Za-z]+/, "");
-              var key = null, cls = "";
-              if (raw.indexOf("Completed") === 0) { key = "outCompleted"; cls = "completed"; }
-              else if (raw.indexOf("Failed") === 0) { key = "outFailed"; cls = "failed"; }
-              else if (raw.indexOf("Retrying") === 0) { key = "outRetrying"; cls = "retrying"; }
-              else if (raw.indexOf("Skipped") === 0) { key = "outSkipped"; cls = "cancelled"; }
-              else if (raw.indexOf("Cancelled") === 0) { key = "outCancelled"; cls = "cancelled"; }
-              var shown = key ? esc(T(key)) + esc(tail) : esc(raw);
               return "<tr><td class=mono>" + esc(e.jobName) + "</td>" +
-                '<td><span class="tag ' + cls + '">' + shown + "</span></td><td>" + e.attempt + "</td>" +
+                "<td>" + outcomeTag(e.outcome || "") + "</td><td>" + e.attempt + "</td>" +
                 "<td>" + when(e.scheduledAt) + "</td><td>" + when(e.startedAt) + "</td><td>" + when(e.finishedAt) + "</td>" +
                 '<td class="mono dim" style="max-width:320px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">' + esc(e.error || e.progress || "") + "</td></tr>";
             }).join("") || '<tr><td colspan="7" class="dim">' + T("noHistory") + "</td></tr>";
@@ -408,6 +450,62 @@ internal static class DashboardAssets
             var job = $("jobpick").value;
             var qs = job ? "?job=" + encodeURIComponent(job) : "?take=80";
             get("/executions" + qs).then(history);
+          }
+
+          // ---- 任务详情:定义快照从 jobsCache 捞,执行行按任务名拉最近 20 条。语言切换时若开
+          //      着弹层,paintDetail 按新词典整体重绘(applyLang 挂钩)。
+          var detailTake = 20, detailJob = null, detailRows = null;
+          function detailRow(label, value) {
+            return '<tr><td class="dim" style="white-space:nowrap;">' + label + '</td><td>' + value + "</td></tr>";
+          }
+          function detailBody(def, rows) {
+            var html = "";
+            if (def) {
+              var o = def.options || {};
+              html += '<div class="dim" style="padding:2px 0 6px;">' + T("dDef") + '</div><table><tbody>' +
+                detailRow(T("dKKind"), (KIND[def.kind] ? T(KIND[def.kind]) : "?")) +
+                (def.source
+                  ? detailRow(T("dKSource"), '<span class="mono">' + esc(def.source) + "</span>")
+                  : detailRow(T("dKSource"), '<span class="dim">' + T("dDsl") + "</span>")) +
+                detailRow(T("dKSched"), scheduleText(def)) +
+                (o.timeZoneId
+                  ? detailRow(T("dKTz"), esc(o.timeZoneId))
+                  : detailRow(T("dKTz"), '<span class="dim">' + T("dTzDefault") + "</span>")) +
+                (o.description ? detailRow(T("dKDesc"), esc(o.description)) : "") +
+                detailRow(T("dKState"),
+                  (o.enabled === false ? '<span class="tag">' + T("disabled") + "</span> " : "") +
+                  (def.paused ? '<span class="tag paused">' + T("paused") + "</span>" : '<span class="tag enabled">' + T("live") + "</span>")) +
+                detailRow(T("dKConc"), String(o.maxConcurrentPerJob || 1)) +
+                detailRow(T("dKOverlap"), (OVERLAP[o.onOverlap] ? T(OVERLAP[o.onOverlap]) : "?")) +
+                (o.onOverlap === 2 ? detailRow(T("dKQueue"), String(o.overlapQueueLimit || 0)) : "") +
+                detailRow(T("dKPrio"), (PRIO[o.priority] ? T(PRIO[o.priority]) : "?")) +
+                detailRow(T("dKTimeout"), o.timeout ? esc(o.timeout) : '<span class="dim">' + T("dNone") + "</span>") +
+                detailRow(T("dKGrace"), (o.grace ? esc(o.grace) : T("dNone")) + " &middot; " + (MISSED[o.onMissedSlot] ? T(MISSED[o.onMissedSlot]) : "?"));
+              if (o.maxRetries > 0) {
+                html += detailRow(T("dKRetries"), String(o.maxRetries) + " &middot; " + (BACKOFF[o.retryBackoff] ? T(BACKOFF[o.retryBackoff]) : "?")) +
+                  detailRow(T("dKDelay"), esc(o.retryBaseDelay) + " &rarr; " + esc(o.retryMaxDelay)) +
+                  detailRow(T("dKJitter"), String(o.retryJitter));
+              }
+              html += "</tbody></table>";
+            }
+            html += '<div class="dim" style="padding:10px 0 6px;">' + TF("dRuns", detailTake) + "</div>";
+            if (rows === null || rows === undefined) html += "";
+            else if (!rows.length) html += '<div class="dim">' + T("dNoRuns") + "</div>";
+            else html += "<table><thead><tr><th>" + T("thOutcome") + "</th><th>" + T("thAttempt") + "</th><th>" + T("thStarted") + "</th><th>" + T("thErrorProgress") + "</th></tr></thead><tbody>" +
+              rows.map(function (e) {
+                return "<tr>" +
+                  "<td>" + outcomeTag(e.outcome || "") + "</td><td>" + e.attempt + "</td><td>" + when(e.startedAt) + "</td>" +
+                  '<td class="mono dim" style="max-width:280px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">' + esc(e.error || e.progress || "") + "</td></tr>";
+              }).join("") + "</tbody></table>";
+            return html;
+          }
+          function paintDetail() {
+            if (detailJob) $("ddlgTitle").textContent = TF("dTitle", detailJob); // 语言切换重绘时标题同链
+            var def = null;
+            for (var i = 0; i < jobsCache.length; i++) {
+              if (jobsCache[i].name === detailJob) { def = jobsCache[i]; break; }
+            }
+            $("ddlgBody").innerHTML = detailBody(def, detailRows);
           }
 
           function eventsView(list) {
@@ -469,6 +567,21 @@ internal static class DashboardAssets
               $("dlgPayload").value = "";
               $("dlgErr").textContent = "";
               dlg.showModal();
+            },
+            detail: function (job) {
+              var d = $("ddlg");
+              detailJob = job;
+              detailRows = null; // 拉到新行再 paint,先出定义快照
+              d.dataset.job = job;
+              $("ddlgTitle").textContent = TF("dTitle", job);
+              $("ddlgErr").textContent = "";
+              paintDetail();
+              d.showModal();
+              get("/executions?job=" + encodeURIComponent(job) + "&take=" + detailTake).then(function (rows) {
+                if (!d.open || detailJob !== job) return;
+                detailRows = rows || [];
+                paintDetail();
+              });
             },
             remove: function (job) {
               if (!confirm(TF("confirmRemove", job))) return;

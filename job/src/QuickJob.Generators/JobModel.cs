@@ -20,6 +20,9 @@ sealed class JobModel
     /// <summary>RequestType 的全名显示串（global:: 形式）；null 表示没写。</summary>
     internal string? RequestType;
 
+    /// <summary>声明处展示全名「命名空间.类型链.方法」—— 看板详情面的来源栏；恒可得，不参与诊断。</summary>
+    internal string Source = "";
+
     internal int MaxRetries;
     internal string? RetryBackoff;
     internal string? RetryBaseDelay;

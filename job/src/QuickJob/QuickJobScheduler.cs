@@ -264,6 +264,7 @@ public sealed class QuickJobScheduler : IAsyncDisposable
             Cron = p.Cron,
             Every = every,
             RunAt = null,
+            Source = p.DeclaringType,
             Options = new JobOptions
             {
                 TimeZoneId = p.TimeZone,

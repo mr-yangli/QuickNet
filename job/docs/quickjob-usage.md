@@ -204,6 +204,7 @@ app.MapQuickJobDashboard();                       // 默认挂在 /quickjob，UI
 - 首页即可观看：`/stats`、`/jobs`、`/runs/pending`、`/runs/running`、`/executions`、`/events`、`/me`；事件窗取环表 200 条。
 - 鉴权：`DashboardAuthMode` = `Anonymous`（默认）或 `OAuth2`（ClientId/Secret/三腔 endpoint + `UserIsAllowed` 裁员 + 8h 会话）。`ReadOnly` 关掉手动触发面的写入端。
 - 静态挂载可换根：`o.PathPrefix = "/ops/jobs"`。
+- 任务行「详情」弹定义快照（调度/时区/并发/重叠/优先级/超时/宽限/重试体系）与最近 20 条运行。特性档（`[QuickJob]`）带「声明来源」＝ 命名空间.类.方法（生成器编译期搬进登记），DSL 登记的任务标 DSL。
 - 界面偏好记在浏览器本地：语言中英随手切（首访按 `navigator.language`，zh 开头即中文、否则英文兜底），主题浅色/深色（首访看 `prefers-color-scheme`，没定则暗板）。键：`qj.lang`（zh/en）、`qj.theme`（light/dark）；清掉键即回首访引导。
 
 ## 边界与常俗

@@ -43,6 +43,8 @@ static class RegistrationEmitter
         sb.Append("            global::QuickJob.PendingRegistrations.Add(new global::QuickJob.PendingRegistration\n");
         sb.Append("            {\n");
         sb.Append("                Name = ").Append(Literal(job.Name)).Append(",\n");
+        if (job.Source is not null && job.Source.Length > 0)
+            sb.Append("                DeclaringType = ").Append(Literal(job.Source)).Append(",\n");
 
         if (job.Cron is not null) sb.Append("                Cron = ").Append(Literal(job.Cron)).Append(",\n");
         if (job.Every is not null) sb.Append("                Every = ").Append(Literal(job.Every)).Append(",\n");

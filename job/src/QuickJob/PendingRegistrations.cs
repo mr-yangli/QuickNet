@@ -51,6 +51,10 @@ public sealed record PendingRegistration
     /// <summary>Builds the handler (typed-request shapes resolve their generic binder here).</summary>
     public required Func<JobHandler> HandlerFactory { get; init; }
 
+    /// <summary>Compile-time provenance ("Namespace.TypeChain.Method") the generator read off the
+    /// attribute site — dashboard display only, never consulted by the runtime.</summary>
+    public string? DeclaringType { get; init; }
+
     /// <summary>Attribute mirrored job knobs.</summary>
     public int MaxRetries { get; init; }
 
