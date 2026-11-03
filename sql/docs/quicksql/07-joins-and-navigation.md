@@ -29,7 +29,7 @@ var orders = await orm.Select<Order>()
 
 - `Include`/`ThenInclude` 是**引用导航专用**（不接受集合，编译期接不上去）；每层往主查询加一张 `LEFT JOIN` 并发扩展列，缝合回导航属性。
 - 两层链 = 两张 JOIN，第二层宿主在第一层那张表位上。
-- `AsSplitQuery(navigateBatchSize = 20)`：主查询不发扩展列，整只实体改由主查询之后的一条独立 `SELECT` 缝回；谓词里读同一根边的那张 JOIN 照发（它来自查询模型，与拆查无关）。
+- `AsSplitQuery(navigateBatchSize = 20)`：主查询不发扩展列，整只实体改由主查询之后的一条独立 `SELECT` 缝回；谓词里读同一根边的那张 JOIN 照发（它来自查询模型，与拆查无关）。**与 `IncludeMany` 互斥**（混了当场抛，见下一节）。
 - `Include` 与"谓词里读导航"共用**同一张 JOIN**（先写谁都一样），不会发两张。
 
 ## 3. `IncludeMany`：集合导航另发查询缝合
@@ -49,7 +49,7 @@ var order = await orm.Select<Order>()
 - **深度就是查询条数**：根一条 + 每层一条；上一层没行就当场停，不会有空 `IN`。
 - 子行排序：`IncludeMany(o => o.Items!).OrderByMany(i => i.Seq)`。
 - 外键解析三档（每层各判一次）：子实体回指引用导航 → 集合成员上的 `[ForeignKey("列名")]` → 约定 `{父类型名}Id`；三档都命不中当场抛。
-- **`AsSplitQuery()` 与 `IncludeMany` 不要混在同一句**：同时在场时分派按拆查先赢，集合那一家会被静默丢掉。
+- **`AsSplitQuery()` 与 `IncludeMany` 互斥**（2026-11-01 起当场抛 `QuickSqlException`，此前是静默丢集合）：把 `IncludeMany` 链单独成句发一条，或去掉 `AsSplitQuery()` 走合批加载。两条接链顺序都在接链那一刻响。
 - 投影之后不能再挂 `IncludeMany`（"把 IncludeMany 放到 Select 之前"）。
 
 ### 键回填与缝不上的行

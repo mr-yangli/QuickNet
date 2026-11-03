@@ -51,6 +51,21 @@ public sealed class StructureSyncTests
         public string? Name { get; set; }
     }
 
+    /// <summary>默认值那一格的靶子：NOT NULL 整型与可空字符串各一列（System.ComponentModel 的
+    /// <c>[DefaultValue]</c> —— 与反射侧同一颗注解，G1 侧同形）。只归本册的默认值两颗用例写。</summary>
+    [Table("QUICKSQL_DEFAULT_SHAPE")]
+    sealed class DefaultShape
+    {
+        public int Id { get; set; }
+
+        [DefaultValue(7)]
+        public int Reserved { get; set; }
+
+        [DefaultValue("待定")]
+        [QuickColumn(Length = 16)]
+        public string? Note { get; set; }
+    }
+
     static readonly IDbProvider Sql = SqlServer.Provider(SqlServer.NoDriverFactory.Instance);
     static readonly ISchemaReader Reader = new SqlServerSchemaReader();
 
@@ -221,6 +236,47 @@ public sealed class StructureSyncTests
 
         Assert.Empty(plan.AddColumns);
         Assert.Single(plan.Refused, r => r.Contains("Quantity", StringComparison.Ordinal) && r.Contains("NOT NULL", StringComparison.Ordinal));
+    }
+
+    /// <summary>非空的新列<b>配了默认值</b>（2026-11-01 补的那一格）：
+    /// <c>ADD COLUMN … DEFAULT … NOT NULL</c> 让库自己把存量行填上，那一格从"永远拒"翻成"放行"。
+    /// 可空列配默认值同场放行 —— 默认值不是 NOT NULL 的专利，只是救得回 NOT NULL 那一档。</summary>
+    [Fact]
+    public void A_not_null_column_with_a_declared_default_is_added()
+    {
+        var contract = Contract<DefaultShape>();
+        var plan = StructureDiff.Build(contract, new SchemaTable(contract.Table,
+        [
+            Col("Id", "int", identity: true, pk: true),
+        ])
+        { Indexes = [] }, Reader, IdentifierPolicy.SqlServer);
+
+        Assert.Empty(plan.Refused);
+        Assert.Equal(["Reserved", "Note"], plan.AddColumns.Select(c => c.ColumnName));
+
+        // 发射半边：DEFAULT 落在补列那句里（T-SQL 的列定义序：NOT NULL 在前、DEFAULT 在后）。
+        var reserved = Assert.Single(plan.AddColumns, c => c.ColumnName == "Reserved");
+        var sql = Statement(w => Sql.CodeFirst.EmitAddColumn(w, contract.Table, reserved)).ToString();
+
+        Assert.Contains("DEFAULT 7", sql, StringComparison.Ordinal);
+        Assert.Contains("NOT NULL", sql, StringComparison.Ordinal);
+    }
+
+    /// <summary>默认值不参与形状补差比对：库侧读不回默认值（<c>SchemaColumn</c> 没有这一格），
+    /// 所以"契约写了默认值而列已在库里"就是没变化 —— 不为它发一句 ALTER，也不进任何清单。</summary>
+    [Fact]
+    public void A_declared_default_does_not_make_the_existing_column_drift()
+    {
+        var contract = Contract<DefaultShape>();
+        var plan = StructureDiff.Build(contract, new SchemaTable(contract.Table,
+        [
+            Col("Id", "int", identity: true, pk: true),
+            Col("Reserved", "int"),
+            Col("Note", "nvarchar(16)", nullable: true),
+        ])
+        { Indexes = [] }, Reader, IdentifierPolicy.SqlServer);
+
+        Assert.True(plan.IsEmpty);
     }
 
     [Fact]

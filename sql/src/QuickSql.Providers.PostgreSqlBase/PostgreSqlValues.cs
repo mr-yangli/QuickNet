@@ -7,23 +7,10 @@ using QuickSql.Values;
 
 namespace QuickSql.Providers.PostgreSqlBase;
 
-/// <summary>PG 系的参数绑定与字面量内联（§4 的差异面收口）。三处与 T-SQL 不同，都不是"换个符号"那么轻：
-/// <list type="bullet">
-/// <item><b>字符串字面量绝不带 <c>N</c> 前缀</b>：那一家的编码在集群级定死，前缀只会被当成不认识的语法
-/// （§10.4 的 <c>N''</c> 是 cp1252 那一族的补丁，不是 SQL 的通用写法）。</item>
-/// <item><c>bool</c> 内联成 <c>TRUE</c>/<c>FALSE</c> 而不是 <c>1</c>/<c>0</c>：<c>boolean = integer</c>
-/// 在这一家是类型错误，不是隐式转换。（v0.31 的第五家落在 <c>1</c>/<c>0</c> 那一边，所以这一格在五家是
-/// <b>2 ∶ 3</b>，而"这一家确实有那两颗字面量"没有替它挡掉这一票 —— 判据是列型与谓词同形，
-/// 见 <c>XuguValues</c> 类注释第二条。）</item>
-/// <item><c>byte[]</c> <b>拒绝内联</b>：<c>bytea</c> 的字面量写法（<c>'\xcafe'::bytea</c> 与转义式两种）
-/// 取决于 <c>bytea_output</c> 这个会话参数，猜错的比"留回占位符"更糟（§3 的 <c>ToLogSql()</c> 允许留占位）。
-/// v0.30 的第四家同边而理由不同（包体上限管不着内联），v0.31 的第五家也同边、理由又是第三条
-/// （那颗没指明的转义字符 × <c>EMPTY_STR_AS_NULL</c>，见 <c>XuguValues</c> 第三条）——
-/// 于是"拒绝内联二进制"从 v0.22 的孤例变成今天的 <b>3 ∶ 2</b>（拒的是这一家、第四、第五家；内联的是
-/// T-SQL 的 <c>0x…</c> 与 Oracle 血统的 <c>HEXTORAW('…')</c>），而三家三种理由。</item>
-/// </list>
-/// 枚举转整数走 <see cref="IConvertible"/> 而不是 <c>Convert.ChangeType</c>：结果一样，而后者在
-/// §12.8 第 8 行那一档是要显式记账的热路径形状 —— 少一处就多一处不必解释的落点。</summary>
+/// <summary>PG 系的参数绑定与字面量内联。三处与 T-SQL 不同：字符串字面量绝不带 N 前缀（编码在集群级定死，
+/// 前缀只会被当成不认识的语法）；bool 内联 TRUE/FALSE 而不是 1/0（boolean = integer 是类型错误，不是隐式转换）；
+/// byte[] 拒绝内联（bytea 字面量写法取决于 bytea_output 会话参数，猜错比留占位符更糟）。
+/// 枚举转整数走 IConvertible 而不是 Convert.ChangeType（少一处要显式记账的热路径形状）。</summary>
 public sealed class PostgreSqlValues : IValueBinder
 {
     public static PostgreSqlValues Instance { get; } = new();
@@ -31,11 +18,10 @@ public sealed class PostgreSqlValues : IValueBinder
     public AdoParameter CreateParameter(string name, object? value, ColumnContract? hint)
     {
         // Size 在这一家没有意义（驱动按值自己算），但 AdoParameter 的形状要与 T-SQL 那一侧一致，
-        // 否则参数对拍会比不出"两边各要了几颗参数"。hint 原样带上：值级钩子要按列改写参数。
+        // 否则参数对拍会比不出"两边各要了几颗参数"。
         //
-        // DbType 跟着<em>换形之后</em>那一颗走，但只在那一形真的换了的时候：时刻那一格可能把
-        // DateTime 换成 DateTimeOffset（带时区的列），型别必须跟着换 —— 否则交出去的是偏移而对
-        // 驱动说 DateTime2，撞回同一句拒收。其余情形仍按原值取型，null 那一格才不会被折成 DBNull 的型。
+        // DbType 跟着换形之后那一颗走，但只在那一形真的换了的时候：时刻那一格可能把 DateTime 换成
+        // DateTimeOffset（带时区的列），型别必须跟着换——否则交出去的是偏移而对驱动说 DateTime2。
         var shaped = Normalize(value, hint);
 
         return new AdoParameter(
@@ -50,7 +36,7 @@ public sealed class PostgreSqlValues : IValueBinder
     {
         null => DBNull.Value,
 
-        // 驱动不会替我们转：直接传枚举实例会被当成字符串或报错，而列上是 INTEGER（§9.3）。
+        // 驱动不会替我们转：直接传枚举实例会被当成字符串或报错，而列上是 INTEGER。
         { } typed when typed.GetType().IsEnum => EnumAsIntegral(typed),
 
         // 带偏移的时刻要与列同型（下面那一句），裸时刻要与列同型（同一句的返）。
@@ -59,29 +45,11 @@ public sealed class PostgreSqlValues : IValueBinder
         var typed => typed,
     };
 
-    /// <summary><b>这一句只改交出去的那一形的说法，不改它表示的时刻。</b>
-    ///
-    /// <para>本家给 <c>DateTime</c> 选的存储型是 <c>TIMESTAMP(3)</c>（不带时区，<c>GetStoreType</c> 那一格），
-    /// 而 Npgsql 6 起按 <c>DateTime.Kind</c> 分型：<c>Kind=Utc</c> 只肯进带时区那一型，写进裸
-    /// <c>timestamp</c> 就在绑定当场抛 <c>ArgumentException: Cannot write DateTime with Kind=UTC to
-    /// PostgreSQL type 'timestamp without time zone'</c>。现场是一颗真业务库：那一族的列全是
-    /// <c>timestamp without time zone</c>，而 ABP 的时钟交回的是 <c>Kind=Utc</c> 的钟面 ——
-    /// 症状是宿主启动就死、一次登录写一条安全日志就 500，而库里一个字节都没进去。
-    /// 旧底座（SqlSugar）发的是它自己那一份参数对象，这一格从来量不到。</para>
-    ///
-    /// <para><b>裸列</b>收"一串钟面，无所谓时区"，所以把 <c>Utc</c> 的说法摘掉
-    /// （<c>SpecifyKind(Unspecified)</c>）是逐字节同文的改写；换成 <c>Local</c> 才是数据改写 ——
-    /// 钟面会被挪掉本机那几个小时。<b>带时区的列</b>反过来：那一列存的是瞬时，而驱动按
-    /// <c>DbType</c> 认型（<c>DbType.DateTime2</c> 就是裸那一型，钟面再怎么说也换不了它），
-    /// 所以那一列要的是换成 <c>DateTimeOffset</c> 的同一瞬时 —— 偏移按 <c>Kind</c> 说：
-    /// <c>Utc</c> 与没表过态的都记成零偏移（后者那一格与读侧 <c>TypedReadTests</c> 钉住的
-    /// "不猜成 UTC"是<em>另一句话</em>：写侧这一列本来就只收瞬时，猜与不猜都得到一个瞬时），
-    /// <c>Local</c> 保留本机偏移。两形的分界只看列声明出来的那个型，不看 CLR 型自己怎么说。</para>
-    ///
-    /// <para>读侧对应的两臂在 <c>TypedReadTests</c>（<c>ValueConverter</c> 那一族）。钉在
-    /// <c>PostgreSqlTimestampBindingTests</c>（离线五臂：两形各一臂、已经对型的两形不许被动、
-    /// <c>DateTimeOffset</c> 原样递、文本逐字节同形、别家不受影响）与
-    /// <c>PostgreSqlTimestampPathTests</c>（真 PG 一行进去、库里读回同一串钟面）。</para></summary>
+    /// <summary>只改交出去的那一形的说法，不改它表示的时刻。Npgsql 6 起按 DateTime.Kind 分型：
+    /// Kind=Utc 只肯进带时区那一型，写进裸 timestamp 在绑定当场抛（Cannot write DateTime with Kind=UTC）。
+    /// 裸列摘掉 Utc 的说法（SpecifyKind(Unspecified)，逐字节同文的改写；换 Local 才是数据改写）；
+    /// 带时区的列按 DbType 认型，要的是换成 DateTimeOffset 的同一瞬时——Utc/Unspecified 记零偏移，
+    /// Local 保留本机偏移。两形的分界只看列声明出来的那个型，不看 CLR 型自己怎么说。</summary>
     static object? BareOrOffset(DateTime moment, ColumnContract? hint)
     {
         var store = hint?.StoreTypeName;
@@ -101,8 +69,8 @@ public sealed class PostgreSqlValues : IValueBinder
         };
     }
 
-    /// <summary>枚举的底层类型由声明决定，所以按它取对应宽度：<c>byte</c> 底不许被 widen 成 <c>int</c>，
-    /// 否则 <c>DbType.Byte</c> 与实参类型对不上，报错的是驱动而不是这里。</summary>
+    /// <summary>枚举的底层类型由声明决定，按它取对应宽度：byte 底不许被 widen 成 int，
+    /// 否则 DbType.Byte 与实参类型对不上，报错的是驱动而不是这里。</summary>
     static object EnumAsIntegral(object value)
     {
         var convertible = (IConvertible) value;
@@ -191,10 +159,8 @@ public sealed class PostgreSqlValues : IValueBinder
             case float or double:
                 sql = InlineNumber(Invariant(value));
 
-                // 空串 = 这一格拒了（非有限值）。留回 @p 而不是猜一种字面量写法，理由与 T-SQL 那一族
-                // 同一格但不同：这一家**有** NaN 与无穷的写法（<c>'NaN'::double precision</c>，厂商文档口径），
-                // 可它是"带引号再 cast"的形状，而裸 <c>NaN</c> 会被解析成列名 —— 现场没有一台库能证这次改写
-                // 落在哪种设置下都成立（§13.5 的出处台账），所以宁可不内联。
+                // 空串 = 这一格拒了（非有限值）。这一家有 'NaN'::double precision 的写法，但它是
+                // "带引号再 cast"的形状，而裸 NaN 会被解析成列名，宁可不内联。
                 return sql.Length > 0;
 
             case decimal money:
@@ -229,23 +195,13 @@ public sealed class PostgreSqlValues : IValueBinder
             ? formattable.ToString(null, CultureInfo.InvariantCulture)
             : value?.ToString() ?? string.Empty;
 
-    /// <summary>浮点内联只有一件事要做对：<b>纯整数形式要补小数点，指数式不许补</b>。
-    /// 前者是 <c>3</c> 会被当成 integer 常量（<c>real</c> 列上等值比较要走隐式转换，小数位这一档读不出来）；
-    /// 后者 <c>1E-08</c> 本来就是合法的 float8 常量，补成 <c>1E-08.0</c> 是语法错。
-    /// 这一式在 T-SQL 那一族是 2026-09-22 真库实测出来的（<c>SELECT 1E-08</c> 回读 1E-08，
-    /// 而补出来的那一串报「.0 附近有语法错误」，见 <c>SqlServerValues.InlineNumber</c> 的注释）——
-    /// 抄过来的时候方向抄对了，抄到的就是<em>修复后</em>那一份形状（下面的判据带着 <c>'E'</c> 那颗档）：
-    /// "<c>1E-08.0</c> 两家同源同错"记的是故障史 —— 本家在 E 判据未落地的时候出过同一形，那笔已被修掉，
-    /// 不是这份代码的现状；当年撞出它的第二个方言族仍是 §13.5。
-    /// <b>这一格今天仍然是"两家"，而它不涨的原因值得记一句</b>：v0.30 的第四家与 v0.31 的第五家抄的都是
-    /// <em>修复后</em>那一份（<c>MySqlValues</c> 与 <c>XuguValues</c> 的 <c>InlineNumber</c> 注释各自写明了来源），
-    /// 所以"同源同错"那一档的位数停在 2，而这条判据的<em>实现</em>位数是 5 —— 两个数不是一回事，
-    /// 前一个数说的是故障史，后一个数说的是副本数。
-    /// 非有限值（<c>NaN</c> / <c>∞</c> / <c>-∞</c>）交回空串：这一家有 <c>'NaN'::double precision</c>
-    /// 那种"带引号再 cast"的写法，裸 <c>NaN</c> 会被解析成列名，而现场没有一台库能证它在哪种设置下都成立。</summary>
+    /// <summary>浮点内联只有一件事要做对：纯整数形式要补小数点（3 会被当成 integer 常量），
+    /// 指数式不许补（1E-08 本来就是合法的 float8 常量，补成 1E-08.0 是语法错）。
+    /// 非有限值交回空串：这一家有 'NaN'::double precision 那种"带引号再 cast"的写法，
+    /// 裸 NaN 会被解析成列名，而它没有"哪种设置下都成立"的读数。</summary>
     static string InlineNumber(string text)
     {
-        // 判整串字符集而不是判首字符：`-∞` 打头那颗 `-` 是合法的浮点首字符，只判首字符会放它过来。
+        // 判整串字符集而不是判首字符：-∞ 打头那颗 - 是合法的浮点首字符，只判首字符会放它过来。
         foreach (var c in text)
             if (!char.IsAsciiDigit(c) && c is not ('-' or '+' or '.' or 'E' or 'e'))
                 return string.Empty;

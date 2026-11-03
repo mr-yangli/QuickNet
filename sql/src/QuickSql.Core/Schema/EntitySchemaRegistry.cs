@@ -6,18 +6,17 @@ using QuickSql.Metadata;
 namespace QuickSql.Schema;
 
 /// <summary>注册表的构造选项。两个工厂就是 G1 的注入点：返回 null 表示这个实体没有被生成器覆盖，
-/// 退回 Core 的反射兜底（§12.7「加载可以反射，调用不行」的落地处）。分开是因为生成器对同一实体
+/// 退回 Core 的反射兜底（「加载可以反射，调用不行」的落地处）。分开是因为生成器对同一实体
 /// 产出 schema 与 validator 两个类型，一个实体的两半可以各自处于不同进度。</summary>
 public sealed record EntitySchemaOptions(
     ValidationMode Mode = ValidationMode.ContractOnly,
     Func<Type, object?>? SchemaFactory = null,
     Func<Type, object?>? ValidatorFactory = null);
 
-/// <summary>schema 与校验器的缓存。热路径拿到的都是已编译委托，<b>查表之外零反射</b>，
-/// 而查表那一步走 <see cref="TypeTable{TValue}"/>（无锁读 + 冻结快照，§12.7 B 在 type→实体 这五格上的兑现）。</summary>
-/// <remarks>整个类就是 G2 兜底实现的边界，所以 <c>RUC/RDC</c> 标注打在类上而不是逐个成员：
-/// G1 生成的注册表实现同一个 <see cref="IEntitySchemaRegistry"/>，那条路径不需要动态代码（§12.7、§14 的
-/// 「G1 路径下全链路 0 反射」验收项）。接口本身不带标注，所以内核各处经接口调用不会传染。</remarks>
+/// <summary>schema 与校验器的缓存。热路径拿到的都是已编译委托，查表之外零反射，
+/// 查表那一步走 TypeTable（无锁读 + 冻结快照）。整个类是 G2 兜底实现的边界，所以 RUC/RDC 标注打在类上
+/// 而不是逐个成员：G1 生成的注册表实现同一个接口、那条路径不需要动态代码；接口本身不带标注，
+/// 内核各处经接口调用不会传染。</summary>
 [RequiresUnreferencedCode("Reflection-based schema build: it walks properties and attributes of a runtime Type.")]
 [RequiresDynamicCode("Reflection-based schema build compiles expression trees for entity readers and validators.")]
 public sealed class EntitySchemaRegistry : IEntitySchemaRegistry
@@ -62,8 +61,8 @@ public sealed class EntitySchemaRegistry : IEntitySchemaRegistry
             ? NullValidator<T>.Instance
             : (IEntityValidator<T>)_validators.GetOrAdd(typeof(T), static (type, self) => self.BuildValidator(type), this);
 
-    /// <summary>非泛型物化委托。用一次 <c>MakeGenericMethod</c> 把 <c>Func&lt;…,T&gt;</c> 装箱成
-    /// <c>Func&lt;…,object&gt;</c> —— 启动期付出，之后按类型缓存。</summary>
+    /// <summary>非泛型物化委托。用一次 MakeGenericMethod 把 Func 泛型实例装箱成 object 版——
+    /// 启动期付出，之后按类型缓存。</summary>
     public Func<DbDataReader, ReadPlan, object> ReadDelegate(Type clrType)
         => _readDelegates.GetOrAdd(
             clrType,
@@ -72,7 +71,7 @@ public sealed class EntitySchemaRegistry : IEntitySchemaRegistry
                 .Invoke(null, [self.SchemaHandle(type)])!,
             this);
 
-    /// <summary>跟踪器里存的是 <c>object</c>，所以校验也要一个非泛型口。反射只在第一次取用时发生，
+    /// <summary>跟踪器里存的是 object，所以校验也要一个非泛型口。反射只在第一次取用时发生，
     /// 之后与泛型口走同一条已编译路径。</summary>
     public Action<object, List<ValidationFailure>> ValidateDelegate(Type clrType)
         => _validateDelegates.GetOrAdd(

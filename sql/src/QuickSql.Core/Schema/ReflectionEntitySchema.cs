@@ -8,8 +8,8 @@ using Da = System.ComponentModel.DataAnnotations;
 
 namespace QuickSql.Schema;
 
-/// <summary>G2 兜底实现：启动期用表达式树编译读写器，之后热路径零反射（§12.7 原则）。
-/// G1 源生成器产出同样形状的代码，两者由 §13.11 的用例断言行为一致。</summary>
+/// <summary>G2 兜底实现：启动期用表达式树编译读写器，之后热路径零反射。
+/// G1 源生成器产出同样形状的代码，两者由对拍用例断言行为一致。</summary>
 [RequiresUnreferencedCode("G2 兜底实现：按成员名反射定位属性/字段并读取注解。")]
 [RequiresDynamicCode("G2 兜底实现：用表达式树编译读写器。")]
 public sealed class ReflectionEntitySchema<T> : IEntityTypeSchema<T> where T : class
@@ -22,7 +22,7 @@ public sealed class ReflectionEntitySchema<T> : IEntityTypeSchema<T> where T : c
     {
         Contract = contract;
 
-        // 无参构造不问可见性（ABP/DDD 的 protected X() 那一族），判据与出处见 MemberAccessors
+        // 无参构造不问可见性（protected X() 那一族实体），判据与出处见 MemberAccessors
         var ctor = MemberAccessors.ParameterlessConstructor(typeof(T))
                    ?? throw new QuickSqlException(
                        $"实体 {typeof(T).Name} 没有无参构造器，无法物化（公共与内部、受保护、私有都查过）");
@@ -62,18 +62,17 @@ public sealed class ReflectionEntitySchema<T> : IEntityTypeSchema<T> where T : c
         return (setter, getter);
     }
 
-    /// <summary>编译这一型的行读取器。<b>每一列两条臂，而两条臂都不是这一处自己实现的读法</b>：
-    /// 有臂的列进 <c>DirectRead.ReadXxx</c>（那一臂的非直读分支就是装箱口），
-    /// 没臂的列（枚举、<c>byte[]</c>、<c>DateOnly</c>……）直接进装箱口。
-    /// 于是 G1 的模板与这一处是按<em>同一批方法名</em>排的队，§13.11 那条对拍才比的是同一件事（§16.21）。</summary>
+    /// <summary>编译这一型的行读取器。每一列两条臂，而两条臂都不是这一处自己实现的读法：
+    /// 有臂的列进 DirectRead.ReadXxx（那一臂的非直读分支就是装箱口），没臂的列（枚举、byte[]、DateOnly…）
+    /// 直接进装箱口。于是 G1 的模板与这一处是按同一批方法名排的队，对拍才比的是同一件事。</summary>
     Func<DbDataReader, ReadPlan, T> BuildReader(EntityContract contract)
     {
         var reader = Expression.Parameter(typeof(DbDataReader), "r");
         var plan = Expression.Parameter(typeof(ReadPlan), "p");
         var offset = Expression.Property(plan, nameof(ReadPlan.Offset));
         var ops = Expression.Property(plan, nameof(ReadPlan.Ops));
-        // 取数口一次查好、逐列复用。写成局部 var 而不是静态 MethodInfo 字段，是为了不让门禁第 8 行
-        // 因为"多了一个类型名"而红 —— 它数的是 src/ 里的反射字样，这一处与下面 ConvertMethod 那处同性质。
+        // 取数口一次查好、逐列复用。写成局部 var 而不是静态 MethodInfo 字段，
+        // 是为了不往 src/ 里再添一处反射字样（这一处与下面 ConvertMethod 那处同性质）。
         var read = typeof(ValueConverter).GetMethod(nameof(ValueConverter.Read),
             BindingFlags.Public | BindingFlags.Static, null, [typeof(DbDataReader), typeof(int)], null)!;
         var entity = Expression.Variable(typeof(T), "e");
@@ -93,7 +92,7 @@ public sealed class ReflectionEntitySchema<T> : IEntityTypeSchema<T> where T : c
             // 按声明类型（含 Nullable）转换：null 落进 int? 才是 null，落进 int 会变成 0——
             // 后者是"读出来看不出问题、写回去把 NULL 变成 0"这类事故的源头。
             // 取数一律走 ValueConverter.Read：这一处自己不判断类型、也不直接 GetValue，
-            // 所以"某一列怎么读"只有一个地方可以改（§12.7 C 第二条，门的现状见 Materializer 里那段实测）。
+            // 所以"某一列怎么读"只有一个地方可以改。
             var ordinal = Expression.Add(offset, Expression.Constant(i));
 
             // 臂的句柄是从方法组转换出来的委托上取的（Delegate.Method），不是反射查找；
@@ -110,8 +109,8 @@ public sealed class ReflectionEntitySchema<T> : IEntityTypeSchema<T> where T : c
         return Expression.Lambda<Func<DbDataReader, ReadPlan, T>>(Expression.Block([entity], body), reader, plan).Compile();
     }
 
-    /// <summary>给 <see cref="SetValue"/> 那一档用的：那里的值已经是 <c>object</c>（外面递进来什么就是什么），
-    /// 没有序号可问，所以只能进 <c>To&lt;T&gt;(object)</c> 这扇门。</summary>
+    /// <summary>给 SetValue 那一档用的：那里的值已经是 object（外面递进来什么就是什么），
+    /// 没有序号可问，所以只能进 To&lt;T&gt;(object) 这扇门。</summary>
     static readonly MethodInfo ConvertMethod =
         typeof(ValueConverter).GetMethod(nameof(ValueConverter.To), BindingFlags.Public | BindingFlags.Static, null, [typeof(object)], null)!;
 
@@ -135,9 +134,9 @@ public sealed class ReflectionEntitySchema<T> : IEntityTypeSchema<T> where T : c
            ?? throw new QuickSqlException($"实体 {typeof(T).Name} 上没有成员 {name}");
 }
 
-/// <summary>反射式校验器。<see cref="ValidationMode.ContractOnly"/> 只读 <see cref="ColumnContract"/>
-/// 这一份真相；<see cref="ValidationMode.DataAnnotations"/> 再补注解的 <c>IsValid</c>（§10.6）。
-/// 取值走 <see cref="IEntityTypeSchema{T}"/>，所以 G1 生成的 schema 也能直接喂进来。</summary>
+/// <summary>反射式校验器。ValidationMode.ContractOnly 只读 ColumnContract 这一份真相；
+/// ValidationMode.DataAnnotations 再补注解的 IsValid。取值走 IEntityTypeSchema&lt;T&gt;，
+/// 所以 G1 生成的 schema 也能直接喂进来。</summary>
 [RequiresUnreferencedCode("G2 兜底实现：按成员名反射定位属性/字段并读取注解。")]
 [RequiresDynamicCode("G2 兜底实现：用表达式树编译读写器。")]
 public sealed class ReflectionEntityValidator<T> : IEntityValidator<T> where T : class
@@ -180,7 +179,7 @@ public sealed class ReflectionEntityValidator<T> : IEntityValidator<T> where T :
             var column = _columns[i];
             var value = _getters[i](entity);
 
-            // 两条尺子的实现与消息文本都在 ContractRules：G1 生成的校验器调的是同一处（§10.6）。
+            // 两条尺子的实现与消息文本都在 ContractRules：G1 生成的校验器调的是同一处。
             if (value is null && !column.IsNullable)
                 ContractRules.Required(column, failures);
 
@@ -203,7 +202,7 @@ public sealed class ReflectionEntityValidator<T> : IEntityValidator<T> where T :
     }
 
     /// <summary>长度与必填已由契约查过；注解再查一遍会出现「同一行报两次错」。
-    /// 例外是 <see cref="Da.StringLengthAttribute.MinimumLength"/>，契约里没有下界（§15.7 白名单的收口）。</summary>
+    /// 例外是 StringLengthAttribute.MinimumLength，契约里没有下界。</summary>
     static Da.ValidationAttribute[] AttributeSideOf(string memberName)
     {
         if (typeof(T).GetProperty(memberName, BindingFlags.Public | BindingFlags.Instance) is not { } property)

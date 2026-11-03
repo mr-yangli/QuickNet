@@ -3,29 +3,23 @@ using QuickSql.Metadata;
 
 namespace QuickSql.Tracking;
 
-/// <summary>级联的三个方向。<b>只有这三档</b>：插入顺导航图把人带进会话，删除顺同一张图把子行标删，
-/// 摘行只处理"上一次看见、这一次不在了"的那几只（裁决③：从集合里摘掉就是要把那一行删掉）。
-/// 「父实体本轮还是新增、这一句 <c>Remove</c> 只是把它忘掉」那一档故意不在这里 —— 理由写在
-/// <see cref="EntityTracker{T}.Remove"/>。</summary>
+/// <summary>级联的三个方向。只有这三档：插入顺导航图把人带进会话，删除顺同一张图把子行标删，
+/// 摘行只处理"上一次看见、这一次不在了"的那几只（从集合里摘掉就是要把那一行删掉）。
+/// 「父实体本轮还是新增、这一句 Remove 只是把它忘掉」那一档故意不在这里，理由写在 EntityTracker 的 Remove。</summary>
 enum CascadeMode
 {
     Insert,
     Delete,
 
-    /// <summary>摘行档。<b>它不调 <see cref="CascadeWalker.Walk"/></b>：那一颗是"顺这一张实体的全部集合边走一遍"，
-    /// 而这一档只处理一根边上的几只<em>已经不在那一串里</em>的实例 —— 现读的那一串里根本没有它们。
-    /// 静态型仍然由同一把 <see cref="CollectionEdgeContract.CascadeEnter"/> 委托带进来，
-    /// 委托带上来的那一份成员由摘行者换掉（见 <see cref="CascadeWalker.Detach"/>）。</summary>
+    /// <summary>摘行档。它不调 Walk（那是"顺全部集合边走一遍"），只处理一根边上几只已经不在那一串里的实例
+    /// ——现读的那一串里根本没有它们。静态型仍由同一把 CascadeEnter 委托带进来，名单由摘行者换掉。</summary>
     Detach,
 }
 
-/// <summary>一条欠着的外键：父实体手里那一串键值要在<em>父写出去之后、子的语句建出来之前</em>落进子实体的
-/// 那几列（<see cref="ChangeTracker.ApplyCascadeLinks"/>）。
-///
-/// <para><b>为什么不复用临时主键那条改写路径</b>（<c>EntityTracker.ResolveTempKeys</c>）：它换的是本实体
-/// <em>to-one 边</em>上的列，而级联的子端常常只有集合边（<c>OrderItem</c> 手里有 <c>OrderId</c> 列、
-/// 却没有 <c>Order</c> 导航）—— 那条路径根本不知道这些列存在，于是一颗负数就会原样进库。
-/// 这里换的是<b>父此刻的键</b>：要么已经有值，要么刚被 <c>INSERT</c> 回填回来，两种都走同一处判据。</para></summary>
+/// <summary>一条欠着的外键：父实体手里那一串键值要在「父写出去之后、子的语句建出来之前」落进子实体的那几列。
+/// 不复用临时主键那条改写路径：它换的是本实体 to-one 边上的列，而级联的子端常常只有集合边
+/// （OrderItem 手里有 OrderId 列、却没有 Order 导航），那条路径根本不知道这些列存在，负数会原样进库。
+/// 这里换的是父此刻的键：要么已经有值，要么刚被 INSERT 回填回来。</summary>
 readonly record struct CascadeLink(
     ITypeTracker Parent,
     object ParentEntity,
@@ -33,30 +27,21 @@ readonly record struct CascadeLink(
     object ChildEntity,
     int[] Columns);
 
-/// <summary>级联的那一次遍历（§8.2「会话按外键依赖排」在写侧的前半段：<c>Add</c>/<c>Remove</c> 顺导航图带人）。
-///
-/// <para><b>每一次 <c>Add</c>/<c>Remove</c> 新建一份</b>，而不是挂在会话上：递归的形状是
-/// <c>Enter</c> → 子端 <c>Add</c> → 子端自己的级联 → ……，共用一份游标会让内层把外层的边覆盖掉，
-/// 于是「孙实体挂到错的父上」这种形状只有崩了才看得见。新建一份的代价是一次对象分配，
-/// 而它只在真的带集合边的类型上发生（<see cref="EntityTracker{T}"/> 那边有一道 <c>_cascades</c> 闸门）。</para>
-///
-/// <para><b>静态型从哪来</b>：<see cref="ICascadeSink.Enter{TParent,TChild}"/> 由契约上那把
-/// <see cref="CollectionEdgeContract.CascadeEnter"/> 委托调用 —— G1 是生成器写的 lambda，
-/// G2 是启动期编译一次的表达式树。这一层因此<em>没有</em> <c>MakeGenericMethod</c>，
-/// 公开的 <c>Add</c>/<c>Remove</c> 上也不必挂裁剪标注（§12.7 A 的「写侧 0 反射」）。</para></summary>
+/// <summary>级联的那一次遍历：Add/Remove 顺导航图带人。每一次 Add/Remove 新建一份，而不是挂在会话上：
+/// 递归的形状是 Enter → 子端 Add → 子端自己的级联 → ……，共用一份游标会让内层把外层的边覆盖掉，
+/// 「孙实体挂到错的父上」只有崩了才看得见；新建一份的代价是一次对象分配，只在真带集合边的类型上发生。
+/// 静态型由契约上那把 CascadeEnter 委托调用，这一层没有 MakeGenericMethod，公开的 Add/Remove 上不必挂裁剪标注。</summary>
 sealed class CascadeWalker(ChangeTracker session, CascadeMode mode) : ICascadeSink
 {
     ITypeTracker _parent = null!;
     CollectionEdgeContract _edge = null!;
 
-    /// <summary>摘行档要送进子端那一档的那几只<em>已经不在集合里</em>的实例。<b>只在
-    /// <see cref="CascadeMode.Detach"/> 那一档有人读它</b>，其余两档它恒为 null，一次分配都不付。</summary>
+    /// <summary>摘行档要送进子端那一档的那几只已经不在集合里的实例。只在 Detach 档有人读它，
+    /// 其余两档恒为 null，一次分配都不付。</summary>
     IReadOnlyList<object>? _victims;
 
-    /// <summary>走完这一张实体手里的集合边。调用点是 <c>EntityTracker.Add</c>/<c>Remove</c> 里
-    /// <b>「刚新登记/刚新标删」那两条分支</b>：已经跟踪过的实例再 <c>Add</c> 一次是幂等的，
-    /// 顺它再走一遍图只会把同一批子实体反复送进 <c>Add</c>，而递归的终止靠的正是「新登记才往下走」——
-    /// 图里有环（父子各有一根导航）时也是它收敛。</summary>
+    /// <summary>走完这一张实体手里的集合边。调用点是 EntityTracker.Add/Remove 里「刚新登记/刚新标删」那两条分支：
+    /// 已经跟踪过的实例再 Add 一次是幂等的，递归的终止靠的正是「新登记才往下走」——图里有环时也是它收敛。</summary>
     public void Walk(ITypeTracker parent, object entity)
     {
         _parent = parent;
@@ -70,7 +55,7 @@ sealed class CascadeWalker(ChangeTracker session, CascadeMode mode) : ICascadeSi
 
             if (children is null)
             {
-                // 删除档：集合位是空的（没 Load、没 Include）就是"捞不到"，按裁决①拒 ——
+                // 删除档：集合位是空的（没 Load、没 Include）就是"捞不到"，拒——
                 // 静默留下一串库里还挂着的孤儿行，比多一句报错难查得多。
                 // 插入档相反：手里没有子实体就是没有要带的人，无话可说。
                 if (mode == CascadeMode.Delete)
@@ -89,13 +74,9 @@ sealed class CascadeWalker(ChangeTracker session, CascadeMode mode) : ICascadeSi
         }
     }
 
-    /// <summary>摘行档的入口：把 <paramref name="victims"/> 那几只送进子端那一档标删（连带它们自己手里的子串）。
-    ///
-    /// <para><b>为什么委托带上来的那一份成员要被换掉</b>：<see cref="CollectionEdgeContract.CascadeEnter"/> 读的是
-    /// <em>此刻</em>那一串，而这一档要的正是"刚才在那一串里、现在没有了"的那几只 —— 现读读不到它们。
-    /// 这一档要的还是同一个 <c>Enter&lt;TParent,TChild&gt;</c>：会话手里只有 <see cref="Type"/>，
-    /// 而子端那一档的构造要编译期的 <c>TChild</c>（同 §12.7「写侧 0 反射」那条不变量）。
-    /// 为这一档再开第三把委托，契约、生成器、表达式树三处各多一栏，换不到任何多出来的类型安全。</para></summary>
+    /// <summary>摘行档的入口：把 victims 那几只送进子端那一档标删（连带它们自己手里的子串）。
+    /// 委托带上来的那一份成员要被换掉：委托读的是此刻那一串，而这一档要的是"刚才在、现在没有了"的那几只，
+    /// 现读读不到它们。仍走同一把委托而不是再开一把：会话手里只有 Type，多一把委托换不到类型安全。</summary>
     public void Detach(ITypeTracker parent, object entity, CollectionEdgeContract edge, IReadOnlyList<object> victims)
     {
         _parent = parent;
@@ -105,9 +86,9 @@ sealed class CascadeWalker(ChangeTracker session, CascadeMode mode) : ICascadeSi
         edge.CascadeEnter(this, entity);
     }
 
-    /// <summary>到位档的入口（裁决③的镜像）：把 <paramref name="arrivals"/> 那几只送进子端<em>插入</em>档 ——
-    /// 基线里没有、此刻集合里新到、且会话还没跟过的那几只。与摘行档同一把 <c>CascadeEnter</c> 委托、
-    /// 同一次换成员，差别只在送进的档：摘掉一只删一行，新到一只插一行（外键由级联链接在父写出去之后补）。</summary>
+    /// <summary>到位档的入口：把 arrivals 那几只送进子端插入档——基线里没有、此刻集合里新到、
+    /// 且会话还没跟过的那几只。与摘行档同一把委托、同一次换成员，差别只在送进的档：
+    /// 摘掉一只删一行，新到一只插一行（外键由级联链接在父写出去之后补）。</summary>
     public void Arrive(ITypeTracker parent, object entity, CollectionEdgeContract edge, IReadOnlyList<object> arrivals)
     {
         _parent = parent;
@@ -142,16 +123,14 @@ sealed class CascadeWalker(ChangeTracker session, CascadeMode mode) : ICascadeSi
         }
     }
 
-    /// <summary>送进去的那一份成员：摘行档送<em>基线里那几只</em>，到位档送<em>新到的那几只</em>（两者都换了名单，
+    /// <summary>送进去的那一份成员：摘行档送基线里那几只，到位档送新到的那几只（两者都换了名单，
     /// 因为要的都不是"此刻那一串"），其余送委托现读的那一串。</summary>
     IEnumerable<TChild>? Pending<TChild>(IEnumerable<TChild>? children) where TChild : class
         => _victims is not null ? [.. _victims.Select(static victim => (TChild) victim)] : children;
 
-    /// <summary>那一格集合位<em>此刻</em>装着的成员（按引用原样收，<c>null</c> 元素跳过）。
-    ///
-    /// <para><b>返回 <c>null</c> 只有一层意思：那一格是空的（没 Load、没 Include）</b>。调用方据此把
-    /// "我从没见过这一串"与"我见过、而它是空的"分开 —— 前者判不出谁被摘掉（不替没看见的东西编一份缺席的账），
-    /// 后者才判得出（裁决①与裁决③共用这一颗分岔）。</para></summary>
+    /// <summary>那一格集合位此刻装着的成员（按引用原样收，null 元素跳过）。返回 null 只有一层意思：
+    /// 那一格是空的（没 Load、没 Include）——调用方据此把"我从没见过这一串"与"我见过、而它是空的"分开：
+    /// 前者判不出谁被摘掉（不替没看见的东西编一份缺席的账），后者才判得出。</summary>
     internal static List<object>? LiveMembers(CollectionEdgeContract edge, object entity)
     {
         var navigation = edge.NavigationReader(entity);
@@ -183,8 +162,8 @@ sealed class CascadeWalker(ChangeTracker session, CascadeMode mode) : ICascadeSi
         }
     }
 
-    /// <summary><b>退给非泛型的 <see cref="IEnumerable"/> 而不是泛型那一支</b>：读口交回来的就是装箱的集合位，
-    /// 静态型到下一格才由 <see cref="ICascadeSink.Enter{TParent,TChild}"/> 那把委托带回来。</summary>
+    /// <summary>退给非泛型的  而不是泛型那一支：读口交回来的就是装箱的集合位，
+    /// 静态型到下一格才由  那把委托带回来。</summary>
     static IEnumerable RequireEnumerable(object navigation, CollectionEdgeContract edge)
         => navigation as IEnumerable ?? throw new QuickSqlException(
             $"集合导航 {edge.MemberName} 读出来的不是一串集合（是 {navigation.GetType().Name}）：" +

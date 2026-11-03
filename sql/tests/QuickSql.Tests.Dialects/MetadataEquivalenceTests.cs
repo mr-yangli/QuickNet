@@ -39,6 +39,7 @@ public sealed class MetadataEquivalenceTests
     [InlineData(typeof(Customer))]
     [InlineData(typeof(SessionToken))]
     [InlineData(typeof(InventoryItem))]
+    [InlineData(typeof(DefaultsRow))]
     [InlineData(typeof(LegacyShipment))]
     // 可空上下文之外那一格（<c>NullabilityDeclared</c>）是这一册里唯一"两侧各读一份元数据"的字段：
     // G1 问的是 Roslyn 的 <c>NullableAnnotation.None</c>，G2 问的是 <c>NullabilityInfoContext</c> 的

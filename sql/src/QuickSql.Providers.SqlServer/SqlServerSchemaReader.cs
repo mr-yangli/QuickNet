@@ -4,16 +4,14 @@ using QuickSql.Providers;
 
 namespace QuickSql.Providers.SqlServer;
 
-/// <summary>从 <c>sys.columns</c> 读结构（§4）。这里只有 ADO.NET 抽象层的虚调用：
-/// 驱动类型由 <c>DriverRegistry</c> 在运行期解析，本文件不认识 <c>SqlConnection</c>。
-///
-/// <para>一趟读三样：列（含列备注、自增、标度）、表备注、索引清单（含主键列）。后两样从
-/// <c>sys.extended_properties</c> 与 <c>sys.indexes</c> 来，而这两张视图从前根本没人查——
-/// 于是"改了表备注/加了索引"在结构同步那一头读不回来，判不出差别，也就同步不了（§9.5）。</para></summary>
+/// <summary>从 sys.columns 读结构。这里只有 ADO.NET 抽象层的虚调用：
+/// 驱动类型由 DriverRegistry 在运行期解析，本文件不认识 SqlConnection。
+/// 一趟读三样：列（含列备注、自增、标度）、表备注、索引清单（含主键列）——后两样从
+/// sys.extended_properties 与 sys.indexes 来，缺了它们结构同步就判不出差别、同步不了。</summary>
 public sealed class SqlServerSchemaReader : ISchemaReader
 {
-    /// <summary><c>class = 1</c> 是 <c>OBJECT_OR_COLUMN</c>，<c>minor_id</c> 是列序（0 留给表本身）。
-    /// 备注的值位是 <c>sql_variant</c>，所以必须 CAST 出来才读得成字符串。</summary>
+    /// <summary>class = 1 是 OBJECT_OR_COLUMN，minor_id 是列序（0 留给表本身）。
+    /// 备注的值位是 sql_variant，所以必须 CAST 出来才读得成字符串。</summary>
     const string ColumnsSql = """
         SELECT c.column_id, c.name, ty.name AS type_name, c.max_length, c.precision, c.scale, c.is_nullable,
                c.is_identity, CAST(ep.value AS nvarchar(4000)) AS comment
@@ -31,11 +29,10 @@ public sealed class SqlServerSchemaReader : ISchemaReader
         WHERE ep.major_id = OBJECT_ID(@table) AND ep.class = 1 AND ep.minor_id = 0 AND ep.name = N'MS_Description'
         """;
 
-    /// <summary><c>type IN (1,2)</c> 是有行的索引（聚集 / 非聚集），排掉 0（堆）与 3/4（XML、全文）——
-    /// 后两样的形状契约里表达不了，把它们读回来只会在"库里多出一条索引"那一格里多一条假名。
-    /// 主键也一起读，不为补建，为的是判出"库里的主键列与契约差哪一列"。
-    /// <c>is_unique_constraint</c> 一起带回来：那一颗是唯一<em>约束</em>不是索引，
-    /// <c>DROP INDEX</c> 删不动它（要 <c>ALTER TABLE … DROP CONSTRAINT</c>），所以它在计划层单独一格。</summary>
+    /// <summary>type IN (1,2) 是有行的索引（聚集 / 非聚集），排掉 0（堆）与 3/4（XML、全文）——
+    /// 后两样的形状契约里表达不了，读回来只会多一条假名。主键也一起读，不为补建，
+    /// 为的是判出"库里的主键列与契约差哪一列"。is_unique_constraint 一起带回来：
+    /// 那一颗是唯一约束不是索引，DROP INDEX 删不动它，所以它在计划层单独一格。</summary>
     const string IndexesSql = """
         SELECT i.name, i.is_unique, i.is_primary_key, i.is_unique_constraint, COL_NAME(ic.object_id, ic.column_id) AS column_name
         FROM sys.indexes i
@@ -44,8 +41,8 @@ public sealed class SqlServerSchemaReader : ISchemaReader
         ORDER BY i.index_id, ic.key_ordinal
         """;
 
-    /// <summary>§10.4 的量纲探测。只读目录视图与会话属性，不建临时表、不写数据：
-    /// 信创生产库常禁 DDL 权限，探测工具不能反过来要求它（§9.5）。</summary>
+    /// <summary>量纲探测。只读目录视图与会话属性，不建临时表、不写数据：
+    /// 信创生产库常禁 DDL 权限，探测工具不能反过来要求它。</summary>
     const string ProbeSql = """
         SELECT ty.name AS type_name, c.max_length, c.collation_name
         FROM sys.columns c
@@ -80,9 +77,9 @@ public sealed class SqlServerSchemaReader : ISchemaReader
                     reader.GetBoolean(6),
                     reader.GetInt32(0))
                 {
-                    // 与表备注那一格同一个折法：<b>LEFT JOIN 没配上行 = 这一列没写备注</b>，交回空串。
-                    // 交 null 说的是"这一家没有列注释这个概念"，而 §9.5 因此会把"库里备注被删掉"读成
-                    // "这一格判不了"——判据永远比不出差别，被删的那一条再也补不回去。
+                    // 与表备注那一格同一个折法：LEFT JOIN 没配上行 = 这一列没写备注，交回空串。
+                    // 交 null 说的是"这一家没有列注释这个概念"，那会把"库里备注被删掉"读成"判不了"，
+                    // 被删的那一条再也补不回去。
                     Comment = reader.IsDBNull(8) ? string.Empty : reader.GetString(8),
                     IsIdentity = reader.GetBoolean(7),
                     IsPrimaryKey = false,
@@ -98,7 +95,7 @@ public sealed class SqlServerSchemaReader : ISchemaReader
 
             await using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
 
-            // 读不到那一行 = 这张表没有表备注扩展属性，交回空串而不是 null：null 在 §9.5 里说的是
+            // 读不到那一行 = 这张表没有表备注扩展属性，交回空串而不是 null：null 说的是
             // "这一家没有表备注这个概念"，而那会把补备注那一档整格关掉。
             tableComment = await reader.ReadAsync(ct).ConfigureAwait(false) && !reader.IsDBNull(0) ? reader.GetString(0) : string.Empty;
         }
@@ -108,8 +105,8 @@ public sealed class SqlServerSchemaReader : ISchemaReader
         return new SchemaTable(table, [.. columns]) { Comment = tableComment, Indexes = indexes };
     }
 
-    /// <summary>索引一趟读两件事：非主键的那几条原样交回，主键那一条的列回写进 <see cref="SchemaColumn.IsPrimaryKey"/>。
-    /// 列名按 <c>key_ordinal</c> 聚合成有序清单——索引的列序是它的内容的一部分（<c>(a,b)</c> 与 <c>(b,a)</c> 不是同一条）。</summary>
+    /// <summary>索引一趟读两件事：非主键的那几条原样交回，主键那一条的列回写进 SchemaColumn.IsPrimaryKey。
+    /// 列名按 key_ordinal 聚合成有序清单——索引的列序是它的内容的一部分（(a,b) 与 (b,a) 不是同一条）。</summary>
     static async Task<IReadOnlyList<SchemaIndex>> ReadIndexesAsync(
         DbConnection connection,
         TableInfo table,
@@ -169,8 +166,7 @@ public sealed class SqlServerSchemaReader : ISchemaReader
         var collation = reader.IsDBNull(2) ? string.Empty : reader.GetString(2);
 
         // nvarchar/nchar 的 max_length 是字节数而 n 是字符数（UTF-16，恒 2 倍）；
-        // varchar/char 的 n 就是字节数，排序规则只决定"一个字节能装哪个字符"——
-        // cp1252 下中文塌成 '?' 是静默损坏，那一条由 UnsafeLengthSemanticsException 在启动期拦。
+        // varchar/char 的 n 就是字节数，排序规则只决定"一个字节能装哪个字符"。
         // 所以量纲只看类型名，不看排序规则；UTF-8 与否从 collation_name 自己的后缀读得出。
         var charSemantics = storeType is "nvarchar" or "nchar";
         var declared = definitionBytes < 0 ? -1 : charSemantics ? definitionBytes / 2 : definitionBytes;
@@ -178,9 +174,9 @@ public sealed class SqlServerSchemaReader : ISchemaReader
         return new LengthSemanticsReading(collation, declared, definitionBytes, charSemantics);
     }
 
-    /// <summary>形状对得上吗——比的是<em>归一后的存储类型文本</em>，而归一只有本家做得起（§9.5 的 diff）。
-    /// 发射侧一律大写而目录一律小写；<c>DATETIME2(3)</c> 发出去而目录把标度单存一格；
-    /// 手工建的表上 <c>DECIMAL</c> 读回 <c>numeric</c>；<c>rowversion</c> 在目录里干脆就叫 <c>binary(8)</c>。
+    /// <summary>形状对得上吗——比的是归一后的存储类型文本，而归一只有本家做得起。
+    /// 发射侧一律大写而目录一律小写；DATETIME2(3) 发出去而目录把标度单存一格；
+    /// 手工建的表上 DECIMAL 读回 numeric；rowversion 在目录里干脆就叫 binary(8)。
     /// 这四折全在这一个私有归一口里，所以建侧与读侧不可能各自折成两个样子。</summary>
     public bool? ColumnShapeMatches(ColumnContract expected, SchemaColumn actual)
         => string.Equals(Normalize(SqlServerTypes.Instance.GetStoreType(expected)), Normalize(actual.StoreType), StringComparison.Ordinal);
@@ -203,7 +199,7 @@ public sealed class SqlServerSchemaReader : ISchemaReader
             : $"{storeType}({(storeType.StartsWith('n') ? byteLength / 2 : byteLength)})",
         "decimal" or "numeric" => $"{storeType}({precision},{scale})",
         // 发射侧写的是 DATETIME2(3) 而目录把标度单存一格（不写精度时它是 7），
-        // 不带出来就成了"每颗时间列都判不出差"——而 §9.3 那张表里唯一会变的那一格正是它。
+        // 不带出来就成了"每颗时间列都判不出差"。
         "datetime2" or "datetimeoffset" or "time" => $"{storeType}({scale})",
         _ => storeType,
     };
@@ -233,8 +229,8 @@ public sealed class SqlServerSchemaReader : ISchemaReader
         return parameter;
     }
 
-    /// <summary><c>OBJECT_ID</c> 吃的是带引号的两段名，所以这里必须与查询层用同一套标识符策略，
-    /// 否则混合大小写的表在 <c>doctor</c> 里会读成"表不存在"。</summary>
+    /// <summary>OBJECT_ID 吃的是带引号的两段名，所以这里必须与查询层用同一套标识符策略，
+    /// 否则混合大小写的表在 doctor 里会读成"表不存在"。</summary>
     static string Qualified(TableInfo table)
         => table.Schema is { Length: > 0 } schema
             ? $"{IdentifierPolicy.SqlServer.Quote(schema)}.{IdentifierPolicy.SqlServer.Quote(table.Name)}"

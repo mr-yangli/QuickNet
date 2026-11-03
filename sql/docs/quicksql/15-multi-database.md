@@ -20,7 +20,7 @@
 | MySQL | `MySql` | `QuickSql.Providers.MySql` | `MySqlConnector` | `Server=<h>;Port=3306;Database=<db>;User ID=<u>;Password=<p>;Charset=utf8mb4` |
 | TiDB | `TiDb` | `QuickSql.Providers.TiDb` | `MySqlConnector` | `Server=<h>;Port=4000;Database=<db>;User ID=<u>;Password=<p>` |
 | OceanBase（MySQL 模） | `OceanBase` | `QuickSql.Providers.OceanBase` | `MySqlConnector` | `Server=<h>;Port=2881;Database=<db>;User ID=<u>@<租户>;Password=<p>` |
-| 虚谷 XuGu | `Xugu` | `QuickSql.Providers.Xugu` | 厂商给件（`XuguClient` + 原生库 `xugusql.dll`/`libxugusql.so` 放同目录） | `Server=<h>;Port=<port>;Database=<db>;User ID=<u>;Password=<p>` |
+| 虚谷 XuGu | `Xugu` | `QuickSql.Providers.Xugu` | 厂商给件（`XuguClient`，4.0.0.8 起纯托管一颗，无原生库要摆） | `Server=<h>;Port=<port>;Database=<db>;USER=<u>;Password=<p>`（4.0 的键名校验不认 `User ID`，要 `USER` 或 `UID`；3.3.4.5 两种都认） |
 | GBase 8s | `Gbase8s` | `QuickSql.Providers.Gbase8s` | 厂商给件（`GBase.DataDB`） | Informix 形：`Database=<db>;Host=<h>;Service=<port>;Protocol=onsoctcp;Server=<实例>;UID=<u>;PWD=<p>` |
 | SQLite | `Sqlite` | `QuickSql.Providers.Sqlite` | `Microsoft.Data.Sqlite` | `Data Source=<文件路径>`（内存库 `:memory:`） |
 | ClickHouse | `ClickHouse` | `QuickSql.Providers.ClickHouse` | `ClickHouse.Client` | 按官方客户端文档（`Host`/`Port`/`Database`/`Username`/`Password`） |

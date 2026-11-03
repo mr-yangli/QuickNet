@@ -3,8 +3,8 @@ using QuickSql.Sql.Ast;
 
 namespace QuickSql.Query.Model;
 
-/// <summary>把模型渲染成与方言无关的规范文本。两个用途：§13.2 的等价性判据（v0.6 起的对象是跨 arity，
-/// 不再是"链式 vs LINQ"），以及 <c>Explain()</c> 里给人看的模型段。刻意不复用 <c>SqlWriter</c>——那是方言出口，
+/// <summary>把模型渲染成与方言无关的规范文本。两个用途：等价性判据（两个模型的规范文本必须逐字符相等），
+/// 以及 Explain() 里给人看的模型段。刻意不复用 SqlWriter——那是方言出口，
 /// 格式会随 provider 变（引号、分页写法），规范文本必须跨库稳定。</summary>
 static class QueryModelPrinter
 {
@@ -20,18 +20,22 @@ static class QueryModelPrinter
              .Append(" AS ").Append(table.Alias).Append('\n');
         }
 
-        // 表源的两种非默认来路都要在文本里看得见：WithSql 那一段是用户写的（RAW[…]），
-        // 派生表那份是库规划的内层模型（DERIVED + 缩进的内层全文）。留白的理由是 §13.2 那句判据：
-        // 模型文本里没有，等价性测试就漏掉一整类差异，而 Explain() 给人看的那一段也少一格。
+        // 表源的两种非默认来路都要在文本里看得见，否则等价性测试会漏掉一整类差异。
         if (model.Source is SourceRawText raw)
             b.Append("  SOURCE RAW[").Append(raw.Sql).Append("]{")
              .Append(string.Join(", ", raw.Parameters.Select(p => p.Name))).Append("}\n");
 
-        // 合并的形状要在文本里看得见：关键字（去不去重）与两条腿各自的全文。
-        // 腿打的是内层模型的规范文本 —— §13.2 比的是"会发出去的东西"，腿正是会发出去的东西。
+        // 合并的形状（关键字与两条腿各自的全文）要在文本里看得见；关键字打规范形（EXCEPT 不打 MINUS）。
         if (model.Source is SourceSetOps setOps)
         {
-            b.Append("  SOURCE ").Append(setOps.All ? "UNION ALL" : "UNION").Append('\n');
+            b.Append("  SOURCE ").Append(setOps.Operation switch
+            {
+                SetOperationKind.UnionAll => "UNION ALL",
+                SetOperationKind.Union => "UNION",
+                SetOperationKind.Intersect => "INTERSECT",
+                SetOperationKind.Except => "EXCEPT",
+                _ => throw new QuickSqlException($"未知集合运算档 {setOps.Operation}"),
+            }).Append('\n');
             b.Append("    LEG1\n").Append(Indent(Print(setOps.First)));
             b.Append("    LEG2\n").Append(Indent(Print(setOps.Second)));
         }
@@ -39,8 +43,7 @@ static class QueryModelPrinter
         if (model.DerivedFrom is { } inner)
             b.Append("  DERIVED\n").Append(Indent(Print(inner)));
 
-        // 选片清单要按<em>换算后的物理名</em>打，而不是打"选了什么范围"：范围是链式入口的参数，
-        // 名字才是这句要发出去的东西，而 §13.2 比的是模型（也就是发出去的东西）而不是入口写法。
+        // 选片清单按换算后的物理名打：范围是链式入口的参数，名字才是这句要发出去的东西。
         if (model.Shards is { } shards)
             b.Append("  SHARDS ").Append(string.Join(" | ", shards.Select(s => (s.Schema ?? "dbo") + "." + s.Name))).Append('\n');
 
@@ -80,17 +83,16 @@ static class QueryModelPrinter
         if (model.CacheKey is { } key)
             b.Append("  CACHE ").Append(key).Append('/').Append(model.CacheTtl).Append('\n');
 
-        // 这里<em>没有</em> NO TRACKING 一行，因为模型里没有那个位：跟不跟踪挂在引擎上（§8.1、v0.16）。
-        // 于是「orm.Select<T>() 与 db.Set<T>().AsNoTracking() 的模型文本逐字节相等」（§13.2 ②）
-        // 不再需要把标记位从文本里剥掉才成立 —— 它压根不在文本里。
+        // 这里没有 NO TRACKING 一行：跟不跟踪挂在引擎上、不在模型里，
+        // 文本因此与跟踪与否无关，不需要把标记位从文本里剥掉才成立。
 
         return b.ToString();
     }
 
     static string Join(IReadOnlyList<Sql.Ast.SqlExpression> nodes) => string.Join(", ", nodes.Select(Expr));
 
-    /// <summary>内层那份模型的全文按四格缩进嵌进来。<b>空行直接丢掉</b>：外层 <see cref="Print"/> 每行都以
-    /// <c>'\n'</c> 结尾，切出来的最后一段必然是空串，留着它就多一个尾随空行，而规范文本是按字节比的。</summary>
+    /// <summary>内层那份模型的全文按四格缩进嵌进来。空行直接丢掉：外层 Print 每行都以
+    /// '\n' 结尾，切出来的最后一段必然是空串，留着它就多一个尾随空行，而规范文本是按字节比的。</summary>
     static string Indent(string text)
     {
         var b = new StringBuilder(text.Length + 16);
@@ -133,8 +135,7 @@ static class QueryModelPrinter
             _ => throw new UntranslatableExpressionException(u.Operator.ToString(), null),
         },
         FunctionExpression f => f.Template + "(" + Join(f.Arguments) + ')',
-        // 行号在规范文本里要能看出 OVER 里那两段各有什么（分堆可空、序带方向），与上面 ORDER 那一行的写法同调。
-        // 这一格漏了，Explain() 里看不见行号，而 §13.2 那句"模型文本里没有 = 等价性测试静默漏判"就在这儿兑现。
+        // OVER 里那两段要在规范文本里看得见，否则等价性测试静默漏判。
         RowNumberExpression w => "ROW_NUMBER OVER[PART(" + Join(w.PartitionBy) + ") ORD("
                                  + string.Join(", ", w.OrderBy.Select(o => Expr(o.Node) + (o.Descending ? " DESC" : " ASC")))
                                  + ")]",

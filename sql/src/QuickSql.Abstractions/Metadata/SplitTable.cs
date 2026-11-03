@@ -1,7 +1,7 @@
 namespace QuickSql.Metadata;
 
-/// <summary>分片键的算法档（规格 §16.4）。时间档把分片键的值<em>下取整</em>成一个周期，
-/// 哈希档对值取模 —— 两档都是内建的，因为这两件事覆盖了绝大多数"按月一张表"与"按租户分 N 份"的写法。</summary>
+/// <summary>分片键的算法档。时间档把分片键的值下取整成一个周期，
+/// 哈希档对值取模——两档都是内建的，因为这两件事覆盖了绝大多数"按月一张表"与"按租户分 N 份"的写法。</summary>
 public enum SplitKind
 {
     Day,
@@ -10,30 +10,29 @@ public enum SplitKind
     Season,
     Year,
 
-    /// <summary>按值取模。<b>不用 <see cref="object.GetHashCode"/>：</b>运行期随进程随机化的哈希
+    /// <summary>按值取模。不用 object.GetHashCode：运行期随进程随机化的哈希
     /// 会把同一行在两次运行里送到两张表，那是比报错更贵的东西。整数直接取模，字符串走本文件里
     /// 那份逐字符的 FNV-1a。</summary>
     Hash,
 }
 
-/// <summary>实体的分片声明，活在 <see cref="TableInfo.Split"/> 这一格里。
-/// 它是<b>编译期/启动期就算完的静态事实</b>：分片算法、分片键成员名、桶数、以及表名模板里
-/// 那些占位符该按哪一档填充，全部不依赖运行期的连接与库内容。</summary>
-/// <param name="MemberName">分片键的属性名，与 <see cref="ColumnContract.MemberName"/> 同一口径。</param>
-/// <param name="Buckets">仅 <see cref="SplitKind.Hash"/> 有意义，其余档为 0。</param>
+/// <summary>实体的分片声明，活在 TableInfo.Split 这一格里。
+/// 它是编译期/启动期就算完的静态事实：分片算法、分片键成员名、桶数、以及表名模板里
+/// 那些占位符该按哪一档填充，全部不依赖运行期的连接与库内容。
+/// MemberName 是分片键的属性名，与列契约的 MemberName 同一口径；Buckets 仅 Hash 档有意义，其余档为 0。</summary>
 public sealed record SplitFacts(SplitKind Kind, string MemberName, int Buckets)
 {
-    /// <summary>成员名换算出来的列名。<b>声明侧（G1 生成的事实、G2 反射读到的注解）留 null</b>，
-    /// 由 <c>EntityContractFactory</c> 一处填上——与索引、引用导航同一分工，所以
+    /// <summary>成员名换算出来的列名。声明侧（G1 生成的事实、G2 反射读到的注解）留 null，
+    /// 由 EntityContractFactory 一处填上——与索引、引用导航同一分工，所以
     /// "分片键指向了一颗没映射的属性"在两条路径上是同一句话，而填好之后它才随契约冻结不可变。</summary>
     public string? ColumnName { get; init; }
 
-    /// <summary>时间档的周期步长。<see cref="SplitKind.Week"/> 走 7 天，<see cref="SplitKind.Season"/> 走 3 个月，
-    /// 其余时间档按 <see cref="SplitKind"/> 自身的月/年步长。</summary>
+    /// <summary>是否时间档。Week 走 7 天，Season 走 3 个月，
+    /// 其余时间档按各自的月/年步长。</summary>
     public bool IsTime => Kind is SplitKind.Day or SplitKind.Week or SplitKind.Month or SplitKind.Season or SplitKind.Year;
 }
 
-/// <summary>表名模板与分片事实的换算。<b>全仓库只有一份实现</b>：写侧按行算目标表、读侧按范围算片清单、
+/// <summary>表名模板与分片事实的换算。全仓库只有一份实现：写侧按行算目标表、读侧按范围算片清单、
 /// DDL 按范围建表，三处都从这里取，于是"同一个月在两处算出两个表名"这种偏差没有能发生的形状。</summary>
 public static class SplitRouting
 {
@@ -45,7 +44,7 @@ public static class SplitRouting
     ];
 
     /// <summary>模板里必须出现的占位符。缺一颗就是"这张表的名字算不出来"，所以这条校验走的是
-    /// <em>启动期抛</em>，不是发 SQL 时才发现。</summary>
+    /// 启动期抛，不是发 SQL 时才发现。</summary>
     public static string[] RequiredTokens(SplitKind kind) => kind switch
     {
         SplitKind.Day or SplitKind.Week => ["{year}", "{month}", "{day}"],
@@ -56,7 +55,7 @@ public static class SplitRouting
     };
 
     /// <summary>校验一份表名模板：只许用认得的占位符、每颗至多一次、本档要的必须在、
-    /// 本档不要的一律不许有。理由与 <see cref="RequiredTokens"/> 同一句话——算不出名字就别留着它。</summary>
+    /// 本档不要的一律不许有。理由与 RequiredTokens 同一句话——算不出名字就别留着它。</summary>
     public static void ValidateTemplate(SplitKind kind, string name)
     {
         foreach (var (token, _) in Tokens)
@@ -91,14 +90,11 @@ public static class SplitRouting
         }
     }
 
-    /// <summary>一行数据 → 它该落的那张表。分片键为空直接抛：SqlSugar 那一族在这里是
-    /// "当作今天"（<c>SplitTableService.cs:65,75-76</c> 的读码结论），而本家不肯让一行数据
-    /// 因为一个空字段静默进错表 —— 那笔账要到月底统计时才看得见。
-    ///
-    /// <para><b>时间档先下整到周期起点再填模板</b>，与 <see cref="EnumerateTime"/> 同一颗
-    /// <see cref="Floor"/>：周档的片名记的是那一周的周一，而写入的行可以落在那一周的任何一天。
-    /// 少这一步，2026-01-15（周四）那一行会进 <c>…20260115</c>，而按 1 月读时算出来的是
-    /// <c>…20260112</c> 那张 —— 行写进去了却读不到，是这一族最难查的那种错。</para></summary>
+    /// <summary>一行数据对应它该落的那张表。分片键为空直接抛：另一家 ORM 在这里是
+    /// "当作今天"，而本家不肯让一行数据因为一个空字段静默进错表——那笔账要到月底统计时才看得见。
+    /// 时间档先下整到周期起点再填模板，与 EnumerateTime 同一颗 Floor：周档的片名记的是那一周的周一，
+    /// 而写入的行可以落在那一周的任何一天。少这一步，周四那一行会进当天名字的那张表，
+    /// 而按周读时算出来的是周一那张——行写进去了却读不到，是这一族最难查的那种错。</summary>
     public static TableInfo Resolve(TableInfo template, SplitFacts split, object? value)
     {
         var filled = split.Kind == SplitKind.Hash
@@ -108,7 +104,7 @@ public static class SplitRouting
         return template with { Name = filled, Split = null };
     }
 
-    /// <summary>时间档的片清单，升序。<paramref name="from"/> 晚于 <paramref name="to"/> 直接抛，
+    /// <summary>时间档的片清单，升序。from 晚于 to 直接抛，
     /// 不返回空清单：空清单在读侧是"一句 WHERE 打在一颗也不存在的表上"还是"一句恒假"，各家不一样，
     /// 而这一格的本家答案只许有一种。</summary>
     public static IReadOnlyList<TableInfo> EnumerateTime(TableInfo template, SplitFacts split, DateTime from, DateTime to)

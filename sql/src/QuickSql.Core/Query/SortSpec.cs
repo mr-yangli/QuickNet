@@ -1,22 +1,17 @@
 namespace QuickSql.Query;
 
-/// <summary>把前端那一串排序写法（<c>"Id,Name desc"</c>）拆成「名字 + 方向」的清单。
-///
-/// <para><b>这一颗只拆，不认列</b>：认列全仓库只有 <c>QueryEngine.Column</c> 那一份三档（属性名 ∶ 列名 ∶
-/// 大小写不敏感的唯一命中），拆出来的每一颗名字都从那里过，认不出当场抛。所以串里的文本
-/// 依旧一个字都不进 SQL，多出来的只是"一串"而不是"一颗"。</para>
-///
-/// <para>方向词只有挂在名字后面那一形，取值只有 <c>asc</c> / <c>desc</c>（<c>ascending</c> /
-/// <c>descending</c> 同义）四颗、大小写不敏感。<b>认不出方向词的那一段整颗按列名交出去</b>，
-/// 而不是猜一个方向 —— 于是 <c>"desc"</c> 指的可以是那一颗名叫 desc 的列，
-/// <c>"a; drop table t--"</c> 指的是一颗认不出而当场响的名字。</para></summary>
+/// <summary>把前端那一串排序写法（"Id,Name desc"）拆成「名字 + 方向」的清单。这一颗只拆，
+/// 不认列：认列全仓库只有 QueryEngine.Column 那一份三档（属性名、列名、大小写不敏感的唯一命中），
+/// 拆出来的每一颗名字都从那里过，认不出当场抛，串里的文本依旧一个字都不进 SQL。方向词只有挂在
+/// 名字后面那一形，取值只有 asc/desc（ascending/descending 同义）四颗、大小写不敏感；认不出方向词
+/// 的那一段整颗按列名交出去，而不是猜一个方向——"desc" 指的可以是那一颗名叫 desc 的列，
+/// "a; drop table t--" 指的是一颗认不出而当场响的名字。</summary>
 static class SortSpec
 {
-    /// <summary>逗号分颗，空颗（含 <c>"Id,,Name,"</c> 那种前端 <c>join(',')</c> 留下的尾巴）跳过。
-    /// <paramref name="defaultDescending"/> 是<em>没写方向的颗</em>的方向，写了的以串为准 ——
-    /// 那颗形参因此从"这一颗的方向"变成"这一串里没点名的那些颗的方向"，单颗写法逐字不变。</summary>
-    /// <remarks>收 <c>null</c> 而交回空清单：那颗串是 HTTP 查询参数直过来的，而"没给排序"要响的是
-    /// 认列那一句（消息里带着表名），不是 <c>NullReferenceException</c>。</remarks>
+    /// <summary>逗号分颗，空颗（含 "Id,,Name," 那种前端 join(',') 留下的尾巴）跳过。
+    /// defaultDescending 是没写方向的颗的方向，写了的以串为准，单颗写法逐字不变。收 null 交回
+    /// 空清单：串是 HTTP 查询参数直过来的，"没给排序"要响的是认列那一句（消息里带着表名），
+    /// 不是 NullReferenceException。</summary>
     public static IReadOnlyList<(string Name, bool Descending)> Parse(string? sortSpec, bool defaultDescending)
     {
         List<(string Name, bool Descending)> keys = [];

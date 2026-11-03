@@ -11,10 +11,9 @@ using QuickSql.Sql.Ast;
 
 namespace QuickSql.Write;
 
-/// <summary><c>UpdateRange</c> 链的落点：按主键整行更新。与 <see cref="UpdateEngine{T}"/> 的关键差别
-/// 在两侧各让了一步——那条链由调用方点名改哪几列、一条语句；这一条列清单由契约给、一次往返可以并几条语句。
-/// 表达式树一个都没有（列来自 <see cref="EntityContract"/>、值来自编译好的读写委托），所以入口零 RUC/RDC 税，
-/// 与 <see cref="InsertEngine{T}"/> 同档。</summary>
+/// <summary>UpdateRange 链的落点：按主键整行更新。与 UpdateEngine 链的关键差别在两侧各让了一步——
+/// 那条链由调用方点名改哪几列、一条语句；这一条列清单由契约给、一次往返可以并几条语句。
+/// 表达式树一个都没有（列来自 EntityContract、值来自编译好的读写委托），所以入口零 RUC/RDC 税。</summary>
 sealed class UpdateBulkEngine<T> : IUpdateBulk<T> where T : class
 {
     readonly QuickSqlOrm _orm;
@@ -33,16 +32,15 @@ sealed class UpdateBulkEngine<T> : IUpdateBulk<T> where T : class
 
     BulkWritePlan? _plan;
 
-    /// <summary>调用方在主键之外钉的那些条件（<see cref="IUpdateBulk{T}.Where"/>）。null = 一颗都没有，
-    /// 那一档 <see cref="Build"/> 走原来的形状而<em>一个表达式都不翻</em>，"入口零反射税"这句对没用这一颗的
-    /// 调用方仍然逐字成立。</summary>
+    /// <summary>调用方在主键之外钉的那些条件（Where）。null = 一颗都没有，
+    /// Build 走原来的形状而一个表达式都不翻，"入口零反射税"对没用这一颗的调用方仍然成立。</summary>
     List<Expression<Func<T, bool>>>? _extra;
 
-    /// <summary>取值段的格子：每行 × 每个<em>可写</em>列一颗，已经是 <c>AuditValue</c> 之后的值。
-    /// null = 那一段还没跑过。<b>主键列不在里面</b>——它是用来定位那一行的，不是被写出去的列，理由见 <see cref="Prepare"/>。</summary>
+    /// <summary>取值段的格子：每行 × 每个可写列一颗，已经是 AuditValue 之后的值。
+    /// null = 那一段还没跑过。主键列不在里面——它是用来定位那一行的，不是被写出去的列。</summary>
     object?[][]? _cells;
 
-    /// <summary>取值段那几笔改写痕迹，发射段的 <c>traces</c> 以它打头（§10.1 硬规则 1：钩子按顺序、步号连续才回放得起来）。
+    /// <summary>取值段那几笔改写痕迹，发射段的 traces 以它打头（钩子按顺序、步号连续才回放得起来）。
     /// 没人订阅时是空表。</summary>
     IReadOnlyList<HookTrace> _valueTraces = [];
 
@@ -104,7 +102,7 @@ sealed class UpdateBulkEngine<T> : IUpdateBulk<T> where T : class
         _plan = null;
 
         // 只作废发射段那份：换档改的是"几条语句、怎么并"，而取值段（AuditValue）的契约是
-        // §10.1 硬规则 1 那一半——同一批实体只许问一次。与 InsertEngine.WithBulk 同一条分寸。
+        // 同一批实体只许问一次。与 InsertEngine.WithBulk 同一条分寸。
         return this;
     }
 
@@ -162,14 +160,12 @@ sealed class UpdateBulkEngine<T> : IUpdateBulk<T> where T : class
                 affected += await _orm.Ado.NonQueryAsync(command, tag, ct).ConfigureAwait(false);
         }
 
-        // 一次提交那一档（WithBatchTransaction 的默认）。判据是<em>语句数</em>而不是命令数：并档把 2000 句并成
-        // 一条命令，服务器侧仍然一句一提交，而每次提交 flush 一次 redo——远端实例上 2000 行整行更新量到
-        // 6386 ms ∶ 263 ms，差距全部来自提交次数【实测·obj/logs/fscompare-C.txt S3 的四支诊断档】。
-        // UpdateRange 的语句数：并档一行一句、逐条档一行一句，两档在这一点上同形；而 upsert 档<em>一句命令
-        // 就是一句</em>（多值 VALUES 是一句），所以那一档的语句数是命令数。判错了就是该包的没包、不必包的白包。
-        // 第四格（【本笔（ClickHouse 重开·笔一）新增】）：provider 声明了 DbCapabilities.Transactions 才包——
-        // 没有位的那一家走逐句 autocommit 直发，整批在库里不原子（中途失败已发的语句不回滚，行为诚实条款
-        // 全文在位注释与用法册）；`UsedTransaction=false` 之类没有谎要圆。
+        // 一次提交那一档（WithBatchTransaction 的默认）。判据是语句数而不是命令数：并档把 2000 句并成
+        // 一条命令，服务器侧仍然一句一提交，而每次提交 flush 一次 redo——同一批 2000 行整行更新实测
+        // 6386 ms ∶ 263 ms，差距全部来自提交次数。UpdateRange 的语句数：并档与逐条档都是一行一句；
+        // upsert 档一句命令就是一句，语句数是命令数。判错了就是该包的没包、不必包的白包。
+        // 第四格：provider 声明了 Transactions 位才包——没有位的那一家走逐句 autocommit 直发，
+        // 整批在库里不原子（行为诚实条款全文在位注释与用法册）。
         var statements = method == BulkWriteMethod.Upsert ? plan.Commands.Count : _rows.Length;
 
         if (BulkAtomicity.ShouldWrap(_atomic, statements)
@@ -189,10 +185,9 @@ sealed class UpdateBulkEngine<T> : IUpdateBulk<T> where T : class
         return report with { AffectedRows = affected };
     }
 
-    /// <summary>档位判定：纯函数，不建文本、不碰连接（判据与 <c>InsertEngine.Decide</c> 同一个形状）。
-    /// Auto 拿不到 Merged <b>不算降级</b>——它没承诺过任何一档；点名 Merged 而拿不到才算，拿不到时
-    /// Never 抛、其余退逐条并带降级标记。<b>参数预算在这里不参与</b>：逐条那条路每颗参数都各走各的语句，
-    /// 预算管的是并档时一条命令塞几行，退到逐条就没有"塞"这件事了。</summary>
+    /// <summary>档位判定：纯函数，不建文本、不碰连接（判据与 InsertEngine.Decide 同一个形状）。
+    /// Auto 拿不到 Merged 不算降级——它没承诺过任何一档；点名 Merged 而拿不到才算，拿不到时
+    /// Never 抛、其余退逐条并带降级标记。参数预算在这里不参与：逐条那条路每颗参数都各走各的语句。</summary>
     (BulkWriteMethod Method, BulkWriteReport Report) Decide(BulkWriteMethod requested)
     {
         var provider = _orm.Provider;
@@ -209,7 +204,7 @@ sealed class UpdateBulkEngine<T> : IUpdateBulk<T> where T : class
             return Textless(BulkWriteMethod.SingleRow, requested, degraded: false,
                 $"{rows} 行按请求逐条（一行一条语句、一次往返）。语义与并档一致（§12.4 的等价性），代价是 {rows} 次往返。");
 
-        // Upsert 只在被点名时参与：Auto 的阶梯永远不取它（语义差不是速度差，判据见 IWriteBulk.cs 那颗枚举）。
+        // Upsert 只在被点名时参与：Auto 的阶梯永远不取它（语义差不是速度差）。
         if (requested == BulkWriteMethod.Upsert)
         {
             var clause = UpsertClause(provider.Dialect);
@@ -219,7 +214,7 @@ sealed class UpdateBulkEngine<T> : IUpdateBulk<T> where T : class
                 if (_fallback == FallbackPolicy.Never)
                     throw new QuickSqlException($"请求了 {provider.Kind} 的一句 upsert 档而它没交 UpsertClause：退路被 FallbackPolicy.Never 封死。");
 
-                // 退到"这一家的最佳改档"：数字（往返与块宽）由那一家自己那条阶梯算，这里不另算一遍，
+                // 退到"这一家的最佳改档"：数字（往返与块宽）由那一家自己那条阶梯算，不另算一遍，
                 // 只把 Requested 换回被点名的那一颗并把降级记上——语义跟着退，那句话必须让现场看见。
                 var best = supports ? BulkWriteMethod.Merged : BulkWriteMethod.SingleRow;
                 var (method, report) = Decide(best);
@@ -269,23 +264,11 @@ sealed class UpdateBulkEngine<T> : IUpdateBulk<T> where T : class
     (BulkWriteMethod Method, BulkWriteReport Report) Textless(BulkWriteMethod method, BulkWriteMethod requested, bool degraded, string reason)
         => (method, new BulkWriteReport(requested, method, _rows.Length, _rows.Length, 1, degraded, reason));
 
-    /// <summary>取值段：把每行的可写列读成格子，逐格问一次 <see cref="QuickSqlAop.AuditValue"/>
-    /// （种类是 <c>"update"</c>），只跑一次——两份文本与一次执行共用同一份格子。与
-    /// <see cref="InsertEngine{T}"/> 的两段之分同一条理由，也共用同一条纪律：
-    /// <list type="bullet">
-    /// <item><b>跑一次</b>（§10.1 硬规则 1 的那一半）：这个钩子会写实体，同一只实体问两遍就盖两遍，
-    /// 而 <c>Explain()</c> 与 <c>ExecuteBulkAsync()</c> 是两条各自建文本的路——所以格子缓存在场就不重算，
-    /// <c>WithBulk</c> 换档也不重算。</item>
-    /// <item><b>主键列不进这一格</b>：那一列在这条链上是 <c>WHERE</c> 的判据，不是写出去的列。让它过钩子
-    /// 等于允许订阅方把定位条件改掉——"补一个修改时间"的钩子顺手把一批 UPDATE 挪到别的行上，
-    /// 那是这一格必须结构上写不出来的东西。自增/库里给值与并发列本来就不在 <c>_settable</c> 里（构造函数那三道筛），
-    /// 与 <see cref="InsertEngine{T}"/> 跳过它们是同一条判据。</item>
-    /// <item><b>未订阅即零成本</b>：不构造事件对象，格子就是读出来的原值。仍然建格子这件事与插入链同价——
-    /// 那条链在没有钩子时也建，为的是"同一批实体的两种文本读的必须是同一份数"（调用方在 <c>Explain()</c>
-    /// 之后改了实体，两份文本就不该不一样）。</item>
-    /// </list>
-    /// 交回的是行 × 可写列那一份格子；改写痕迹记在 <see cref="_valueTraces"/>，步骤号从 0 起，
-    /// 发射段的 <c>CudBuilding</c>/<c>ParameterBinding</c> 接着往下编。</summary>
+    /// <summary>取值段：把每行的可写列读成格子，逐格问一次 AuditValue（种类是 "update"），只跑一次——
+    /// 两份文本与一次执行共用同一份格子。三条纪律：跑一次（这个钩子会写实体，同一只实体问两遍就盖两遍）；
+    /// 主键列不进这一格（它是这条链上 WHERE 的判据，不是写出去的列，让它过钩子等于允许订阅方把定位条件改掉）；
+    /// 未订阅即零成本（不构造事件对象，格子就是读出来的原值——仍然建格子是为了"同一批实体的两种文本
+    /// 读的必须是同一份数"）。改写痕迹记在 _valueTraces，步号从 0 起，发射段接着往下编。</summary>
     object?[][] Prepare()
     {
         if (_cells is { } done)
@@ -353,10 +336,8 @@ sealed class UpdateBulkEngine<T> : IUpdateBulk<T> where T : class
         var step = traces.Count;
         var commands = new List<DialectSql>((_rows.Length + width - 1) / width);
 
-        // 过滤器与调用方点名的条件都只翻一次（v0.39 修的那格）：此前这两步在行循环里逐行重付 ——
-        // 1000 行 × 2 条过滤器 = 2000 次完整的表达式树归约，而同一趟 Build 里对同一张表翻译结果不变
-        // （谓词是构建期闭包常量，与行无关）。翻译出来的 SqlExpression 树是不可变的，行循环里只是
-        // 把同一棵子树接到不同的键谓词上。链式路每条语句只翻一次，这一档对齐同一条纪律。
+        // 过滤器与调用方点名的条件都只翻一次：同一趟 Build 里对同一张表翻译结果不变（谓词是构建期闭包常量），
+        // 翻译出来的树不可变，行循环里只是把同一棵子树接到不同的键谓词上。逐行重付是 2000 次表达式树归约的账。
         SqlExpression[] filterSql;
 
         {
@@ -381,8 +362,8 @@ sealed class UpdateBulkEngine<T> : IUpdateBulk<T> where T : class
         {
             var count = Math.Min(width, _rows.Length - first);
 
-            // 一条命令一份共享参数表：SqlWriter 的编号长在参数表上（Fork 那句注释），
-            // 所以并进来的每条语句拿到的名字天然不重号，执行层按名落地时不撞车。
+            // 一条命令一份共享参数表：SqlWriter 的编号长在参数表上，
+            // 并进来的每条语句拿到的名字天然不重号，执行层按名落地时不撞车。
             var parameters = new List<AdoParameter>(count * (_settable.Length + _keys.Length));
             var text = new StringBuilder(StatementEmitter.EstimateLength(count * (_settable.Length + _keys.Length), IdentifierChars()));
 
@@ -410,8 +391,7 @@ sealed class UpdateBulkEngine<T> : IUpdateBulk<T> where T : class
                     where = where is null ? equal : new SqlBinaryExpression(BinaryOperator.And, where, equal);
                 }
 
-                // 调用方点名的条件排在主键之后、全局过滤器之前：形状与读侧同一条纪律（往末尾追加 AND），
-                // 而翻译在行循环外只做一次（见上面那一段），这里只做树拼接。
+                // 调用方点名的条件排在主键之后、全局过滤器之前：形状与读侧同一条纪律（往末尾追加 AND）。
                 if (extraSql is not null)
                     foreach (var predicate in extraSql)
                         where = new SqlBinaryExpression(BinaryOperator.And, where!, predicate);
@@ -456,9 +436,8 @@ sealed class UpdateBulkEngine<T> : IUpdateBulk<T> where T : class
         return new BulkWritePlan(commands, _rows.Length, width, budget, reason, traces) { Provider = _orm.Provider };
     }
 
-    /// <summary>StringBuilder 的预容量要用到的标识符字符数（§12.7 E 那一格）。两种形状共用一把尺：
-    /// 并档每行一句 UPDATE，upsert 档一条命令一句多值 INSERT 加一段句尾——句尾的长度由 <see cref="BuildUpsert"/>
-    /// 自己补，因为它才是那一段的产出方。</summary>
+    /// <summary>StringBuilder 的预容量要用到的标识符字符数。两种形状共用一把尺：
+    /// 并档每行一句 UPDATE，upsert 档一条命令一句多值 INSERT 加一段句尾（句尾长度由 BuildUpsert 自己补）。</summary>
     int IdentifierChars()
     {
         var chars = _contract.Table.Name.Length * 2 + 32;
@@ -472,16 +451,12 @@ sealed class UpdateBulkEngine<T> : IUpdateBulk<T> where T : class
         return chars;
     }
 
-    /// <summary>Upsert 档的文本：<b>一条命令一句 <c>INSERT … VALUES (…),(…) 冲突子句</c></b>，
-    /// 块宽仍按 §12.3 那把尺（每行参数 = 可写列 + 主键列，与并档同数）。
-    /// <para>发的是内核那一份 <see cref="InsertStatement"/> 走 <see cref="ISqlDialect.Emit(InsertStatement)"/>
-    /// 的同一条出路，句尾由这一家的 <see cref="IBulkStrategy.UpsertClause"/> 补——列清单、参数表与取号因此
-    /// 与 <c>InsertRange</c> 共用一处真相，本档不另拼一遍 VALUES。</para>
-    /// <para><b>两道拒收在这一层，与并档那句"null 键定位不到"同一道门</b>：全局过滤器在场（那一句没有 WHERE
-    /// 可以叠）；主键由库给值而这一行的键仍是 CLR 默认值（那种键的冲突判定出不来，写进去的是新行而不是改那一行）。
-    /// 两道都在建文本时判，所以 <see cref="ExplainBulk"/> 那颗纯档位口不交这笔税，口径与过滤器那一句同族。</para>
-    /// <para>钩子回放按 <c>"update"</c> 那一种：这一条链挂在 <c>UpdateRange</c> 上，订阅 <c>CudBuilding</c> 的
-    /// 软删改写与影子表按操作种类分派（§10.1），档位不是种类。</para></summary>
+    /// <summary>Upsert 档的文本：一条命令一句 INSERT … VALUES (…),(…) 冲突子句，块宽仍按参数预算那把尺
+    /// （每行参数 = 可写列 + 主键列，与并档同数）。发的是内核那一份 InsertStatement 走方言 Emit 的同一条出路，
+    /// 句尾由这一家的 UpsertClause 补——列清单、参数表与取号与 InsertRange 共用一处真相。
+    /// 两道拒收在这一层（建文本时判，纯档位口不交这笔税）：全局过滤器在场（那一句没有 WHERE 可以叠）；
+    /// 主键由库给值而这一行的键仍是 CLR 默认值（那种键的冲突判定出不来，写进去的是新行而不是改那一行）。
+    /// 钩子回放按 "update" 那一种：档位不是种类。</summary>
     [RequiresUnreferencedCode("全局过滤器的在场判定要问 orm.Filters 挂着多少条（同 Explain 那句）。")]
     [RequiresDynamicCode("与 RequiresUnreferencedCode 同一条：谓词翻译的退路是编译表达式树。")]
     BulkWritePlan BuildUpsert()
@@ -559,8 +534,8 @@ sealed class UpdateBulkEngine<T> : IUpdateBulk<T> where T : class
                                 $"一句 upsert 的冲突判定出不来，写进去的会是一个新行而不是改了那一行。要么把键给实，要么这种现场走 SaveChanges 或 orm.InsertRange。");
                     }
 
-                    // 写入位上的 null 不转成库默认值：这一条链的契约与 Merged 档逐字相同——整行交出去，
-                    // 那一格说的是 NULL 就是 NULL（这与 InsertRange 的 null→DEFAULT 正对面，不是同一件事）。
+                    // 写入位上的 null 不转成库默认值：这一条链的契约与 Merged 档相同——整行交出去，
+                    // 那一格说的是 NULL 就是 NULL（与 InsertRange 的 null→DEFAULT 正对面）。
                     cells[column] = new ParameterValue(value, columns[column]);
                 }
 
@@ -591,8 +566,8 @@ sealed class UpdateBulkEngine<T> : IUpdateBulk<T> where T : class
         return new BulkWritePlan(commands, _rows.Length, width, budget, reason, traces) { Provider = _orm.Provider };
     }
 
-    /// <summary>向这一家要 upsert 的句尾（<see langword="null"/> = 不接）。三份列名清单都先过方言的取号口再交，
-    /// 所以 provider 拿到的已经是这一家的引号与折叠形态，它自己不再猜。</summary>
+    /// <summary>向这一家要 upsert 的句尾（null = 不接）。三份列名清单都先过方言的取号口再交，
+    /// provider 拿到的已经是这一家的引号与折叠形态，它自己不再猜。</summary>
     string? UpsertClause(ISqlDialect dialect)
     {
         var strategy = _orm.Provider.Bulk;
@@ -620,9 +595,9 @@ sealed class UpdateBulkEngine<T> : IUpdateBulk<T> where T : class
         return writer.ToSqlString();
     }
 
-    /// <summary>全局过滤器在场时一句 upsert 不可达：<c>INSERT … 冲突子句</c> 里没有 WHERE 可以叠过滤器，
-    /// 而冲突那一支改的是"键相同的那一行"——租户、软删那一道闸门在这句文本上无处安放。
-    /// 拒在这里而不是放过，是因为放过的后果是改宽（越过滤器的行被改），与 <c>SaveChanges</c> 同一批行的判定不一致。</summary>
+    /// <summary>全局过滤器在场时一句 upsert 不可达：INSERT…冲突子句里没有 WHERE 可以叠过滤器，
+    /// 而冲突那一支改的是"键相同的那一行"——租户、软删那道闸门在这句文本上无处安放。
+    /// 拒在这里而不是放过：放过的后果是改宽（越过滤器的行被改）。</summary>
     void RefuseUpsertFilters()
     {
         var injected = _orm.Filters.CountFor(typeof(T));
@@ -637,10 +612,10 @@ sealed class UpdateBulkEngine<T> : IUpdateBulk<T> where T : class
     ExecutionTag Tag() => new("update", [_contract.Table.Name], DataSourceRouting.ClusterOf(_contract.Table));
 }
 
-/// <summary><c>DeleteRange</c> 链的落点：按单列主键删整批。<b>Merged 档是一句 <c>WHERE 键 IN (…)</c> 的
-/// 单条语句</b>，不是多语句批——所以这一条链的 Auto 在所有 provider 上都直接取 Merged，
-/// 不读 <see cref="IBulkStrategy.SupportsMergedStatements"/>（那颗位只为 UpdateRange 的分号批存在）。
-/// 复合主键当场拒并指路：IN 装不下元组，逐对 OR 展开把参数预算的账绕开了，两害都不如指路。</summary>
+/// <summary>DeleteRange 链的落点：按单列主键删整批。Merged 档是一句 WHERE 键 IN (…) 的单条语句，
+/// 不是多语句批——所以这一条链的 Auto 在所有 provider 上都直接取 Merged，不读 SupportsMergedStatements
+/// （那颗位只为 UpdateRange 的分号批存在）。复合主键当场拒并指路：IN 装不下元组，
+/// 逐对 OR 展开把参数预算的账绕开了，两害都不如指路。</summary>
 sealed class DeleteBulkEngine<T> : IDeleteBulk<T> where T : class
 {
     readonly QuickSqlOrm _orm;
@@ -655,9 +630,9 @@ sealed class DeleteBulkEngine<T> : IDeleteBulk<T> where T : class
     FallbackPolicy _fallback = FallbackPolicy.DegradeAndLog;
     bool _atomic = true;
 
-    /// <summary>软删那一句写进「时间」列的值，<b>一颗属于这一批</b>：切成几句 IN 都是同一个删除时刻，
-    /// 而 <c>Explain()</c> 与紧随的执行在这条链上是两次构建，所以它不能挂在 <c>Build</c> 的局部上。
-    /// 没有注册软删时它永远是 null（不读时钟、不占一次时间调用）。<c>WithBulk</c> 清 <c>_plan</c> 而不清它。</summary>
+    /// <summary>软删那一句写进「时间」列的值，一颗属于这一批：切成几句 IN 都是同一个删除时刻，
+    /// 而 Explain() 与紧随的执行在这条链上是两次构建，所以它不能挂在 Build 的局部上。
+    /// 没有注册软删时它永远是 null。WithBulk 清 _plan 而不清它。</summary>
     DateTime? _deletedAt;
 
     BulkWritePlan? _plan;
@@ -735,11 +710,9 @@ sealed class DeleteBulkEngine<T> : IDeleteBulk<T> where T : class
         }
 
         // 这条链上的语句数就是命令数：Merged 档一条命令一句 IN 清单，SingleRow 档一条命令一句等值。
-        // 所以"包不包"在这里几乎永远是假——一句 IN 删两万颗键本身就原子，包它只多付两次往返。
-        // 真会包的只有键数超出一句的预算、这批被切成两句以上那一种（SQL Server 2100 颗那句的宽度最小）。
-        // 这一档的第四格与 UpdateBulk 那一处同一条（【本笔（ClickHouse 重开·笔一）新增】）：provider 声明了
-        // DbCapabilities.Transactions 才包，没有位的那一家逐句 autocommit 直发（包不包的诚实那一半，
-        // 在位注释与用法册）。
+        // "包不包"在这里几乎永远是假——一句 IN 删两万颗键本身就原子，包它只多付两次往返；
+        // 真会包的只有键数超出一句的预算、这批被切成两句以上那一种。第四格与 UpdateBulk 同一条：
+        // provider 声明了 Transactions 位才包，没有位的那一家逐句 autocommit 直发。
         if (BulkAtomicity.ShouldWrap(_atomic, plan.Commands.Count)
             && TransactionCapability.Declared(_orm.Provider)
             && QuickSqlTransaction.For(_orm.Ado) is null)
@@ -796,10 +769,9 @@ sealed class DeleteBulkEngine<T> : IDeleteBulk<T> where T : class
         var step = 0;
         var commands = new List<DialectSql>((_rows.Length + width - 1) / width);
 
-        // 软删（§10.7 约束 3）在这一档同样生效，而<b>一颗时间要跨过两件事保持不变</b>：一次 DeleteRange 会被切成
-        // 若干句 IN（各读一次时钟就把同一批行记成几个删除时间），而 <c>Explain()</c> 与紧随的执行在这条链上是
-        // 两次构建（这条档上没有<c>UpdateRange</c> 那一份共享的取值网格）。所以那颗时钟挂在引擎上而不是
-        // 挂在 <c>Build</c> 里：<c>WithBulk</c> 清 <c>_plan</c> 不清它，换档重build 也还是同一个删除时刻。
+        // 软删在这一档同样生效，而一颗时间要跨过两件事保持不变：DeleteRange 会被切成若干句 IN
+        // （各读一次时钟就把同一批行记成几个删除时间），而 Explain() 与紧随的执行是两次构建——
+        // 所以时钟挂在引擎上而不是 Build 里：WithBulk 清 _plan 不清它，换档重 build 也还是同一个删除时刻。
         var soft = _orm.Behaviors.HasAny ? _orm.Behaviors.RuleFor(typeof(T)) : null;
         DateTime? stamp = null;
 
@@ -857,8 +829,7 @@ sealed class DeleteBulkEngine<T> : IDeleteBulk<T> where T : class
         return new BulkWritePlan(commands, _rows.Length, width, budget, reason, traces) { Provider = _orm.Provider };
     }
 
-    /// <summary>读一颗键值。<b>null 键当场抛而不是从清单里悄悄省掉</b>：省一颗等于那一行没删而调用方
-    /// 以为删了，与 <c>IBulkCopyChannel.SupportsColumn</c> 那句"省一列等于丢写"同一个道理。</summary>
+    /// <summary>读一颗键值。null 键当场抛而不是从清单里悄悄省掉：省一颗等于那一行没删而调用方以为删了。</summary>
     object ReadKey(int row)
     {
         var entity = _rows[row] ?? throw new QuickSqlException($"第 {row} 行是 null：批量删除的集合里不能有 null 实体。");
@@ -874,21 +845,15 @@ sealed class DeleteBulkEngine<T> : IDeleteBulk<T> where T : class
 }
 
 /// <summary>"这一批提交几次"那一格的话术，两条链共用一个形状（离线册按这句话断言，不许两处各写一遍）。
-///
-/// <para><b>这一格的默认值是 2026-10-07 改判的</b>，原稿写的是"跨命令不是原子的：要整批原子就包 §6 的事务"。
-/// 改判的根据不是原子性而是速度：并档把往返并了而没把<em>提交</em>并了，InnoDB 每次提交 flush 一次 redo，
-/// 而这条链只在数据多的时候被调用——同一台远端实例、同一批 2000 行整行更新，
-/// <c>6386 ms ∶ 263 ms</c>，裸 ADO 同一形状的对照组是 <c>7419 ∶ 920</c>，
-/// 差距全部来自提交次数【实测·<c>obj/logs/fscompare-C.txt</c> S3 那四支诊断档】。</para>
-///
-/// <para><b>判据是语句数而不是命令数</b>：一条语句本身就原子，包它只多付两次往返，所以那一格在这种时候闭嘴
-/// （<c>DeleteRange</c> 的 Merged 档两万颗键也才一句 IN，正是这一格）。</para></summary>
+/// 默认"整批一次提交"的根据不是原子性而是速度：并档把往返并了而没把提交并了，每次提交 flush 一次 redo，
+/// 同一台远端实例、同一批 2000 行整行更新实测 6386 ms ∶ 263 ms（裸 ADO 对照组 7419 ∶ 920），
+/// 差距全部来自提交次数。判据是语句数而不是命令数：一条语句本身就原子，包它只多付两次往返。</summary>
 static class BulkAtomicity
 {
-    /// <summary>要不要自己开一条事务。两格判据，缺一格就不包：<b>调用方没关那颗开关</b>
-    /// （<c>WithBatchTransaction(false)</c> 那条退路是给"要用半批已落地做断点续传"的人留的，不是暗示的路）、
-    /// 而<b>计划里有两句以上语句</b>（一句本身就原子，包它只多付两次往返）。第三格在执行段：
-    /// 环境事务在场时提交归开它的那个人，这一批已经是别人那一批的一部分（§8.2 那一条同族）。</summary>
+    /// <summary>要不要自己开一条事务。两格判据，缺一格就不包：调用方没关那颗开关
+    /// （WithBatchTransaction(false) 那条退路是给"要用半批已落地做断点续传"的人留的，不是暗示的路），
+    /// 而计划里有两句以上语句（一句本身就原子，包它只多付两次往返）。第三格在执行段：
+    /// 环境事务在场时提交归开它的那个人，这一批已经是别人那一批的一部分。</summary>
     public static bool ShouldWrap(bool atomic, int statements) => atomic && statements > 1;
 
     public static string Sentence(bool atomic, int statements)

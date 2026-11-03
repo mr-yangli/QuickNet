@@ -6,23 +6,19 @@ using System.Runtime.Loader;
 
 namespace QuickSql.DriverLoading;
 
-/// <summary>一条驱动声明。<see cref="AssemblyName"/> 既是 <c>Assembly.Load</c> 的名字，也是
-/// <c>drivers/&lt;assembly&gt;.dll</c> 的探测名；<see cref="FactoryType"/> 为 null 时走
-/// 「扫导出类型里第一个非抽象 <see cref="DbProviderFactory"/> 子类」那条兜底（§9.5）。</summary>
+/// <summary>一条驱动声明。AssemblyName 既是 Assembly.Load 的名字，也是 drivers/&lt;assembly&gt;.dll 的探测名；
+/// FactoryType 为 null 时走「扫导出类型里第一个非抽象 DbProviderFactory 子类」那条兜底。</summary>
 public sealed record DriverRef(string Key, string AssemblyName, string? FactoryType);
 
-/// <summary>磁盘上指定的驱动装在独立上下文里：国产库驱动常自带一份旧版 <c>System.Buffers</c> /
-/// <c>Microsoft.Extensions.*</c>，混进默认上下文会变成"装不上且报不出原因"。
-/// 这里刻意不覆写 <c>Load</c> —— 只有 <see cref="AssemblyLoadContext.LoadFromAssemblyPath(string)"/>
-/// 的那一个程序集落在本上下文，它的依赖仍回退默认上下文，免得把 BCL 复制一份。</summary>
+/// <summary>磁盘上指定的驱动装在独立上下文里：国产库驱动常自带一份旧版 System.Buffers /
+/// Microsoft.Extensions.*，混进默认上下文会变成"装不上且报不出原因"。这里刻意不覆写 Load——
+/// 只有 LoadFromAssemblyPath 装进来的那一个程序集落在本上下文，它的依赖仍回退默认上下文，免得把 BCL 复制一份。</summary>
 sealed class DriverLoadContext(string key) : AssemblyLoadContext(key);
 
-/// <summary>驱动的装载与工厂解析。<b>反射只发生在这里，且只在第一次取用某条驱动时</b>：
-/// 拿到 <see cref="DbProviderFactory"/> 之后，连接/命令/参数一律是虚调用（§12.7「加载可以反射，调用不行」）。
-///
-/// <para>名字来源只有一处：<see cref="BuiltinDrivers"/> 那张内建表。曾经的
-/// <c>QuickSqlDrivers.json</c> 覆盖层已整层删除 —— 现场要换一颗程序集名，把厂商 DLL 按内建表的名字
-/// 丢进 <c>drivers/</c>；要彻底绕开按名装载，走 <see cref="Register"/> 把工厂直接交进来。</para></summary>
+/// <summary>驱动的装载与工厂解析。反射只发生在这里、且只在第一次取用某条驱动时：拿到 DbProviderFactory
+/// 之后，连接/命令/参数一律是虚调用（「加载可以反射，调用不行」）。名字来源只有一处：BuiltinDrivers
+/// 那张内建表——现场要换一颗程序集名，把厂商 DLL 按内建表的名字丢进 drivers/；
+/// 要彻底绕开按名装载，走 Register 把工厂直接交进来。</summary>
 public sealed class DriverRegistry(string? root = null)
 {
     readonly Dictionary<string, CacheEntry> _cache = new(StringComparer.OrdinalIgnoreCase);
@@ -40,11 +36,10 @@ public sealed class DriverRegistry(string? root = null)
             _cache[key] = new CacheEntry(factory, null);
     }
 
-    /// <summary>取驱动工厂。<paramref name="key"/> 用 <see cref="DbKind"/> 的小写名（<c>sqlserver</c>、<c>dameng</c>），
-    /// 与 <see cref="BuiltinDrivers"/> 里的 <c>key</c> 一一对应；表里没有这一行才抛
-    /// <see cref="DriverNotAvailableException"/>，所以宿主什么都不配也能只报库种与串就装配起来（§9.5 的零配置入口）。
-    /// 需要反射的原因有两个，都写在这一层而不下沉：装载按<b>程序集名</b>，以及工厂的 <c>Instance</c> 是反射取的字段。
-    /// AOT 现场的干净路径是 <see cref="Register"/>：宿主自己引用驱动包，把工厂交进来，编译期仍然没有驱动引用。</summary>
+    /// <summary>取驱动工厂。key 用 DbKind 的小写名（sqlserver、dameng），与 BuiltinDrivers 里的 key 一一对应；
+    /// 表里没有这一行才抛 DriverNotAvailableException，所以宿主什么都不配也能只报库种与串就装配起来（零配置入口）。
+    /// 需要反射的原因有两个，都写在这一层而不下沉：装载按程序集名，以及工厂的 Instance 是反射取的字段。
+    /// AOT 现场的干净路径是 Register：宿主自己引用驱动包，把工厂交进来，编译期仍然没有驱动引用。</summary>
     [RequiresUnreferencedCode("按内建表里的程序集名与类型名解析驱动工厂，被裁剪的类型会在这里报驱动不存在。")]
     public DbProviderFactory Factory(string key)
     {

@@ -9,28 +9,21 @@ using QuickSql.Sql.Ast;
 
 namespace QuickSql.Write;
 
-/// <summary><see cref="IInsertOrUpdate{T}"/> 链的落点（§5.4 写侧、§12.1 写侧扩展那句"含 MERGE"那一档的入口）。
-///
-/// <para><b>它是 <see cref="UpdateBulkEngine{T}"/> 的 <c>BuildUpsert</c> 那一档换了个入口</b>：同一份列尺子
-/// （写入清单 = 可写列 ++ 主键列）、同两道当场拒（全局过滤器在场、主键由库给值而调用方没给键）、同一段取值段
-/// 纪律（<c>AuditValue</c> 只跑一次），连 <c>CudBuilding</c>/<c>ParameterBinding</c> 回放时那一句操作种类
-/// 都照旧报 <c>"update"</c>——因为订阅同一句文本的钩子不该因为入口叫 <c>InsertOrUpdate</c> 就看到两种东西。
-/// 取值段那个审计种类因此也报 <c>"update"</c>：一条 upsert 的行可能插可能改，这一版把"只在插入时补 CreatedAt"
-/// 那一类语义留给能判命中与否的那一天，今天不假装它已经分得开（缺口记 §14）。</para>
-///
-/// <para><b>发射形态在这一颗里分岔，调用方不选</b>：先问 provider 的 <see cref="IBulkStrategy.UpsertClause"/>
-/// 交不交得出句尾——交得出就发 <see cref="InsertStatement"/> 再接那一段（MySQL ∶ PG 血统，那条路
-/// <c>UpdateRange(...).WithBulk(Upsert)</c> 已经跑绿，原样复用）；交不出就交给方言的
-/// <see cref="ISqlDialect.Emit(UpsertStatement)"/>（SQLite 的 <c>ON CONFLICT</c> 与 <c>MERGE INTO</c> 那一族）。
-/// 两处都拿不到时由 <see cref="UpsertStatement"/> 那颗默认抛说"这一家不可达"，各形态在半路接住自己那一份。</para></summary>
+/// <summary>IInsertOrUpdate 链的落点（含 MERGE 那一档的入口）。它是 UpdateBulkEngine 的 BuildUpsert 那一档
+/// 换了个入口：同一份列尺子（写入清单 = 可写列 ++ 主键列）、同两道当场拒（全局过滤器在场、主键由库给值而
+/// 调用方没给键）、同一段取值段纪律（AuditValue 只跑一次）。CudBuilding/ParameterBinding 回放时操作种类照旧报
+/// "update"——订阅同一句文本的钩子不该因为入口叫 InsertOrUpdate 就看到两种东西；一条 upsert 的行可能插可能改，
+/// "只在插入时补 CreatedAt"那一类语义留给能判命中与否的那一天。发射形态在这一颗里分岔、调用方不选：
+/// 先问 provider 的 UpsertClause 交不交得出句尾，交不出就交给方言的整语句 emit（ON CONFLICT 与 MERGE 那一族），
+/// 两处都拿不到时由默认抛说"这一家不可达"。</summary>
 sealed class InsertOrUpdateEngine<T> : IInsertOrUpdate<T> where T : class
 {
     readonly QuickSqlOrm _orm;
 
     T[] _rows = [];
 
-    // 契约派生的那几格只依赖 T（不依赖行），构造时就算，与 UpdateBulkEngine 同一条：
-    // 没有主键、除了键与库里给值的列以外没有可写列、分表实体——三种现场都在这条链建起来之前红。
+    // 契约派生的那几格只依赖 T（不依赖行），构造时就算：没有主键、除了键与库里给值的列以外没有可写列、
+    // 分表实体——三种现场都在这条链建起来之前红。
     readonly EntityContract _contract;
     readonly IEntityTypeSchema<T> _schema;
     readonly TableRef _table;
@@ -72,7 +65,7 @@ sealed class InsertOrUpdateEngine<T> : IInsertOrUpdate<T> where T : class
             var column = _contract.Columns[ordinal];
 
             // 主键进冲突判定不进 SET；库里给值的列（自增/计算列）与并发列不接受书写——三条判据与
-            // UpdateBulkEngine 构造函数那三道筛逐字同源。
+            // UpdateBulkEngine 构造函数那三道筛同源。
             // 应用给值的并发列（AppSetsValue）例外：新值在实体上，随整行写出去（WHERE 仍比快照）。
             if (column.IsPrimary || column.ValueFromStore || (column.IsConcurrencyToken && !column.AppSetsValue))
                 continue;
@@ -113,7 +106,7 @@ sealed class InsertOrUpdateEngine<T> : IInsertOrUpdate<T> where T : class
     {
         _rows = rows;
 
-        // 换一批 = 作废取值段与发射段两份（与 UpdateBulkEngine 只作废发射段那份不同：这里连实体集合都换了，
+        // 换一批 = 作废取值段与发射段两份（与 UpdateBulkEngine 只作废发射段那份不同：连实体集合都换了，
         // AuditValue 是为这一批新的实体跑的，旧格子没有可比的对象）。
         _cells = null;
         _valueTraces = [];
@@ -147,10 +140,9 @@ sealed class InsertOrUpdateEngine<T> : IInsertOrUpdate<T> where T : class
                 affrows += await _orm.Ado.NonQueryAsync(command, tag, ct).ConfigureAwait(false);
         }
 
-        // 判据是语句数而不是命令数（与 UpdateBulkEngine 那一句同源）：一句 upsert 本身就原子，包它只多付两次往返。
-        // 第三格（【本笔（ClickHouse 重开·笔一）新增】）：provider 得声明了 DbCapabilities.Transactions 才包——
-        // 没声明的那一家（无 DbTransaction 可开，或者驱动根子上不接）走逐句 autocommit 直发，
-        // 这一批因此在库里不原子（中途失败已发的语句不回滚；行为诚实条款全文在位注释与用法册）。
+        // 判据是语句数而不是命令数（与 UpdateBulkEngine 同源）：一句 upsert 本身就原子，包它只多付两次往返。
+        // 第三格：provider 得声明了 Transactions 位才包——没声明的那一家走逐句 autocommit 直发，
+        // 这一批在库里不原子（行为诚实条款全文在位注释与用法册）。
         if (BulkAtomicity.ShouldWrap(_atomic, plan.Commands.Count)
             && TransactionCapability.Declared(_orm.Provider)
             && QuickSqlTransaction.For(_orm.Ado) is null)
@@ -168,9 +160,9 @@ sealed class InsertOrUpdateEngine<T> : IInsertOrUpdate<T> where T : class
         return affrows;
     }
 
-    /// <summary>取值段：与 <see cref="UpdateBulkEngine{T}"/> 那份逐字同形（种类报 <c>"update"</c>，主键列不进格子、
-    /// 不过钩子——它是冲突判据不是写出去的列，理由见那颗的抬头）。交回行 × 可写列那份格子，改写痕迹记在
-    /// <see cref="_valueTraces"/>，发射段的 <c>CudBuilding</c>/<c>ParameterBinding</c> 接着往下编步号。</summary>
+    /// <summary>取值段：与 UpdateBulkEngine 那份同形（种类报 "update"，主键列不进格子、不过钩子——
+    /// 它是冲突判据不是写出去的列）。交回行 × 可写列那份格子，改写痕迹记在 _valueTraces，
+    /// 发射段接着往下编步号。</summary>
     object?[][] Prepare()
     {
         if (_cells is { } done)
@@ -220,11 +212,10 @@ sealed class InsertOrUpdateEngine<T> : IInsertOrUpdate<T> where T : class
         return cells;
     }
 
-    /// <summary>发射段：一条命令一句多值 upsert，块宽按 §12.3 那把尺（每行参数 = 可写列 ++ 主键列）。
-    /// 每块先问 <see cref="UpsertClause"/>——交得出句尾就发 <see cref="InsertStatement"/> 再接尾巴（列清单、
-    /// 参数表与取号因此与 <c>InsertRange</c> 共用一处真相，本档不另拼一遍 VALUES）；交不出就发
-    /// <see cref="UpsertStatement"/> 走方言那颗整语句 emit。两道当场拒（过滤器 ∶ 没给的库给值键）与
-    /// <see cref="UpdateBulkEngine{T}"/> 的 <c>BuildUpsert</c> 同一道门。</summary>
+    /// <summary>发射段：一条命令一句多值 upsert，块宽按参数预算那把尺（每行参数 = 可写列 ++ 主键列）。
+    /// 每块先问 UpsertClause——交得出句尾就发 InsertStatement 再接尾巴（列清单、参数表与取号与 InsertRange
+    /// 共用一处真相，本档不另拼一遍 VALUES）；交不出就发 UpsertStatement 走方言整语句 emit。
+    /// 两道当场拒（过滤器 ∶ 没给的库给值键）与 UpdateBulkEngine 同一道门。</summary>
     BulkWritePlan Build()
     {
         var dialect = _orm.Provider.Dialect;
@@ -233,7 +224,7 @@ sealed class InsertOrUpdateEngine<T> : IInsertOrUpdate<T> where T : class
         if (_rows.Length == 0)
             return new BulkWritePlan([], 0, 0, budget, "0 行：不建文本、不取连接，执行直接返回 0。", []) { Provider = _orm.Provider };
 
-        // 句尾还是 MERGE，由这一家自己表决定：先要句尾（MySQL ∶ PG 血统交得出），拿不到交给方言的整语句 emit。
+        // 句尾还是 MERGE，由这一家自己定：先要句尾（MySQL/PG 血统交得出），拿不到交给方言的整语句 emit。
         var clause = UpsertClause(dialect);
 
         RefuseUpsertFilters();
@@ -279,7 +270,7 @@ sealed class InsertOrUpdateEngine<T> : IInsertOrUpdate<T> where T : class
 
                     if (column >= _settable.Length)
                     {
-                        // 键位上两种"这颗键定位不到"各一句：null 与并档逐字同判，零是这一档独有的——
+                        // 键位上两种"这颗键定位不到"各一句：null 与并档同判，零是这一档独有的——
                         // 主键由库给值时那个默认形态代表"还没键"，放过去就是插一行没人要的新行。
                         if (value is null)
                             throw new QuickSqlException($"第 {first + row} 行的主键列 {columns[column].ColumnName} 是 null：InsertOrUpdate 按主键判冲突，null 键定位不到任何行。新行请给一颗客户端键，或走 orm.InsertRange。");
@@ -315,8 +306,8 @@ sealed class InsertOrUpdateEngine<T> : IInsertOrUpdate<T> where T : class
         return new BulkWritePlan(commands, _rows.Length, width, budget, reason, traces) { Provider = _orm.Provider };
     }
 
-    /// <summary>句尾族：内核发 <see cref="InsertStatement"/>（列清单、VALUES 形状与参数表与 <c>InsertRange</c> 共用一处真相），
-    /// provider 只补它后面那一段。与 <see cref="UpdateBulkEngine{T}"/> 的 <c>BuildUpsert</c> 那两句逐字同形。</summary>
+    /// <summary>句尾族：内核发 InsertStatement（列清单、VALUES 形状与参数表与 InsertRange 共用一处真相），
+    /// provider 只补它后面那一段。</summary>
     DialectSql EmitTailForm(ISqlDialect dialect, ColumnContract[] columns, IReadOnlyList<IReadOnlyList<SqlExpression?>> rows, List<AdoParameter> parameters, string clause)
     {
         var ast = new InsertStatement { Table = _table, Columns = columns, Rows = rows };
@@ -329,8 +320,8 @@ sealed class InsertOrUpdateEngine<T> : IInsertOrUpdate<T> where T : class
         return new DialectSql(writer.ToSqlString(), parameters);
     }
 
-    /// <summary>整语句族（没有句尾槽的一家：SQLite 的 ON CONFLICT、<c>MERGE INTO</c> 那一族）：把键 ∶ 可写的分工
-    /// 带进 <see cref="UpsertStatement"/>，方言那颗整语句 emit 发一整句（形态由这一家自己定）。</summary>
+    /// <summary>整语句族（没有句尾槽的一家：SQLite 的 ON CONFLICT、MERGE INTO 那一族）：把键 ∶ 可写的分工
+    /// 带进 UpsertStatement，方言发一整句（形态由这一家自己定）。</summary>
     DialectSql EmitUpsertForm(ISqlDialect dialect, ColumnContract[] columns, IReadOnlyList<IReadOnlyList<SqlExpression?>> rows, List<AdoParameter> parameters)
     {
         var ast = new UpsertStatement { Table = _table, Columns = columns, Rows = rows, Keys = _keys, Settable = _settable };
@@ -342,8 +333,8 @@ sealed class InsertOrUpdateEngine<T> : IInsertOrUpdate<T> where T : class
         return new DialectSql(writer.ToSqlString(), parameters);
     }
 
-    /// <summary>向这一家要 upsert 的句尾（<see langword="null"/> = 不接，走 MERGE 那条）。三份列名清单都先过方言的
-    /// 取号口再交，所以 provider 拿到的已经是这一家的引号与折叠形态——与 <see cref="UpdateBulkEngine{T}"/> 那份同源。</summary>
+    /// <summary>向这一家要 upsert 的句尾（null = 不接，走 MERGE 那条）。三份列名清单都先过方言的取号口再交，
+    /// provider 拿到的已经是这一家的引号与折叠形态。</summary>
     string? UpsertClause(ISqlDialect dialect)
     {
         var strategy = _orm.Provider.Bulk;
@@ -371,7 +362,7 @@ sealed class InsertOrUpdateEngine<T> : IInsertOrUpdate<T> where T : class
         return writer.ToSqlString();
     }
 
-    /// <summary>StringBuilder 的预容量要用到的标识符字符数（§12.7 E 那一格），与 <see cref="UpdateBulkEngine{T}"/> 那份同尺。</summary>
+    /// <summary>StringBuilder 的预容量要用到的标识符字符数，与 UpdateBulkEngine 那份同尺。</summary>
     int IdentifierChars()
     {
         var chars = _contract.Table.Name.Length * 2 + 32;
@@ -385,9 +376,9 @@ sealed class InsertOrUpdateEngine<T> : IInsertOrUpdate<T> where T : class
         return chars;
     }
 
-    /// <summary>全局过滤器在场时一句 upsert 不可达：<c>INSERT … 冲突子句</c> 与 <c>MERGE … ON</c> 都没有 WHERE
-    /// 可以叠过滤器，而冲突那一支改的是"键相同的那一行"——租户、软删那一道闸门在这句文本上无处安放。
-    /// 拒在这里而不是放过，后果与 <see cref="UpdateBulkEngine{T}"/> 那份同一条（放过的后果是改宽）。</summary>
+    /// <summary>全局过滤器在场时一句 upsert 不可达：INSERT…冲突子句与 MERGE…ON 都没有 WHERE 可以叠过滤器，
+    /// 而冲突那一支改的是"键相同的那一行"——租户、软删那道闸门在这句文本上无处安放。
+    /// 拒在这里而不是放过（放过的后果是改宽）。</summary>
     void RefuseUpsertFilters()
     {
         var injected = _orm.Filters.CountFor(typeof(T));

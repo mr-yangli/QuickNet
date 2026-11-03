@@ -9,112 +9,98 @@ using QuickSql.Write;
 
 namespace QuickSql.Tracking;
 
-/// <summary>一个实体类型的跟踪器（§8.2 那张状态机的落地）。
-///
-/// <b>为什么按类型切一份</b>：脏判定要按列下标读写实体，写入要 <c>InsertEngine&lt;T&gt;</c> 与
-/// <c>IEntityTypeSchema&lt;T&gt;</c>，这些都是泛型的。把泛型参数留在<b>类型</b>上而不是<b>方法</b>上，
-/// 调度层（<see cref="ChangeTracker"/>）就只需要一张 <c>Type → ITypeTracker</c> 的表，
-/// 全程不需要 <c>MakeGenericMethod</c>（§1.2 原则 3：加载可以反射，调用不行）。
-/// 那 <c>T</c> 是怎么进来的？只有泛型调用点 —— <c>db.Set&lt;T&gt;()</c>、<c>db.Add&lt;T&gt;()</c>、
-/// <c>db.Entry&lt;T&gt;()</c>，编译器已经知道它，不需要运行期问。
-///
-/// <b>这一份里没有事务也没有连接</b>：三档写入由 <see cref="DbContext"/> 在一条事务里依次驱动，
-/// <see cref="WritePhaseAsync"/> 与 <see cref="PostFlush"/> 分成两步就是为此 —— 任何一档抛了都不能结算，
-/// 否则会得到「回滚了，但会话以为写过了」。</summary>
+/// <summary>一个实体类型的跟踪器（会话状态机的落地）。按类型切一份：脏判定要按列下标读写实体，
+/// 写入要 InsertEngine 与 IEntityTypeSchema，这些都是泛型的——把泛型参数留在类型上而不是方法上，
+/// 调度层就只需要一张 Type → ITypeTracker 的表，全程不需要 MakeGenericMethod；T 只由泛型调用点带进来。
+/// 这一份里没有事务也没有连接：三档写入由 DbContext 在一条事务里依次驱动，WritePhaseAsync 与 PostFlush
+/// 分成两步就是为此——任何一档抛了都不能结算，否则会得到「回滚了，但会话以为写过了」。</summary>
 sealed class EntityTracker<T> : ITypeTracker where T : class
 {
     readonly QuickSqlOrm _orm;
     readonly EntityContract _contract;
 
-    /// <summary>这一类实体所属的集群（§16.4），从契约的表位算一次。<b>存在而不是每句现算，是因为
-    /// 删除与并发回读那两条路是逐行建 tag 的</b>，而这一格对整个类型是常量。写侧的结论永远是主库，
-    /// 所以这一颗只带集群名；角色那一格由 <c>AdoExecutor.RentAsync</c> 判。</summary>
+    /// <summary>这一类实体所属的集群，从契约的表位算一次。存在而不是每句现算，是因为删除与并发回读那两条路
+    /// 是逐行建 tag 的，而这一格对整个类型是常量。写侧的结论永远是主库，只带集群名；角色由 RentAsync 判。</summary>
     readonly string _cluster;
 
     readonly IEntityTypeSchema<T> _schema;
     readonly ColumnContract[] _columns;
 
-    /// <summary>主键列的下标，顺序即 <see cref="EntityContract.PrimaryKey"/> 的列序（复合主键按契约声明序）。</summary>
+    /// <summary>主键列的下标，顺序即  的列序（复合主键按契约声明序）。</summary>
     readonly int[] _keyOrdinals;
 
-    /// <summary>这一列能不能进 <c>SET</c>。排除主键（改它的语义是「删一行 + 加一行」，见
-    /// <see cref="EntityEntry.State"/> 那一段）、自增列（库里那一列不接受写，那是 <c>IDENTITY_INSERT</c> 那条路）
-    /// 与并发列（§8.2 的只比较不书写，值由库给）。
-    /// <b>三者都是「响了」而不是「剔掉」</b>：判脏了却不能进语句是一件事，静默剔掉的后果是
-    /// 「改了主键保存三次没生效」，那查不出来。</summary>
+    /// <summary>这一列能不能进 SET。排除主键（改它的语义是「删一行 + 加一行」）、自增列（库里不接受写，
+    /// 那是 IDENTITY_INSERT 那条路）与并发列（只比较不书写，值由库给）。
+    /// 三者都是「响了」而不是「剔掉」：静默剔掉的后果是「改了主键保存三次没生效」，那查不出来。</summary>
     readonly bool[] _writable;
 
-    /// <summary>并发列的下标（列序）。空数组就是「这个实体没有并发列」，于是三档写入走的还是 v0.17 那条路：
-    /// 普通语句、<c>NonQueryAsync</c>、0 行只进报告。所有分岔都从这一个数组的长度起，
-    /// 所以没有并发列的实体一条语句都不多、一颗参数都不多。</summary>
+    /// <summary>并发列的下标（列序）。空数组就是「这个实体没有并发列」，三档写入走普通语句、
+    /// NonQueryAsync、0 行只进报告。所有分岔都从这一个数组的长度起，
+    /// 没有并发列的实体一条语句都不多、一颗参数都不多。</summary>
     readonly int[] _tokens;
 
-    /// <summary>应用自维护的并发列，分两族：<c>int Version</c> 那一档在 SET 里写
-    /// <c>Version = Version + 1</c>、写完后直接在实体上 +1；<see cref="ColumnContract.AppSetsValue"/>
-    /// 那一族（ABP 的 <c>string ConcurrencyStamp</c>）新值已在实体上，脏判定自然把它带进 SET，
-    /// 不自增、不回读。库维护的（如 SQL Server <c>rowversion</c>）不在这一档，它们靠 OUTPUT/RETURNING 回读。
-    /// 空数组就是「没有应用自维护的并发列」，于是那一档 SET 与实体回写都不跑。</summary>
+    /// <summary>应用自维护的并发列，分两族：int Version 那一档在 SET 里写 Version = Version + 1、
+    /// 写完后直接在实体上 +1；AppSetsValue 那一族（如 ABP 的 ConcurrencyStamp）新值已在实体上，
+    /// 脏判定自然把它带进 SET，不自增、不回读。库维护的（如 rowversion）不在这一档，它们靠 OUTPUT/RETURNING 回读。
+    /// 空数组就是「没有应用自维护的并发列」。</summary>
     readonly int[] _appMaintainedTokens;
 
-    /// <summary>应用给值的并发列（<see cref="ColumnContract.AppSetsValue"/>）。已包含在
-    /// <see cref="_appMaintainedTokens"/> 里（同样不回读），单列一份是因为它们的 SET 走脏判定
-    /// （实体上已有新值）而不是 <c>+1</c> 改写——<see cref="WriteSingularAsync"/> 那一圈要跳过它们。</summary>
+    /// <summary>应用给值的并发列（AppSetsValue）。已包含在 _appMaintainedTokens 里（同样不回读），
+    /// 单列一份是因为它们的 SET 走脏判定（实体上已有新值）而不是 +1 改写——WriteSingularAsync 那一圈要跳过它们。</summary>
     readonly int[] _appSetsTokens;
 
-    /// <summary>库维护的并发列（SQL Server <c>rowversion</c> 等），需要 OUTPUT/RETURNING 回读新值。
-    /// 空数组就是「没有库维护的并发列」，于是 OUTPUT/RETURNING 子句与回读逻辑都不跑。</summary>
+    /// <summary>库维护的并发列（rowversion 等），需要 OUTPUT/RETURNING 回读新值。
+    /// 空数组就是「没有库维护的并发列」，OUTPUT/RETURNING 子句与回读逻辑都不跑。</summary>
     readonly int[] _storeFilledTokens;
 
-    /// <summary>库维护并发列的契约本体，顺序与 <see cref="_storeFilledTokens"/> 一致 —— 它是 OUTPUT/RETURNING 的列序。</summary>
+    /// <summary>库维护并发列的契约本体，顺序与  一致 —— 它是 OUTPUT/RETURNING 的列序。</summary>
     readonly ColumnContract[] _storeFilledTokenColumns;
 
     readonly TableRef _table;
 
-    /// <summary>合并语句里那一份字面行集的引用（§12.5）。它<em>不是</em>一张表：<c>_table</c> 是库里那一行，
-    /// 这一只是"这一批要写进去的值"，两者靠 <c>ON</c> 上的主键对上。别名固定 <c>t1</c>，
-    /// 因为一条语句里只有这两个表源参与（<c>QuickSqlOrm.AliasAt</c> 那一式）。
-    /// 单行桶不引用它，所以那些语句里连 <c>t1</c> 都不出现。</summary>
+    /// <summary>合并语句里那一份字面行集的引用。它不是一张表：_table 是库里那一行，
+    /// 这一只只是"这一批要写进去的值"，两者靠 ON 上的主键对上。别名固定 t1（一条语句里只有这两个表源参与）；
+    /// 单行桶不引用它，那些语句里连 t1 都不出现。</summary>
     readonly TableRef _rowSet;
 
     readonly int _identifierChars;
 
-    /// <summary>会话那一侧的调度器。回来路只为一件事：临时主键的账记在<em>主端</em>那一档，
-    /// 而拿着临时值的是<em>依赖方</em>那一档（§8.2 的 <c>Tp</c>），两边要能对上话。
-    /// 走 <see cref="ChangeTracker"/> 而不是让各档互相持有引用，是因为依赖是按 <see cref="Type"/> 说的。</summary>
+    /// <summary>会话那一侧的调度器。回来路只为一件事：临时主键的账记在主端那一档，拿着临时值的是依赖方那一档，
+    /// 两边要能对上话。走 ChangeTracker 而不是让各档互相持有引用，是因为依赖是按 Type 说的。</summary>
     readonly ChangeTracker _session;
 
-    /// <summary>本型每根关系边的外键列下标（<see cref="EntityContract.Relationships"/> 换算到列序）。
-    /// <b>没有关系边时是 <c>null</c></b>，于是那条改写路径在没有关系的类型上一次都不跑。
-    /// 边的目标是 <see cref="Type"/> 而不是档：拿着目标类型去问会话，才不需要在这里出现 <c>T</c>。</summary>
+    /// <summary>本型每根关系边的外键列下标（契约关系换算到列序）。没有关系边时是 null，
+    /// 那条改写路径在没有关系的类型上一次都不跑。边的目标是 Type 而不是档：拿着目标类型去问会话，
+    /// 才不需要在这里出现 T。</summary>
     readonly (Type Target, int[] Ordinals)[]? _fkEdges;
 
     readonly Dictionary<IdentityKey, Node> _identity = new();
     readonly Dictionary<object, Node> _byRef = new(ReferenceEqualityComparer.Instance);
     readonly List<Node> _order = [];
 
-    /// <summary>临时主键 → 那一只节点（§8.2 的 <c>Tp</c>）。
-    /// <b>键是规范化成 <c>long</c> 的临时值而不是原始装箱值</b>：依赖方的外键列与主端的主键列
-    /// 可以一个是 <c>int</c> 一个是 <c>long</c>（那是合法 DDL），而装箱相等判的是"同型同值" ——
-    /// 差一型就查不到，那颗负数就会被静默写进库。懒建：没发过临时键的类型连一个字典都不占。</summary>
+    /// <summary>临时主键 → 那一只节点。键是规范化成 long 的临时值而不是原始装箱值：依赖方的外键列与主端的
+    /// 主键列可以一个是 int 一个是 long（合法 DDL），而装箱相等判的是"同型同值"——差一型就查不到，
+    /// 那颗负数就会被静默写进库。懒建：没发过临时键的类型连一个字典都不占。</summary>
     Dictionary<long, Node>? _temps;
 
-    /// <summary>临时键的发号器，只朝负数走。不随保存归零：换过一轮号就重放一遍，而"这个负数其实是某只
-    /// 实例自己填的键"这种碰撞正好是重放能造出来的。</summary>
+    /// <summary>临时键的发号器，只朝负数走。不随保存归零：换过一轮号就重放一遍，
+    /// "这个负数其实是某只实例自己填的键"这种碰撞正好是重放能造出来的。</summary>
     long _tempCursor;
 
     readonly bool _hasIdentity;
 
-    /// <summary>这一型有没有集合边（级联的闸门）。<b>为假时 <c>Add</c>/<c>Remove</c> 一句都不多付</b>：
+    /// <summary>这一型有没有集合边（级联的闸门）。为假时 Add/Remove 一句都不多付：
     /// 绝大多数实体没有导航，而级联的遍历要为每一次调用新建一份游标。</summary>
     readonly bool _cascades;
 
     bool _mayHaveWrites;
 
-    public EntityTracker(QuickSqlOrm orm, ChangeTracker session)
+    public EntityTracker(QuickSqlOrm orm, ChangeTracker session, Schema.IEntitySchemaRegistry? schemas = null)
     {
         _orm = orm;
         _session = session;
-        _schema = orm.Schemas.Schema<T>();
+        // 会话级模型覆写（DbContext.OnModelCreating）那颗口：null = 照旧走组装根的注册表。
+        _schema = (schemas ?? orm.Schemas).Schema<T>();
         _contract = _schema.Contract;
         _cluster = DataSourceRouting.ClusterOf(_contract.Table);
         _columns = _contract.Columns;
@@ -146,15 +132,11 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
         _writable = writable;
         _tokens = [.. tokens];
 
-        // 并发列分三档：库维护的（StoreFillsValue，如 SQL Server rowversion）靠 OUTPUT/RETURNING 回读；
-        // 应用给值的（AppSetsValue，如 ABP 的 string ConcurrencyStamp）不回读、不自增——新值已在实体上，
-        // 脏判定自然带进 SET，写完实体手里的就是新值，下一次保存比的快照也对得上；
+        // 并发列分三档：库维护的（StoreFillsValue，如 rowversion）靠 OUTPUT/RETURNING 回读；
+        // 应用给值的（AppSetsValue）不回读、不自增——新值已在实体上，脏判定自然带进 SET；
         // 其余应用自维护的（如 int Version）在 SET 里写 Version = Version + 1，写完后实体直接 +1。
-        // 三档不重叠、合起来等于 _tokens 全集。
-        // 「其余」那一档只认整型（int/long/short/byte）：非整型的并发列（如 datetime2 时间戳）即使
-        // StoreFillsValue = false 也走 OUTPUT/RETURNING 回读，因为对它们做 +1 没有语义。
-        // 这是向后兼容：v0.18 之前所有并发列都走回读（beta.28 注释里欠的「应用给新值」那一族，
-        // 从本笔起由 AppSetsValue 旗标开出第三档承接）。
+        // 三档不重叠、合起来等于 _tokens 全集。「其余」那一档只认整型（int/long/short/byte）：
+        // 非整型的并发列（如 datetime2 时间戳）即使 StoreFillsValue = false 也走回读，对它们做 +1 没有语义。
         var storeFilled = new List<int>();
         var appMaintained = new List<int>();
         var appSets = new List<int>();
@@ -178,15 +160,15 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
         _appMaintainedTokens = [.. appMaintained];
         _appSetsTokens = [.. appSets];
         _storeFilledTokenColumns = [.. _storeFilledTokens.Select(ordinal => _columns[ordinal])];
-        // 目标怎么引用自己由方言定（§4 的 WriteTargetAlias）：T-SQL 与 PG 系给一个独立别名 t0，
-        // Oracle 血统不接受目标别名、只能用表名本身。这一颗要问方言而不是现场写死，因为同一份 _table
-        // 既进 UPDATE 的 SET/WHERE，也进冲突重读那一条 SELECT（下面那一格）—— 两处必须同名。
+        // 目标怎么引用自己由方言定（WriteTargetAlias）：T-SQL 与 PG 系给一个独立别名 t0，
+        // Oracle 血统不接受目标别名、只能用表名本身。要问方言而不是现场写死：同一份 _table
+        // 既进 UPDATE 的 SET/WHERE，也进冲突重读那一条 SELECT——两处必须同名。
         _table = new TableRef(0, _orm.Provider.Dialect.WriteTargetAlias(_contract.Table), _contract.Table, _contract);
         _rowSet = new TableRef(1, QuickSqlOrm.AliasAt(1), _contract.Table);
 
         // 边的外键成员名换算成列下标，只在启动期这一次：改写路径每行每列都要用，而契约只按名字说话。
-        // ByMember 认不出这些名字是内核不变量破了（§10.3 的关系解析判过：约定命中的必须是已映射列，
-        // 显式点名的没映射则在解析期就拒），所以这里不判、让它按自己的形状响。
+        // ByMember 认不出这些名字是内核不变量破了（关系解析判过：约定命中的必须是已映射列），
+        // 所以这里不判、让它按自己的形状响。
         if (_contract.Relationships.Count > 0)
         {
             var edges = new (Type, int[])[_contract.Relationships.Count];
@@ -205,8 +187,8 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
             _fkEdges = edges;
         }
 
-        // 预容量（§12.7 E）：一条逐行 UPDATE 的标识符就是表名 + 别名 + 主键列名那几处。
-        // 并发列在 WHERE 与 OUTPUT 里各出现一次，所以按两列的量一起算进去。
+        // 预容量：一条逐行 UPDATE 的标识符就是表名 + 别名 + 主键列名那几处；
+        // 并发列在 WHERE 与 OUTPUT 里各出现一次，按两列的量一起算进去。
         _identifierChars = _contract.Table.Name.Length + _table.Alias.Length * 3 + (_columns.Length + _tokens.Length) * 16 + 128;
     }
 
@@ -216,23 +198,19 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
 
     public int Count => _order.Count;
 
-    /// <remarks><b>交的是 <see cref="_order"/> 本身，不是拷贝</b>：这条链上的每一处遍历（本类的
-    /// <see cref="DetectChanges"/>、会话那侧的 <c>AnyDue</c> 与两道发射前闸门）都是按会话规模跑的，
-    /// 拷一份 1 000 元素的引用数组就是 8 KB 一句都不发的工作。枚举期间不改这张表 ——
-    /// 本类改状态与脏位、不改顺序，而会摘掉节点的 <see cref="PostFlush"/> 与 <c>Entries()</c> 各自留着自己的那份拷贝
-    /// （约束的全文写在 <see cref="ITypeTracker.TrackedNodes"/> 上）。</remarks>
+    /// <summary>交的是 _order 本身，不是拷贝：这条链上的每一处遍历（DetectChanges、会话那侧的 AnyDue
+    /// 与两道发射前闸门）都是按会话规模跑的，拷一份 1 000 元素的引用数组就是 8 KB 一句都不发的工作。
+    /// 枚举期间不改这张表——本类改状态与脏位、不改顺序，会摘掉节点的 PostFlush 与 Entries() 各自留着拷贝。</summary>
     public IReadOnlyList<Node> TrackedNodes => _order;
 
-    /// <remarks>只在「变脏 / 新增 / 删除」时置真，之后不再置假（<see cref="Clear"/> 与 <see cref="PostFlush"/>
-    /// 例外）。于是它可以偶然多 true 一次：<c>SaveChanges</c> 那一档扫到零个节点，返回空报告。
-    /// 反方向的错（该写而没写）才是不能接受的，所以这个位只朝安全的方向偏。</remarks>
+    /// <summary>只在「变脏 / 新增 / 删除」时置真，之后不再置假（Clear 与 PostFlush 例外）。
+    /// 于是它可以偶然多 true 一次：SaveChanges 那一档扫到零个节点，返回空报告——
+    /// 反方向的错（该写而没写）才是不能接受的，这个位只朝安全的方向偏。</summary>
     public bool MayHaveWrites => _mayHaveWrites;
 
-    /// <remarks><b>它看的是状态，不是语句</b>：本档里既有 <see cref="EntityState.Added"/> 又有
-    /// <see cref="EntityState.Deleted"/> 就是「这一轮同一张表既占位又腾位」，而库里那条业务唯一索引
-    /// （行号、位置、编码那一类）只认得到<em>此刻</em>表里有什么 —— 先插就撞上还赖在表里的那一行。
-    /// 一条 Added 之后又被 <c>Remove</c> 掉的行在 <see cref="ApplyState"/> 那一格已经转成 Detach 了，
-    /// 所以这里不会为它多报一次「两边都有」。</remarks>
+    /// <summary>它看的是状态，不是语句：本档里既有 Added 又有 Deleted 就是「这一轮同一张表既占位又腾位」，
+    /// 而库里那条业务唯一索引（行号、位置、编码那一类）只认得到此刻表里有什么——先插就撞上还赖在表里的那一行。
+    /// 一条 Added 之后又被 Remove 掉的行在 ApplyState 那一格已经转成 Detach 了，这里不会为它多报一次。</summary>
     public bool HasInsertsAndDeletes
     {
         get
@@ -261,14 +239,14 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
     public bool HasTempKeys => _temps is { Count: > 0 };
 
     /// <summary>依赖方手里那颗值问这一档：它是不是本档发的临时键、换得出的真实键是哪一颗。
-    /// <b>判"换不出"靠的是节点手里的键此刻还是不是那个临时值</b>，而不是查某张"已回填"的表：
-    /// 回填由 <c>InsertEngine</c> 直接写进实体（§12.4 第 1 项那条位置映射），实体本身就是那一张表。
-    /// 节点已经不在引用表里就是孤的 —— 标删一只还没写出去的新增行等于忘掉它，而引用还留在依赖方手里。</summary>
+    /// 判"换不出"靠的是节点手里的键此刻还是不是那个临时值，而不是查某张"已回填"的表：
+    /// 回填由 InsertEngine 直接写进实体，实体本身就是那一张表。节点已经不在引用表里就是孤的
+    /// ——标删一只还没写出去的新增行等于忘掉它，而引用还留在依赖方手里。</summary>
     public TempProbe ProbeTemp(object? value, out object? real)
     {
         real = null;
 
-        // 临时键恒为负整数，所以这一判就够：非整型（Guid 键、字符串键）与没填（null）都不是本档发出去的东西。
+        // 临时键恒为负整数，这一判就够：非整型（Guid 键、字符串键）与没填（null）都不是本档发出去的东西。
         var candidate = Signed(value);
 
         if (_temps is null || candidate is null)
@@ -281,7 +259,7 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
             return TempProbe.Orphaned;
 
         // 与查号同一个尺子：主端那一列是 bigint、依赖方那一列是 int 时，装出来的箱是两个型，
-        // 而"还是不是当初那颗"判的是数值。按装箱相等判会把"还没换"读成"换出来了"，然后原样写回去。
+        // 而"还是不是当初那颗"判的是数值——按装箱相等判会把"还没换"读成"换出来了"，然后原样写回去。
         var current = KeyValues((T) node.Entity)[0];
 
         if (current is null || Unset(current) || Signed(current) == candidate)
@@ -292,10 +270,9 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
         return TempProbe.Resolved;
     }
 
-    /// <summary>带符号整型的规范化读数（<see cref="_temps"/> 那把 <c>long</c> 尺子的出处），装不下就返回 <c>null</c>。
-    /// <b><c>short</c>／<c>byte</c> 那一档不在这里</b>：临时键只会由 <c>int</c>/<c>long</c> 主键发出去，
-    /// 而一根 <c>short</c> 外键要捏住它得先自己写一次强制转换 —— 那种列在探测这里就被当成"不是我发的号"放过去，
-    /// 不是被换掉也不是被拒（这一格记在 §14）。</summary>
+    /// <summary>带符号整型的规范化读数（_temps 那把 long 尺子的出处），装不下就返回 null。
+    /// short/byte 不在这里：临时键只会由 int/long 主键发出去，一根 short 外键要捏住它得先自己写强制转换
+    /// ——那种列在探测这里就被当成"不是我发的号"放过去（已知边界）。</summary>
     static long? Signed(object? value) => value switch
     {
         int small => small,
@@ -305,10 +282,9 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
 
     // ── 入口：物化 / Add / Attach / Update / Remove ────────────────────
 
-    /// <summary>物化路径（§8.2 的 IdentityMap）。返回会话里<em>该拿的那一只</em>实例：
-    /// 同引用已跟踪 → 原样；同键已跟踪 → 那一只，新副本丢弃；都不认识 → 登记为 <see cref="EntityState.Unmodified"/>。
-    /// <b>不覆盖已有实例的值</b>：那只可能已经被改过而还没保存，用库里的值盖回去等于擦掉用户的改动。
-    /// 「重新读一遍库并让库赢」是 <c>Refresh</c> 的活，还没接线（§14 的 P1 余项）。</summary>
+    /// <summary>物化路径（身份映射）。返回会话里该拿的那一只实例：同引用已跟踪 → 原样；
+    /// 同键已跟踪 → 那一只，新副本丢弃；都不认识 → 登记为 Unmodified。不覆盖已有实例的值：
+    /// 那只可能已经被改过而还没保存，用库里的值盖回去等于擦掉用户的改动（"重读并让库赢"是 Refresh 的活）。</summary>
     public Node Track(object entity)
     {
         RequireKey();
@@ -330,14 +306,13 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
         }
 
         // 主键还没值：这一行不进身份映射，否则两只都没填键的新实例会被认成同一只。
-        // 「同一个键被新增两次」那一档由 Tp 接住了（Add 会发临时键，见 <see cref="AssignTempKey"/>），
-        // 而物化路径不动：库里递出来的行本来就该有键，没键是库表设计的问题，不替它编一个。
+        // 「同一个键被新增两次」那一档由临时主键接住了（Add 会发号）；物化路径不动：
+        // 库里递出来的行本来就该有键，没键是库表设计的问题，不替它编一个。
         return Register(entity, EntityState.Unmodified, null, typed);
     }
 
-    /// <summary>标为新增。<b>与 <see cref="Track"/> 的分别</b>：这里「同键已有另一只实例」要抛而不是丢弃 ——
-    /// 物化时库把同一行递两次，去重是对的；用户把同一个键递两次，那是他手里有两只对象，
-    /// 静默选一只就是 §12.2 拒绝的那种无痕。</summary>
+    /// <summary>标为新增。与 Track 的分别：这里「同键已有另一只实例」要抛而不是丢弃——
+    /// 物化时库把同一行递两次，去重是对的；用户把同一个键递两次，那是他手里有两只对象，静默选一只就是无痕。</summary>
     public Node Add(object entity)
     {
         ArgumentNullException.ThrowIfNull(entity);
@@ -372,27 +347,20 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
         if (key is null)
             AssignTempKey(node, typed, values);
 
-        // 级联插入：顺这一张实体的集合边把子实体一起带进会话（§8.2）。放在新登记之后、且在
-        // 上面那句"已跟踪就直接还回原节点"的早退之外 —— 递归靠的正是「只有新登记才往下走」。
+        // 级联插入：顺这一张实体的集合边把子实体一起带进会话。放在新登记之后、且在
+        // "已跟踪就直接还回原节点"的早退之外——递归靠的正是「只有新登记才往下走」。
         if (_cascades)
             _session.Cascade(this, entity, CascadeMode.Insert);
 
         return node;
     }
 
-    /// <summary>给一只「键还没值」的新增实例发一个临时主键（§8.2 的 <c>Tp</c>）—— 于是"子实体先 <c>Add</c>、
-    /// 父实体的键等库给"那一种引用终于有个东西可以捏着，而不是写出去一个空外键。
-    ///
-    /// <para><b>只服务一种形状：单列、带符号整型、自增的主键。</b>自增意味着那一列的值本来就要等
-    /// <c>INSERT</c> 给回来（<see cref="InsertEngine{T}"/> 的回填档），而负数意味着手里这颗不可能是库里的键。
-    /// 客户端生成的键（<c>Guid</c> 那一派）两种都不满足：那种键该由调用方填，空着是填错了而不是"还没生成"，
-    /// 库也不会在回填时把它给回来 —— 那一档记在 §14，不在这里蒙。</para>
-    ///
-    /// <para><b>临时值进实体、不进身份映射</b>：节点的 <c>Registered</c> 仍是 <c>null</c>，所以
-    /// <c>Find(那个负数)</c> 查不出东西；快照也保持"没填"那一格（发号在 <see cref="Register"/> 之后），
-    /// 于是 <c>OriginalValue</c> 说的仍是"这一行库里没有"。写出去的语句永远不带它：自增列不进列清单，
-    /// 而依赖方手里那一颗在语句构建之前被换掉 —— <b>换不掉就拒，任何情况下都不让临时值进库</b>
-    /// （<see cref="ResolveTempKeys"/>）。</para></summary>
+    /// <summary>给一只「键还没值」的新增实例发一个临时主键——"子实体先 Add、父实体的键等库给"那一种引用
+    /// 终于有个东西可以捏着，而不是写出去一个空外键。只服务一种形状：单列、带符号整型、自增的主键
+    /// （自增意味着值本来就要等 INSERT 给回来，负数意味着手里这颗不可能是库里的键）；客户端生成的键
+    /// （Guid 那一派）不代填——空着是填错了而不是"还没生成"。临时值进实体、不进身份映射：
+    /// Find(那个负数) 查不出东西，快照保持"没填"。写出去的语句永远不带它：自增列不进列清单，
+    /// 依赖方手里那一颗在语句构建之前被换掉——换不掉就拒，任何情况下都不让临时值进库。</summary>
     void AssignTempKey(Node node, T entity, object?[] values)
     {
         if (!_hasIdentity || _keyOrdinals.Length != 1)
@@ -421,7 +389,7 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
 
     static object Box(long value, Type type) => type == typeof(long) ? value : (int) value;
 
-    /// <summary>纳入会话并承认为「库里已有、当前值即库值」。主键必须有值：没有值就没有 <c>WHERE</c>，
+    /// <summary>纳入会话并承认为「库里已有、当前值即库值」。主键必须有值：没有值就没有 WHERE，
     /// 之后任何一次改动都会变成一句定位不到的 UPDATE。</summary>
     public Node Attach(object entity)
     {
@@ -443,8 +411,8 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
         return Register(entity, EntityState.Unmodified, key, typed);
     }
 
-    /// <summary>承认为「库里已有」并且<em>每一列都算脏</em> —— §8.3 那句
-    /// <c>db.Attach(order); db.Entry(order).State = Modified</c> 的合成形态，也就是「我知道它变了，别比了，全写」。</summary>
+    /// <summary>承认为「库里已有」并且每一列都算脏——Attach + Entry(...).State = Modified 的合成形态，
+    /// 「我知道它变了，别比了，全写」。</summary>
     public Node Update(object entity)
     {
         ArgumentNullException.ThrowIfNull(entity);
@@ -460,8 +428,8 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
         return node;
     }
 
-    /// <summary>标为删除。没跟踪过的实例也纳入再标（与同类库同形），所以它同样要求主键有值。
-    /// <b>唯一的例外是「本来就还是新增」</b>：库里没有这一行，删它的正确执行方式是忘掉它，不是发一句 <c>DELETE</c>。</summary>
+    /// <summary>标为删除。没跟踪过的实例也纳入再标（与同类库同形），同样要求主键有值。
+    /// 唯一的例外是「本来就还是新增」：库里没有这一行，删它的正确执行方式是忘掉它，不是发一句 DELETE。</summary>
     public Node Remove(object entity)
     {
         ArgumentNullException.ThrowIfNull(entity);
@@ -474,8 +442,8 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
         {
             if (node.State == EntityState.Added)
             {
-                // 父本轮还没写出去，删它的正确执行方式是忘掉它（既有语义）。这里不替它连带忘掉子实体：
-                // 那要把"哪些是这一串带进来的"记成一份账，而那份账一旦记错就是静默漏删。
+                // 父本轮还没写出去，删它的正确执行方式是忘掉它。这里不替它连带忘掉子实体：
+                // 那要把"哪些是这一串带进来的"记成一份账，一旦记错就是静默漏删；
                 // 子还留在会话里 = 它的键落不下去，SaveChanges 会在级联落键那一格响亮地拒。
                 Detach(node);
 
@@ -505,12 +473,11 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
         return registered;
     }
 
-    /// <summary>这只引用是不是在本档里。<see cref="ChangeTracker.OwnerOf"/> 用它把 <c>Entry</c> 的拒绝说准。</summary>
+    /// <summary>这只引用是不是在本档里。 用它把 Entry 的拒绝说准。</summary>
     public bool Owns(object entity) => _byRef.ContainsKey(entity);
 
-    /// <summary>这一行在本档里已经是哪只实例（<see cref="ITypeTracker.Canonical"/>）。
-    /// <b>没有主键、键还没值、或这一行没进过身份映射都返回 null</b>：本句只是问，不登记，也不响 ——
-    /// 键没值的实例按规则不在映射里（<see cref="Find"/> 上方那句说的同一件事）。</summary>
+    /// <summary>这一行在本档里已经是哪只实例（Canonical）。没有主键、键还没值、或这一行没进过身份映射
+    /// 都返回 null：本句只是问，不登记，也不响——键没值的实例按规则不在映射里。</summary>
     public object? Canonical(object entity)
     {
         if (_keyOrdinals.Length == 0)
@@ -531,9 +498,8 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
         return KeyValues((T) entity);
     }
 
-    /// <summary>级联落键：把父那一串的键值写进本档这几列外键。<b>先换型再写</b> —— schema 的 setter
-    /// 是强转的装箱写入，主端 <c>bigint</c> 配子端 <c>int</c> 是合法 DDL，不換就是现场一次
-    /// <see cref="InvalidCastException"/>（与 <see cref="AdaptKey"/> 同一条理由，那一颗只服务临时键那条路径）。
+    /// <summary>级联落键：把父那一串的键值写进本档这几列外键。先换型再写——schema 的 setter 是强转的装箱写入，
+    /// 主端 bigint 配子端 int 是合法 DDL，不换就是现场一次 InvalidCastException（与 AdaptKey 同一条理由）。
     /// 装不下要响亮地拒：静默截断出来的是一颗库里不属于任何父行的键。</summary>
     public void SetForeignKeys(object entity, int[] ordinals, object?[] values)
     {
@@ -551,7 +517,7 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
             return value;
 
         // 整型之间按 long 过一遍：这是唯一到得了这一格的键型（发号那一档只发 int/long），
-        // 而子端那一列可以是 int/long/short/byte 里的任何一种。
+        // 子端那一列可以是 int/long/short/byte 里的任何一种。
         if (value is int or long && IsIntegerClrType(type))
         {
             var wide = Convert.ToInt64(value);
@@ -571,15 +537,13 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
             $"而主端那一列是 {value.GetType().Name}：级联要把父的键落成子的外键，两列不同型又没有可说的换型规则 —— 把这两列做成同型。");
     }
 
-    /// <summary>取入口。<b>不代替 Attach</b>：规格 §8.3 的写法本来就是「先 Attach 再改 State」，
-    /// 而「查一个入口顺手把实体纳入会话」是一种没人说过的写入意图。
-    /// 返回类型是<em>泛型的那一档</em>：<c>Entry(o).Property(o =&gt; o.Note)</c> 里那个收 lambda 的重载长在
-    /// <see cref="EntityEntry{T}.Property{TProp}"/> 上，退回 <see cref="EntityEntry"/> 就只剩收字符串的那一条，
-    /// §8.2 的"精确控制"会变成一句写不出来的话（名字笔误也要等到运行期才现形）。</summary>
+    /// <summary>取入口。不代替 Attach：「查一个入口顺手把实体纳入会话」是一种没人说过的写入意图
+    /// （先 Attach 再改 State）。返回类型是泛型的那一档：收 lambda 的 Property 重载长在 EntityEntry〈T〉 上，
+    /// 退回非泛型就只剩收字符串的那一条，名字笔误要等到运行期才现形。</summary>
     public EntityEntry<T> Entry(object entity)
     {
         // 与 Add/Attach/Remove 同一款守卫：null 落到下面的型别判断会以一句 NRE 收场，
-        // 而"传了 null"是调用方的错，要按调用方的错报。
+        // "传了 null"是调用方的错，要按调用方的错报。
         ArgumentNullException.ThrowIfNull(entity);
 
         if (entity is not T typed)
@@ -594,9 +558,9 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
 
     // ── 状态与侦测 ────────────────────────────────────────────────────
 
-    /// <summary><see cref="EntityEntry.State"/> 的落地。四个赋值各有各的连带效果，集中写在这里而不是散到各个入口，
-    /// 是因为 <see cref="DetectChanges"/> 与显式赋值必须走同一套规则 —— 否则「显式 Modified 之后再侦测」会掉回
-    /// <see cref="EntityState.Unmodified"/>，那就是把用户明说的「全写」撤销了。</summary>
+    /// <summary>EntityEntry.State 的落地。四个赋值各有各的连带效果，集中写在这里而不是散到各个入口：
+    /// DetectChanges 与显式赋值必须走同一套规则——否则「显式 Modified 之后再侦测」会掉回 Unmodified，
+    /// 那就是把用户明说的「全写」撤销了。</summary>
     public void ApplyState(Node node, EntityState next)
     {
         if (next == node.State)
@@ -611,7 +575,7 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
 
             case EntityState.Unmodified:
                 // 「承认当前值就是库里的值」：重拍快照 + 清覆盖 + 清脏。
-                // 不重拍的话，下一次侦测会拿旧快照把这一行立刻判回脏 —— 那这句赋值就只是「再说一遍」。
+                // 不重拍的话，下一次侦测会拿旧快照把这一行立刻判回脏——那句赋值就只是「再说一遍」。
                 node.State = next;
                 Reset(node, (T) node.Entity);
 
@@ -653,7 +617,7 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
         }
     }
 
-    /// <summary>逐列比较 + 覆盖合成（§8.2「脏列合成」里「发现」那一半）。
+    /// <summary>逐列比较 + 覆盖合成（脏列合成里「发现」那一半）。
     /// 返回本次改了状态的实例数，0 就是「这一轮什么都没变」——测试与日志要的就是这个数。</summary>
     public int DetectChanges()
     {
@@ -670,9 +634,8 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
 
             for (var ordinal = 0; ordinal < _columns.Length; ordinal++)
             {
-                // 覆盖位先问：显式标脏（State = Modified 的 MarkAllWritable）与显式标不脏的列，
-                // 那次 GetValue（装箱）+ Equals 的结果根本没人消费 —— 求值序调换后，这一列
-                // 从"读+比"降为一次数组读，显式 Modified 的实体在每轮侦测里为每列省一笔。
+                // 覆盖位先问：显式标脏与显式标不脏的列，那次 GetValue（装箱）+ Equals 的结果根本没人消费
+                // ——求值序调换后，这一列从"读+比"降为一次数组读，显式 Modified 的实体在每轮侦测里为每列省一笔。
                 var dirty = node.Overrides[ordinal] ?? !Equals(_schema.GetValue(entity, ordinal), node.Snapshot[ordinal]);
 
                 node.Dirty[ordinal] = dirty;
@@ -695,9 +658,8 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
         return changed;
     }
 
-    /// <summary>清数据。<b>顺带把每个节点的状态归到 <see cref="EntityState.Detached"/></b>，
-    /// 因为 <see cref="DbChangeTracker.Clear"/> 那一格对调用方的承诺就是"所有实例转 Detached"，
-    /// 而手里那只 <see cref="EntityEntry"/> 是视图不是拷贝 —— 不改它的话这句承诺只写在文档里。</summary>
+    /// <summary>清数据。顺带把每个节点的状态归到 Detached：DbChangeTracker.Clear 对调用方的承诺就是
+    /// "所有实例转 Detached"，而手里那只 EntityEntry 是视图不是拷贝——不改它的话这句承诺只写在文档里。</summary>
     public void Clear()
     {
         foreach (var node in _order)
@@ -710,11 +672,11 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
         _mayHaveWrites = false;
     }
 
-    /// <summary>内存视图的快照（<c>Local.Entries</c>）。含已标删的实例 —— 它们确实还在会话里，
-    /// 直到那一句 <c>DELETE</c> 执行完（<see cref="LocalView{T}"/> 上方那段说的就是这件事）。</summary>
+    /// <summary>内存视图的快照（Local.Entries）。含已标删的实例——它们确实还在会话里，
+    /// 直到那一句 DELETE 执行完。</summary>
     public IReadOnlyList<T> SnapshotEntities() => [.. _order.Select(node => (T) node.Entity)];
 
-    /// <summary>按主键在内存里找（<c>Local.Find</c>）。<b>只看得到进过身份映射的那些</b>：
+    /// <summary>按主键在内存里找（Local.Find）。只看得到进过身份映射的那些：
     /// 键还没值的实例按规则不在映射里，所以这里查不到，而它确实在会话里。</summary>
     public T? Find(object?[] values)
     {
@@ -732,17 +694,16 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
         return new TrackedProperty<T>(this, node, Array.IndexOf(_columns, column), column);
     }
 
-    /// <summary>给 <see cref="TrackedProperty{T}"/> 用的三扇小窗：读写实体上的一格，以及"有人强制标脏了"这个通知。
-    /// 走方法而不是把 <c>_schema</c> 暴露出去，是为了让快照那三张数组只有一个写入点（本类）。</summary>
+    /// <summary>给 TrackedProperty 用的三扇小窗：读写实体上的一格，以及"有人强制标脏了"这个通知。
+    /// 走方法而不是把 _schema 暴露出去，是为了让快照那三张数组只有一个写入点（本类）。</summary>
     internal object? Value(T entity, int ordinal) => _schema.GetValue(entity, ordinal);
 
     internal void Write(T entity, int ordinal, object? value) => _schema.SetValue(entity, ordinal, value);
 
     internal void MarkWrites() => _mayHaveWrites = true;
 
-    /// <summary>用库里的最新值覆盖实体并重置快照（<c>Refresh</c> 的落地）。
-    /// 不在会话里的实例先登记为 <see cref="EntityState.Unmodified"/>；已在的按状态分别处理 ——
-    /// <see cref="EntityState.Added"/> 与 <see cref="EntityState.Modified"/> 不动（用户有未保存的改动，库值不该覆盖），
+    /// <summary>用库里的最新值覆盖实体并重置快照（Refresh 的落地）。不在会话里的实例先登记为 Unmodified；
+    /// 已在的按状态分别处理——Added 与 Modified 不动（用户有未保存的改动，库值不该覆盖），
     /// 其余状态重拍快照、清脏、清覆盖。</summary>
     internal void ApplyFreshValues(object entity, object?[] freshValues)
     {
@@ -767,9 +728,8 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
         }
     }
 
-    /// <summary>这一行此刻会进 <c>SET</c> 的列（脏 且 可写），按列序、给成员名。
-    /// <b>与 <see cref="Node.Dirty"/> 的分别是后者还包含主键那几列</b> —— 而主键进不了语句，
-    /// 所以「这一列被判定改过了」与「这一列会被写出去」是两句话，前者由侦测回答，后者由这里回答。</summary>
+    /// <summary>这一行此刻会进 SET 的列（脏 且 可写），按列序、给成员名。与 Node.Dirty 的分别是后者
+    /// 还包含主键那几列——主键进不了语句，「这一列被判定改过了」与「这一列会被写出去」是两句话。</summary>
     internal IReadOnlyList<string> ModifiedMembers(Node node)
     {
         List<string>? names = null;
@@ -785,22 +745,13 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
         return names is null ? [] : names;
     }
 
-    /// <summary>这一行此刻会不会被写出去（<see cref="EntityEntry.IsModified"/> 与 <see cref="DbChangeTracker.HasChanges"/>
-    /// 共用的判据）。<b><see cref="EntityState.Unmodified"/> 也要算</b>：
-    /// <c>Property(...).IsModified = true</c> 写下去的是覆盖位，而状态要等下一次 <see cref="DetectChanges"/> 才被推成
-    /// <see cref="EntityState.Modified"/> —— 只看 Modified 的话，关掉自动侦测的调用方在
-    /// <c>if (HasChanges) SaveChanges()</c> 这一句上会得到 <c>false</c>，于是那次强制写入被静默跳过。
-    /// <see cref="EntityState.Modified"/> 而 SET 为空（有人把每一列都标成不脏）算"不会"，
-    /// 与 <see cref="WriteUpdatesAsync"/> 的跳过是同一条判据。
-    ///
-    /// <para><b>判据是"有没有任何一列脏"，不是"有没有一列脏且进得了 <c>SET</c>"</b>。用后者会更"准"，
-    /// 但它把 <see cref="Unwritable"/> 那一档拒写变成走不到的死路：<c>SaveChanges</c> 先看这一句决定要不要开事务，
-    /// 只脏了一列主键（或并发列）的节点在"能不能进 SET"那把尺子下是干净的，于是整次保存提前返回空报告，
-    /// 那句「改了主键保存三次没生效」就真的没生效了 —— 而这里是唯一能听见它的地方。
-    /// 所以这一格答的是"这一行有没有欠着一次处理"：能发语句是一种，必须拒的是另一种，两者都不该被跳过。</para>
-    ///
-    /// <para>代价方向跟着同一句话走：这一句为真而 SET 为空时，<see cref="WriteUpdatesAsync"/> 要么抛、要么整节点跳过，
-    /// 都不会多发一条语句。</para></summary>
+    /// <summary>这一行此刻会不会被写出去（IsModified 与 HasChanges 共用的判据）。Unmodified 也要算：
+    /// Property(...).IsModified = true 写下去的是覆盖位，状态要等下一次 DetectChanges 才被推成 Modified，
+    /// 只看 Modified 的话关掉自动侦测的调用方在 if (HasChanges) SaveChanges() 上会静默跳过强制写入；
+    /// Modified 而 SET 为空（每一列都标成不脏）算"不会"。判据是"有没有任何一列脏"，不是"脏且进得了 SET"：
+    /// 用后者会把 Unwritable 那一档拒写变成走不到的死路——SaveChanges 先看这一句决定要不要开事务，
+    /// 只脏了一列主键的节点在"能不能进 SET"那把尺子下是干净的，整次保存提前返回空报告，
+    /// 「改了主键保存三次没生效」就真的没生效了，而这里是唯一能听见它的地方。</summary>
     public bool WillWrite(Node node) => node.State switch
     {
         EntityState.Added or EntityState.Deleted => true,
@@ -823,8 +774,8 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
 
     public async Task<IReadOnlyList<SaveChangesOp>> WritePhaseAsync(WriteOperation phase, List<HookTrace> traces, CancellationToken ct)
     {
-        // 观察类钩子先发（§10.1 那一格）：它在语句建出来之前，于是订阅者改得动实体，
-        // 而那一格改出来的值会被紧接着建出来的语句带出去（取值段读的是实体）。
+        // 观察类钩子先发：它在语句建出来之前，订阅者改得动实体，
+        // 改出来的值会被紧接着建出来的语句带出去（取值段读的是实体）。
         NotifyWritten(phase);
 
         return phase switch
@@ -835,9 +786,8 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
         };
     }
 
-    /// <summary>把这一档要写的实体逐只交给观察者（<c>QuickSqlAop.EntityWritten</c>）。
-    /// <para><b>逐只一次</b>：一只实体在一轮里只被写一次，所以订阅者收到的事件与「这一轮改了几行」一一对应。
-    /// <b>零成本</b>：没订阅就不构造事件对象，一个都不造。</para></summary>
+    /// <summary>把这一档要写的实体逐只交给观察者（QuickSqlAop.EntityWritten）。逐只一次：
+    /// 一只实体在一轮里只被写一次，事件与「这一轮改了几行」一一对应。零成本：没订阅就不构造事件对象。</summary>
     void NotifyWritten(WriteOperation phase)
     {
         var written = _orm.Aop.EntityWritten;
@@ -868,23 +818,17 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
         }
     }
 
-    /// <summary>把依赖方手里那些临时外键换成主端此刻的真实键（§8.2 的 <c>Tp</c> 回填）。
-    ///
-    /// <para><b>必须跑在语句构建之前</b>：这一格合上的正是"计划里带着 −1"，跑在后面就是先把错值发出去了。
-    /// 而它跑得动，靠的是 v0.20 那一条拓扑序 —— 主端档的 Insert 排在依赖方之前 <c>await</c> 完，
-    /// 所以此刻主端的键要么已经从库里回来，要么这一轮压根没写它（后者只能拒）。</para>
-    ///
-    /// <para>改动落在<em>实体</em>上而不只是落在参数上：那只实例之后还要被读、被比对、被下一次保存写，
-    /// 留一颗负数在它手里就是留一颗定时炸弹。快照不用跟着改 —— <see cref="PostFlush"/> 会重拍。</para>
-    ///
-    /// <para><b>Update 档也要过一遍</b>：形状是"某只已在库里的行，外键那一格被赋成了主端还没换出去的临时键"
-    /// （用户从 <c>parent.Id</c> 抄的值），那一句 <c>SET [CustomerId] = -1</c> 与插入档一样是写一个库里没有的键。</para></summary>
+    /// <summary>把依赖方手里那些临时外键换成主端此刻的真实键（临时主键回填）。必须跑在语句构建之前：
+    /// 跑在后面就是先把错值发出去了。跑得动靠拓扑序——主端档的 Insert 排在依赖方之前 await 完，
+    /// 此刻主端的键要么已经回来，要么这一轮没写它（后者只能拒）。改动落在实体上而不只是参数上：
+    /// 那只实例之后还要被读、被比对、被下一次保存写，快照不用跟着改（PostFlush 会重拍）。
+    /// Update 档也要过一遍：已在库里的行外键被赋成还没换出去的临时键时，那一句 SET 与插入档一样是写库里没有的键。</summary>
     void ResolveTempKeys(EntityState state)
     {
         if (_fkEdges is null)
             return;
 
-        // 会话里没有临时键 = 这条路径一次都不该付钱（绝大多数保存连一个 Tp 都没发出去过）。
+        // 会话里没有临时键 = 这条路径一次都不该付钱（绝大多数保存连一个临时键都没发出去过）。
         if (!_session.HasPendingTemps)
             return;
 
@@ -917,13 +861,10 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
         }
     }
 
-    /// <summary>把主端的真实键落成依赖方那一列装得下的型。外键列与主键列<em>可以</em>不同型
-    /// （<c>bigint</c> 主键配 <c>int</c> 外键是合法 DDL），而 schema 的 setter 是强转的装箱写入 ——
-    /// 型不对的现场是一次 <c>InvalidCastException</c> 而不是一句话，所以换型在这里做、装不下也在这里说。
-    /// <b>只处理 <c>int</c> 与 <c>long</c> 两型，因为只有这两型的列到得了这里</b>：来路是发号那一档（只认这两型）
-    /// 加探测那一档（<see cref="Signed"/> 也只认这两型），所以一根 <c>short</c> 外键不会走到这句"不替它截断"，
-    /// 它会被当成"不是我发的号"原样放过去（§14 的那一格）。真正触发这句的是 <c>long</c> 主键配 <c>int</c> 外键、
-    /// 而库里那个键已经大过 <c>int.MaxValue</c>。</summary>
+    /// <summary>把主端的真实键落成依赖方那一列装得下的型。外键列与主键列可以不同型
+    /// （bigint 主键配 int 外键是合法 DDL），而 schema 的 setter 是强转的装箱写入——
+    /// 型不对的现场是一次 InvalidCastException 而不是一句话，所以换型在这里做、装不下也在这里说。
+    /// 只处理 int 与 long 两型（来路只有发号与探测两档），short 外键不会被当成"我发的号"走到这句。</summary>
     object AdaptKey(object real, ColumnContract column)
     {
         var value = real is int narrow ? (long) narrow : (long) real;
@@ -955,11 +896,10 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
             $"要么静默丢掉外键值，两种都比报错难查。要么先保存 {target.Name} 让库把键给回来，要么把这一行的外键自己填上。");
     }
 
-    /// <summary>新增整批交给 <see cref="InsertEngine{T}"/>：分块、参数预算、<c>AuditValue</c>、§10.6 校验、
-    /// <c>OUTPUT</c> 回填键那条链路已经被真库用例逐行钉住了（§13.1 的写侧纪律），在跟踪器里再实现一遍
-    /// 只会多出第二份要各自维护的缺陷。<b>回填是这里唯一额外的要求</b>：插完拿不到主键，身份映射就登记不上，
-    /// 于是同一会话第二次保存会把那一行再插一遍；插完拿不到并发列，手里那一列就是空的，
-    /// 第一次保存的 <c>WHERE</c> 就对不上（后一半随 §8.2 的乐观并发一起生效）。</summary>
+    /// <summary>新增整批交给 InsertEngine：分块、参数预算、钩子、契约校验、OUTPUT 回填键那条链路已经钉住了，
+    /// 在跟踪器里再实现一遍只会多出第二份要各自维护的缺陷。回填是这里唯一额外的要求：插完拿不到主键，
+    /// 身份映射就登记不上，同一会话第二次保存会把那一行再插一遍；插完拿不到并发列，手里那一列是空的，
+    /// 第一次保存的 WHERE 就对不上。</summary>
     async Task<IReadOnlyList<SaveChangesOp>> WriteInsertsAsync(List<HookTrace> traces, CancellationToken ct)
     {
         ResolveTempKeys(EntityState.Added);
@@ -980,18 +920,16 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
         var engine = new InsertEngine<T>(_orm, [.. pending.Select(node => (T) node.Entity)]);
 
         // 两档文本要在这里选好：有自增列、或者有库维护的并发列（如 rowversion），就必须走回填那一档，
-        // 否则实体手里的键是 0、手里那一列并发列是空 —— 前者让身份映射登记不上（同一会话第二次保存会把那一行再插一遍），
-        // 后者让下一次保存必假冲突（§8.2）。应用自维护的并发列（如 int Version）不需要回填 —— 实体已经有初始值。
-        // 没有库维护的并发列时 Generated 档与 Keys 档逐字同文，既有样本不动。
-        // 先 Explain 再执行不是多余：Explain 里跑校验（§10.6），它必须发生在第一条语句上线之前，
-        // 而回填那一档的执行口内部也会走到同一个已缓存的计划，不会把 AuditValue 过第二遍。
+        // 否则实体手里的键是 0、并发列是空——前者让身份映射登记不上（同一会话第二次保存会把那一行再插一遍），
+        // 后者让下一次保存必假冲突。应用自维护的并发列（如 int Version）不需要回填——实体已经有初始值。
+        // 先 Explain 再执行不是多余：Explain 里跑契约校验，必须发生在第一条语句上线之前；
+        // 回填档的执行口走同一个已缓存的计划，不会把 AuditValue 过第二遍。
         var backfill = _hasIdentity || _storeFilledTokens.Length > 0;
         var plan = backfill ? engine.ExplainGenerated() : engine.Explain();
         var rows = plan.RowCount;
 
-        // 插入档的回放来自引擎那份计划（取值与两条改写钩子都在里面），而它<em>不在</em>这里的 traces 上：
+        // 插入档的回放来自引擎那份计划（取值与两条改写钩子都在里面），它不在取值段的 traces 上：
         // 不并进来的话，一次 SaveChanges 的报告会说"没人改写过"，而同一次保存里那句 INSERT 确实是被改过的。
-        // 并进的位置就在执行之前 —— Insert 恒为第一档，所以步号与计划里那份逐格相同。
         traces.AddRange(plan.HookReplay);
 
         if (backfill)
@@ -1003,29 +941,18 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
             [.. plan.Chunks[0].Ast.Columns.Select(static column => column.ColumnName)], plan.Chunks[0].Sql.Text)];
     }
 
-    /// <summary>改动：先按<em>脏列掩码</em>分桶（§12.5），再逐桶决定发几条语句 —— 同一种改动有两行以上、
-    /// 且这一型可合，就合成一条
-    /// <c>UPDATE [t0] SET [c] = [t1].[c] FROM [T] AS [t0] INNER JOIN (VALUES …) AS [t1] (键, 改动列) ON 键相等 WHERE 变更守卫</c>；
-    /// 否则一个实体一句，文本与 v0.16~v0.18 逐字相同。
-    ///
-    /// <b>三档不进合并</b>，每一档的理由都不是"麻烦"：
-    /// <list type="bullet">
-    /// <item><em>带并发列的实体</em>：那一句的 <c>WHERE</c> 里有逐行不同的快照值，而 <c>OUTPUT</c> 要把新值
-    /// 按行落回各只实体 —— 一条多行语句的回包与行的对应关系拿不出来（§12.4 第 5 项欠的后一半）。</item>
-    /// <item><em>单行桶</em>：合并没有对象，而多出来的 <c>FROM (VALUES)</c> 形状要为一条语句付两倍的文本复杂度。</item>
-    /// <item><em>守卫覆盖不全的桶</em>：只要有一列在该库不可比（LOB / <c>xml</c>），整个桶退回逐条 ——
-    /// 把那一列从守卫里省掉的后果是「只改了那一列」的行被守卫挡掉，那是丢写，不是少优化。</item>
-    /// </list>
-    ///
-    /// <b>合并那一档的行数口径与逐条不同</b>：守卫把"库里已经是这个值"的行挡在 <c>UPDATE</c> 之外，所以
-    /// <see cref="SaveChangesOp.Rows"/> 在这一档是<em>真变化的行数</em>，而逐条那一档一直是命中数
-    /// （§12.4 第 2 项的账，两档各有一条真库用例钉着）。附带一句不好听但必须说的：合并之后
-    /// <c>Rows &lt; 行数</c> 不再能区分「哪几行没变」与「哪几行已经不在了」——逐条那一句答得了后者
-    /// （<c>WHERE</c> 只有主键），合并这一句答不了。要逐行归因就开单行桶（或者像带并发列那样整型退回逐条）。</summary>
+    /// <summary>改动：先按脏列掩码分桶，再逐桶决定发几条语句——同一种改动有两行以上、且这一型可合，
+    /// 就合成一条 UPDATE … INNER JOIN (VALUES …) … ON 键相等 WHERE 变更守卫 的合并语句；否则一个实体一句。
+    /// 三档不进合并，各有理由：带并发列的实体（WHERE 有逐行不同的快照值，多行语句的回包与行的对应关系拿不出来）、
+    /// 单行桶（合并没有对象，多出来的 FROM (VALUES) 要付两倍的文本复杂度）、守卫覆盖不全的桶
+    /// （只要有一列在该库不可比，整个桶退回逐条——把那一列从守卫里省掉的后果是丢写）。
+    /// 合并那一档的行数口径与逐条不同：守卫把"库里已经是这个值"的行挡在 UPDATE 之外，Rows 是真变化的行数，
+    /// 逐条那一档一直是命中数；合并之后 Rows 少于行数不再能区分「没变」与「已经不在了」，
+    /// 要逐行归因就开单行桶。</summary>
     async Task<IReadOnlyList<SaveChangesOp>> WriteUpdatesAsync(List<HookTrace> traces, CancellationToken ct)
     {
-        // 先换临时键再分桶：桶里的 <c>Values</c> 与合并语句的那一份字面行集都是从实体读出来的现值，
-        // 换晚了就是先把 −1 抄进计划里（§8.2 的 Tp 回填，理由与插入档同一条）。
+        // 先换临时键再分桶：桶里的 Values 与合并语句的那一份字面行集都是从实体读出来的现值，
+        // 换晚了就是先把 −1 抄进计划里（理由与插入档同一条）。
         ResolveTempKeys(EntityState.Modified);
 
         List<Bucket>? buckets = null;
@@ -1033,7 +960,7 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
         var tag = new ExecutionTag("update", [_contract.Table.Name], _cluster);
 
         // 第一遍只判脏与取值，一条语句都不发：合并的前提是"先看清同一种改动在这一批里有几行"，
-        // 而逐行发射看不到后面还有没有同伴 —— v0.16 那份"只分桶、不合并"的形状正是这么来的。
+        // 逐行发射看不到后面还有没有同伴。
         foreach (var node in _order)
         {
             if (node.State != EntityState.Modified)
@@ -1093,17 +1020,11 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
         return operations;
     }
 
-    /// <summary>这一桶能不能合成一条。可不可比是逐列问 provider 的（哪一型在哪家库连等号都不接受，
-    /// 只有库自己知道），带不带并发列是逐类型的结构性事实 —— 后者在这里判而不是在 <see cref="WriteAsync"/>
-    /// 那一格判，因为合并语句压根不回填东西。
-    ///
-    /// <para>最前面那一道是第三种问法：<b>这一家有没有"把另一张表带进写语句"的这种语法</b>。
-    /// 它不在这里问就只能到发射层问，而发射层抛出来的是一条构建期异常 —— 对一个没有 <c>UPDATE … FROM</c>
-    /// 的库（Oracle 血统）来说，那等于 <c>SaveChanges</c> 在"两行同掩码"这一种<em>最常见</em>的形状上红，
-    /// 而不是退化成一句一实体。判据写在 <see cref="ISqlDialect.SupportsJoinedWrites"/> 那一格：
-    /// 它跟着方言走，所以永远不需要有人 catch 一个异常来"试探语法"（§4 明令禁止的那个形状）。</para>
-    ///
-    /// <para>顺序也是断言的一部分：这一道在<em>逐列问守卫之前</em>，所以一个盖不住的列都不会被问到。</para></summary>
+    /// <summary>这一桶能不能合成一条。最前面一道问法：这一家有没有"把另一张表带进写语句"的语法
+    /// （SupportsJoinedWrites）——不在这里问就只能到发射层问，而发射层抛的是构建期异常：
+    /// 对一个没有 UPDATE…FROM 的库，SaveChanges 会在"两行同掩码"这种最常见形状上红，而不是退化成一句一实体。
+    /// 带不带并发列是逐类型的结构性事实（合并语句压根不回填东西）；可不可比逐列问 provider。
+    /// 顺序也是断言的一部分：这一道在逐列问守卫之前，盖不住的列都不会被问到。</summary>
     bool Mergeable(Bucket bucket)
     {
         if (!_orm.Provider.Dialect.SupportsJoinedWrites)
@@ -1122,11 +1043,11 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
     }
 
     /// <summary>一个实体一句。合并没接管的那些桶（单行、带并发列、守卫盖不全）都走这里，
-    /// 所以这一档的文本必须与 v0.18 逐字相同 —— 它是"合并是加法而不是改写"的那条验收线。</summary>
+    /// 文本保持与逐条路径一致的形状——"合并是加法而不是改写"。</summary>
     async Task<SaveChangesOp> WriteSingularAsync(Bucket bucket, List<HookTrace> traces, ExecutionTag tag, CancellationToken ct)
     {
-        // 步号 = 追加时刻的 traces 长度：两个档各自从当前长度起，于是跨桶连续，而不必把 ref 带进异步口
-        // （C# 不允许异步方法有 ref 参数）。
+        // 步号 = 追加时刻的 traces 长度：两个档各自从当前长度起，跨桶连续，
+        // 而不必把 ref 带进异步口（C# 不允许异步方法有 ref 参数）。
         var step = traces.Count;
         var affected = 0;
         string? first = null;
@@ -1136,8 +1057,8 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
             var sets = Sets(row);
 
             // 应用自维护的并发列（如 int Version）：在 SET 里加 Version = Version + 1。
-            // 库维护的（如 rowversion）不加 —— 它们的值由库生成，靠 OUTPUT/RETURNING 回读。
-            // 应用给值的那一族（_appSetsTokens）也不加 —— 它们的新值在实体上，Sets() 已按脏判定带进来了。
+            // 库维护的（如 rowversion）不加——它们的值由库生成，靠 OUTPUT/RETURNING 回读；
+            // 应用给值的那一族也不加——它们的新值在实体上，Sets() 已按脏判定带进来了。
             foreach (var ordinal in _appMaintainedTokens)
             {
                 if (Array.IndexOf(_appSetsTokens, ordinal) >= 0)
@@ -1158,13 +1079,13 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
 
             var rows = await WriteAsync(sql, row.Entity, tag, ct).ConfigureAwait(false);
 
-            // 0 行 + 没有并发列 = 今天的老行为：那一行不在了，行数进报告，不抛（§12.4 第 2 项的账）。
-            // 0 行 + 有并发列 = 说不清是"别人改过"还是"行没了"，所以必须问一次，不能猜（§8.2）。
+            // 0 行 + 没有并发列：那一行不在了，行数进报告，不抛。
+            // 0 行 + 有并发列 = 说不清是"别人改过"还是"行没了"，必须问一次，不能猜。
             if (rows == 0 && _tokens.Length > 0)
                 throw await ConflictAsync(row.Entity, row.Node.Snapshot, row.Key, "update", sql, ct).ConfigureAwait(false);
 
-            // 应用自维护的并发列：写成功后直接在实体上 +1。库维护的已经由 WriteAsync 回读了。
-            // 应用给值的那一族不 +1 —— 实体手里已经是新值（SET 写出去的就是它）。
+            // 应用自维护的并发列：写成功后直接在实体上 +1。库维护的已经由 WriteAsync 回读了；
+            // 应用给值的那一族不 +1——实体手里已经是新值。
             foreach (var ordinal in _appMaintainedTokens)
             {
                 if (Array.IndexOf(_appSetsTokens, ordinal) < 0)
@@ -1175,13 +1096,12 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
             first ??= sql.Text;
         }
 
-        // 语句数就是行数：这一档没有"两行合一条"，所以报告里那两个数相等，这一点与合并档正好相对。
+        // 语句数就是行数：这一档没有"两行合一条"，报告里那两个数相等，与合并档正好相对。
         return Operation(WriteOperation.Update, bucket.Rows.Count, affected, bucket.ColumnNames, first!);
     }
 
-    /// <summary>合并档：一批"键 + 要写的值"作为一个字面行集参与连接（<see cref="SourceRows"/>），
-    /// 于是 N 只实体一条语句。块大小按 §12.3 那一式算，分母是<em>每行参数数</em> = 键列 + 改动列
-    /// （守卫与 <c>ON</c> 引的都是行集那一侧的列，不再多要参数）。</summary>
+    /// <summary>合并档：一批"键 + 要写的值"作为一个字面行集参与连接（SourceRows），N 只实体一条语句。
+    /// 块大小按参数预算那一式算，分母是每行参数数 = 键列 + 改动列（守卫与 ON 引的都是行集那一侧的列）。</summary>
     async Task<SaveChangesOp> WriteMergedAsync(Bucket bucket, List<HookTrace> traces, ExecutionTag tag, CancellationToken ct)
     {
         var step = traces.Count;
@@ -1220,9 +1140,9 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
         return Operation(WriteOperation.Update, statements, affected, bucket.ColumnNames, first!);
     }
 
-    /// <summary>行集那一侧的列清单，<b>顺序即每行参数的顺序</b>：键在前、改动列在后。
-    /// <c>AS [t1] ([Id], [Name])</c> 那一份清单与 <see cref="SideRow"/> 都从这里出，所以两处不可能错开；
-    /// 而它们一旦错开，值就整体串列，那种 UPDATE 每家库都执行得动。</summary>
+    /// <summary>行集那一侧的列清单，顺序即每行参数的顺序：键在前、改动列在后。
+    /// AS [t1] ([Id], [Name]) 那一份清单与 SideRow 都从这里出，两处不可能错开
+    /// ——一旦错开，值就整体串列，那种 UPDATE 每家库都执行得动。</summary>
     ColumnContract[] SideColumns(Bucket bucket)
     {
         var columns = new ColumnContract[_keyOrdinals.Length + bucket.Ordinals.Length];
@@ -1250,7 +1170,7 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
         return cells;
     }
 
-    /// <summary>逐行那句的 <c>SET</c>：值来自实体当前值，一颗参数一格。</summary>
+    /// <summary>逐行那句的 SET：值来自实体当前值，一颗参数一格。</summary>
     List<SetClause> Sets(PendingUpdate row)
     {
         var sets = new List<SetClause>(row.Values.Length);
@@ -1261,8 +1181,8 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
         return sets;
     }
 
-    /// <summary>合并那句的 <c>SET</c>：右侧是行集那一侧的同一列，所以一整批只有一份 <c>SET</c>，
-    /// 逐行的差别全在 <c>VALUES</c> 里。这是合并省下 SQL 文本编译的那一半（另一半是往返次数）。</summary>
+    /// <summary>合并那句的 SET：右侧是行集那一侧的同一列，一整批只有一份 SET，
+    /// 逐行的差别全在 VALUES 里——这是合并省下 SQL 文本编译的那一半（另一半是往返次数）。</summary>
     List<SetClause> SetsOf(Bucket bucket)
     {
         var sets = new List<SetClause>(bucket.Ordinals.Length);
@@ -1277,10 +1197,9 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
         return sets;
     }
 
-    /// <summary>变更守卫：改动列逐列问 provider「库里这一格与行集那一格是不是不同」，再 <c>OR</c> 起来。
-    /// <b>只有改动列进守卫，键列不进</b>：跟踪器不改主键（那是 <see cref="Unwritable"/> 那一档），
-    /// 而把键列也比一遍只会让谓词更长。右倾折是因为 <c>DialectBase</c> 对同种连接词不加括号，
-    /// 于是这一串出来的是一条平铺的 <c>OR</c>。</summary>
+    /// <summary>变更守卫：改动列逐列问 provider「库里这一格与行集那一格是不是不同」，再 OR 起来。
+    /// 只有改动列进守卫，键列不进（跟踪器不改主键，把键列也比一遍只会让谓词更长）。
+    /// 右倾折是因为方言对同种连接词不加括号，这一串出来的是一条平铺的 OR。</summary>
     SqlExpression ChangeGuard(Bucket bucket)
     {
         var guard = _orm.Provider.ChangeGuard;
@@ -1301,9 +1220,8 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
         return where;
     }
 
-    /// <summary>连接条件：主键逐列相等。与 <see cref="KeyPredicate"/> 的区别只在右侧 —— 那里是一颗参数，
-    /// 这里是行集的那一列，而两边的类型由参数绑定那一侧给（所以 <c>varchar</c> 键与 <c>nvarchar</c> 行集
-    /// 的比较仍要看排序规则，§10.4 那笔账在这一句上同样成立）。</summary>
+    /// <summary>连接条件：主键逐列相等。与 KeyPredicate 的区别只在右侧——那里是一颗参数，
+    /// 这里是行集的那一列（varchar 键与 nvarchar 行集的比较仍要看排序规则）。</summary>
     SqlExpression KeyEquality()
     {
         SqlExpression? on = null;
@@ -1329,11 +1247,9 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
         return names;
     }
 
-    /// <summary>删除：一句实体一句按主键的 <c>DELETE</c>。<see cref="SaveChangesOp.Columns"/> 留空 ——
-    /// 那条语句里没有 <c>SET</c>，把主键列填进去会让人以为它能像 UPDATE 那样挑列。
-    /// <b>【v0.38 第十七笔】软删在册时这一句发的本来就是 UPDATE，那一格因此交出的就是 <c>SET</c> 里那几列</b>：
-    /// 留空的话，报告里会出现一句带着 <c>SET</c> 而"点名列"为空的语句，而这一格的口径从来是
-    /// "这条语句自己点名了哪几列"，不是"这条链的名字叫 delete"。</summary>
+    /// <summary>删除：一句实体一句按主键的 DELETE。报告的 Columns 软删在册时交 SET 里点名的列，
+    /// 没在册时交空——语句里没有 SET，把主键列填进去会让人以为它能像 UPDATE 那样挑列；
+    /// 口径是"这条语句自己点名了哪几列"，不是"这条链的名字叫 delete"。</summary>
     async Task<IReadOnlyList<SaveChangesOp>> WriteDeletesAsync(List<HookTrace> traces, CancellationToken ct)
     {
         var statements = 0;
@@ -1341,13 +1257,11 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
         string? first = null;
         var step = traces.Count;
 
-        // 软删（§10.7 约束 3）在这一档同样生效，而摘掉的每一行共用<em>同一颗</em>时间：一次 SaveChanges
-        // 摘三行是"一次删除动作"，各读一次时钟就把一件事记成三个时刻。规则为空时 soft 与 stamp 都是 null，
-        // 下面的发射与这一格落地之前逐字同形（物理删除那条路径不为此多付一次查表）。
+        // 软删在这一档同样生效，摘掉的每一行共用同一颗时间：一次 SaveChanges 摘三行是"一次删除动作"，
+        // 各读一次时钟就把一件事记成三个时刻。规则为空时 soft 与 stamp 都是 null，物理删除路径不多付一次查表。
         var soft = _orm.Behaviors.HasAny ? _orm.Behaviors.RuleFor(typeof(T)) : null;
         var stamp = soft?.Stamp();
-        // 与上面 update 阶段（那次提升写法）同手：tag 只依赖表名与本会话，提到循环外，
-        // 不在每条 DELETE 上新建一颗 ExecutionTag 外加一只一元数组。
+        // tag 只依赖表名与本会话，提到循环外，不在每条 DELETE 上新建一颗 ExecutionTag 外加一只一元数组。
         var deleteTag = new ExecutionTag("delete", [_contract.Table.Name], _cluster);
 
         foreach (var node in _order)
@@ -1363,10 +1277,9 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
 
             object?[] key = [.. _keyOrdinals.Select(ordinal => node.Snapshot[ordinal])];
 
-            // <b>其余写路都过了 <see cref="RequireDefinite"/> 那把尺子，唯独"已跟踪节点标删 → 发删除语句"
-            // 这条路此前只查了"有没有主键列"（<see cref="RequireKey"/>）</b>：快照里躺着 0 / Guid.Empty 的键
-            // 会发出一句 <c>WHERE [Id] = 0</c> —— 命中 0 行、无并发列时连冲突判据都不触发，
-            // 删除意图静默丢失而报告只说「0 行」（§12.2 的静默丢写）。发射前最后一道闸，覆盖所有到达路径。
+            // "已跟踪节点标删 → 发删除语句"这条路只查了"有没有主键列"：快照里躺着 0 / Guid.Empty 的键
+            // 会发出一句 WHERE [Id] = 0——命中 0 行、无并发列时连冲突判据都不触发，删除意图静默丢失而报告只说「0 行」。
+            // 发射前最后一道闸，覆盖所有到达路径。
             if (!IsDefinite(key))
                 throw new QuickSqlException($"{_contract.Table.Name} 的这一行快照里主键没有可定位的值（{Text(key)}），而删除要按主键定位行：" +
                     "一句按 0 / 空键写的 WHERE 只会命中 0 行，报告却照样说「0 行」——删除意图就这么静默丢了。" +
@@ -1378,12 +1291,10 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
 
             var affected = await _orm.Ado.NonQueryAsync(sql, deleteTag, ct).ConfigureAwait(false);
 
-            // 删除的并发谓词同样取快照：意图是「删掉我读到的那一版」，那一版被人改过就不是这一行了。
-            // 这一档不回填任何东西 —— 语句成功就意味着行不在了，<c>deleted</c> 侧没有要留下的值。
-            // 【v0.38 第十七笔补一句】软删在册时那句话改成"那一格写上了值"，而<em>判据一个字没动</em>：
-            // WHERE 仍是主键 + 并发列（软删不改条件），所以 0 行仍然只有"版本不匹配"与"行已经不在了"两种成因，
-            // 没有多出第三种 —— 这一格刻意<em>不</em>往 WHERE 里加"且尚未置位"那一支，加了才需要
-            // "被挡住的行算不算一次并发冲突"那句裁决（归用户，见 §14 的 P1 余项那一格）。
+            // 删除的并发谓词同样取快照：意图是「删掉我读到的那一版」。这一档不回填任何东西——
+            // 语句成功就意味着行不在了。软删在册时 WHERE 仍是主键 + 并发列（软删不改条件），
+            // 0 行仍然只有"版本不匹配"与"行已经不在了"两种成因；刻意不往 WHERE 加"且尚未置位"那一支，
+            // 加了才需要"被挡住的行算不算一次并发冲突"那句裁决。
             if (affected == 0 && _tokens.Length > 0)
                 throw await ConflictAsync((T) node.Entity, node.Snapshot, key, "delete", sql, ct).ConfigureAwait(false);
 
@@ -1392,24 +1303,23 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
             first ??= sql.Text;
         }
 
-        // 软删在册时那一格交的是 SET 里点名的列，没在册时交空 —— 判据见方法注释那句【v0.38 第十七笔】。
-        // 按批算而不是按行算：一次 SaveChanges 的删除档只产一份报告，而列名与"几句、几行"同一层。
+        // 软删在册时那一格交的是 SET 里点名的列，没在册时交空（判据见方法注释）。
+        // 按批算而不是按行算：一次 SaveChanges 的删除档只产一份报告，列名与"几句、几行"同一层。
         return statements == 0
             ? []
             : [Operation(WriteOperation.Delete, statements, rows, soft is null ? [] : soft.SetColumns(_contract), first!)];
     }
 
-    /// <summary>整批写成功之后的结算（三档共用一次，所以它拿到的是「全部成功」这个前提）。
-    /// 删除的摘出会话；新增的把库刚给的主键登记进身份映射；其余全部重拍快照并转
-    /// <see cref="EntityState.Unmodified"/>。</summary>
+    /// <summary>整批写成功之后的结算（三档共用一次，拿到的是「全部成功」这个前提）。
+    /// 删除的摘出会话；新增的把库刚给的主键登记进身份映射；其余全部重拍快照并转 Unmodified。</summary>
     public void PostFlush()
     {
         foreach (var node in _order.ToArray())
         {
             var entity = (T) node.Entity;
 
-            // 没欠语句的实例不重拍快照：结算的代价不该随会话里的实例总数涨（一次写两行不该读两万遍字段），
-            // 而未改动的 Unmodified 节点的快照本来就是当前值。
+            // 没欠语句的实例不重拍快照：结算的代价不该随会话里的实例总数涨
+            // （一次写两行不该读两万遍字段），未改动的 Unmodified 节点的快照本来就是当前值。
             if (node.State == EntityState.Unmodified)
                 continue;
 
@@ -1449,21 +1359,19 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
         }
 
         // 临时键的账到这一句就清完：三档全部发完，依赖方手里那些颗都已经被换掉
-        // （整批抛在半路时这里根本走不到，那是 §14 里"回滚后同一会话继续写"那一格的题）。
-        // 号本身不回退（<c>_tempCursor</c> 单调往负走），所以下一轮不会重放一个旧临时值。
+        // （整批抛在半路时这里走不到）。号本身不回退（_tempCursor 单调往负走），下一轮不会重放一个旧临时值。
         _temps?.Clear();
 
         _mayHaveWrites = false;
     }
 
-    /// <summary>一个报告桶，也就是 §12.5 的合并单位：<em>列掩码相同</em>的那几只实体。
-    /// 之所以拿得出掩码当键而不出错：同一个桶里每只实体的改动列集合逐字相同，只是行的取值不同 ——
-    /// 合并语句的那一份 <c>SET</c> 与那一份列清单正是靠这一条才只有一份。
-    /// <see cref="Rows"/> 是<em>待写</em>的行，不是回来的行数（那个数在报告里，见 <see cref="SaveChangesOp.Rows"/>）。</summary>
+    /// <summary>一个报告桶，也就是合并单位：列掩码相同的那几只实体。拿得出掩码当键而不出错：
+    /// 同一个桶里每只实体的改动列集合逐字相同，只是行的取值不同——合并语句的那一份 SET 与列清单因此只有一份。
+    /// Rows 是待写的行，不是回来的行数（那个数在报告里）。</summary>
     sealed record Bucket(int[] Ordinals, IReadOnlyList<string> ColumnNames, List<PendingUpdate> Rows);
 
-    /// <summary>一只待写的行。<see cref="Values"/> 与 <see cref="PendingUpdate.Ordinals"/> 同序，
-    /// 所以两份都在合并档共用、逐条档各取所需，而<em>不需要</em>在合并之前把值包成参数再拆回来。</summary>
+    /// <summary>一只待写的行。Values 与 Ordinals 同序，两份在合并档共用、逐条档各取所需，
+    /// 不需要在合并之前把值包成参数再拆回来。</summary>
     sealed record PendingUpdate(Node Node, T Entity, int[] Ordinals, object?[] Key, object?[] Values);
 
     SaveChangesOp Operation(WriteOperation operation, int statements, int rows, IReadOnlyList<string> columns, string sql)
@@ -1479,21 +1387,20 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
         return Bind(new DialectSql(writer.ToSqlString(), writer.Parameters), "update", traces, ref step);
     }
 
-    /// <summary>摘行那一句的发射。<c>soft</c> 非 null 时发的是软删改写后的那一棵 UPDATE（§10.7 约束 3，
-    /// 分岔在 <see cref="StatementEmitter.EmitDelete"/> 里，与链式 <c>Delete</c> 和批量 <c>DeleteRange</c> 共用一份），
-    /// 文本仍走下面那两个钩子，所以 <c>AuditDiff</c> 与日志看到的就是真正发出去的那一句 —— 这一档正是约束 3
-    /// 那句「不会出现日志里写着 DELETE、库里其实是 UPDATE」的现场。</summary>
+    /// <summary>摘行那一句的发射。soft 非 null 时发的是软删改写后的那一棵 UPDATE（分岔在 StatementEmitter.EmitDelete，
+    /// 与链式 Delete 和批量 DeleteRange 共用一份），文本仍走改写钩子，日志看到的就是真正发出去的那一句——
+    /// 不会出现"日志里写着 DELETE、库里其实是 UPDATE"。</summary>
     DialectSql Emit(DeleteStatement ast, UpdateStatement? soft, int parameters, List<HookTrace> traces, ref int step)
         => Bind(StatementEmitter.EmitDelete(_orm.Provider.Dialect, ast, soft, _identifierChars, parameters), "delete", traces, ref step);
 
-    /// <summary>两个钩子的顺序即语义：<c>CudBuilding</c> 改整句文本（所以它必须在参数级改写之前，
-    /// 否则改写者新加的参数没人过钩子），<c>ParameterBinding</c> 改值。跟踪器这一份与三条链同一份实现。</summary>
+    /// <summary>两个钩子的顺序即语义：CudBuilding 改整句文本（必须在参数级改写之前，
+    /// 否则改写者新加的参数没人过钩子），ParameterBinding 改值。跟踪器这一份与三条链同一份实现。</summary>
     DialectSql Bind(DialectSql sql, string operationKind, List<HookTrace> traces, ref int step)
         => StatementEmitter.ApplyBinding(_orm, StatementEmitter.ApplyCud(_orm, sql, operationKind, traces, ref step), traces, ref step);
 
     // ── 内部 ──────────────────────────────────────────────────────────
 
-    /// <summary>登记。<paramref name="key"/> 为 null 表示「不进身份映射」，而它仍然进引用表与跟踪序 ——
+    /// <summary>登记。key 为 null 表示「不进身份映射」，而它仍然进引用表与跟踪序——
     /// 一个键还没填的实例依旧是会话里的一个实例，只是查不到它。</summary>
     Node Register(object entity, EntityState state, IdentityKey? key, T typed)
     {
@@ -1514,11 +1421,10 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
         return node;
     }
 
-    /// <summary>把这一张实体手里那几串集合位<em>此刻的成员</em>记成基线 —— 摘行那一档（裁决③）唯一的判据：
-    /// <c>collection.Remove(x)</c> 既不发事件也不留痕迹，会话要说出"这一只刚从那一串里被摘掉"，
-    /// 就只能拿自己上一次看见的那一串跟现在这一串比。登记入口只有一处（<see cref="Register"/>），
-    /// 所以 <c>Add</c> / <c>Attach</c> / 物化各记一次，<c>Load</c> 之后由 <see cref="RememberCollections(T)"/> 补记。
-    /// <b>没有集合边的类型上这一步一次都不跑</b>（<c>node.Baselines</c> 在那一档是 null）。</summary>
+    /// <summary>把这一张实体手里那几串集合位此刻的成员记成基线——摘行那一档唯一的判据：
+    /// collection.Remove(x) 既不发事件也不留痕迹，会话只能拿上一次看见的那一串跟现在这一串比。
+    /// 登记入口只有一处（Register），Add / Attach / 物化各记一次，Load 之后由 RememberCollections(T) 补记；
+    /// 没有集合边的类型上这一步一次都不跑（node.Baselines 是 null）。</summary>
     void RememberCollections(Node node, T entity)
     {
         if (node.Baselines is not { } baselines)
@@ -1531,8 +1437,8 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
                 baselines[slot] = CascadeWalker.LiveMembers(edges[slot], entity);
     }
 
-    /// <summary><c>DbSet.Load</c> 缝完一根集合导航之后重新记基线：从这一刻起"这一串里有谁"是一句<em>捞过</em>的声明，
-    /// 之后从里面摘掉一只就是要删那一行。不在会话里的实例不记 —— 会话对它没有账，也就没有要还的摘行。</summary>
+    /// <summary>DbSet.Load 缝完一根集合导航之后重新记基线：从这一刻起"这一串里有谁"是一句捞过的声明，
+    /// 之后从里面摘掉一只就是要删那一行。不在会话里的实例不记——会话对它没有账，也就没有要还的摘行。</summary>
     internal void RememberCollections(T parent)
     {
         if (_byRef.TryGetValue(parent, out var node))
@@ -1548,8 +1454,8 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
         _byRef.Remove(node.Entity);
         _order.Remove(node);
 
-        // 状态归到 Detached 而不是留在摘掉前那一格：调用方手里可能还有一只 <see cref="EntityEntry"/>
-        // （它只是视图，不持状态），留着 Modified 就成了「一个已经不在会话里的实例还欠着一条 UPDATE」。
+        // 状态归到 Detached 而不是留在摘掉前那一格：调用方手里可能还有一只 EntityEntry（它只是视图不持状态），
+        // 留着 Modified 就成了「一个已经不在会话里的实例还欠着一条 UPDATE」。
         node.State = EntityState.Detached;
     }
 
@@ -1567,9 +1473,8 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
         Array.Clear(node.Dirty);
     }
 
-    /// <summary>整行强制脏。<b>只覆盖可写列</b>：主键与自增列一旦进 <see cref="Node.Overrides"/>，
-    /// 发射前就会撞 <see cref="Unwritable"/>，于是「把 State 设成 Modified」这一句最常见的写法变成必抛 ——
-    /// 那不是「全写」，那是没法写。</summary>
+    /// <summary>整行强制脏。只覆盖可写列：主键与自增列一旦进 Node.Overrides，发射前就会撞 Unwritable，
+    /// 「把 State 设成 Modified」这一句最常见的写法变成必抛——那不是「全写」，那是没法写。</summary>
     void MarkAllWritable(Node node)
     {
         for (var ordinal = 0; ordinal < _columns.Length; ordinal++)
@@ -1598,8 +1503,8 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
 
         if (IsDefinite(values))
         {
-            // 临时主键是「有值，但那不是库里的键」，所以它躲得过上面那一判而躲不过这一句：
-            // 按 -1 去定位一句 UPDATE/DELETE 命中 0 行，而报告只会说"0 行" —— 那是静默丢写（§12.2）。
+            // 临时主键是「有值，但那不是库里的键」，躲得过上面那一判而躲不过这一句：
+            // 按 -1 去定位一句 UPDATE/DELETE 命中 0 行，报告只会说"0 行"——静默丢写。
             // 判据用 ProbeTemp 而不是"看着像负数"：只有本档真发出去过的那一颗才算临时键，
             // 调用方自己填的负数键（库里真有这么一行）不该被这一句挡下来。
             if (values.Length == 1 && ProbeTemp(values[0], out _) != TempProbe.NotTemp)
@@ -1633,11 +1538,10 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
         return true;
     }
 
-    /// <summary>「这个值其实是<em>没填</em>」：整数 0 与 <see cref="Guid.Empty"/>。
-    /// 判得出来的依据是自增列的种子不是 0（<c>IDENTITY(1,1)</c> 与 <c>SEQUENCE START WITH</c> 的默认都不是），
-    /// 而 <c>Guid.Empty</c> 不会由 <c>NEWID()</c> 生成。空串<em>不</em>算未填：字符串列没有「零值」这一说，
-    /// <c>""</c> 只能是有人写的。<b>枚举主键会被判成已填</b>（装箱后匹配不到这些 case），
-    /// 而 0 号枚举值确实是合法键 —— 这一侧偏保守是对的方向。</summary>
+    /// <summary>「这个值其实是没填」：整数 0 与 Guid.Empty。判得出来的依据是自增列的种子不是 0
+    /// （IDENTITY(1,1) 与 SEQUENCE START WITH 的默认都不是），Guid.Empty 不会由 NEWID() 生成。
+    /// 空串不算未填：字符串列没有「零值」这一说，"" 只能是有人写的。枚举主键会被判成已填
+    /// （装箱后匹配不到这些 case），而 0 号枚举值确实是合法键——这一侧偏保守是对的方向。</summary>
     static bool Unset(object value) => value switch
     {
         int i => i == 0,
@@ -1651,12 +1555,9 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
     };
 
     /// <summary>CLR 型是不是有符号整型之一（含 nullable 包装）。应用自维护的并发列只认这四型，
-    /// 因为只有它们在回填那一步有 <c>+1</c> 语义。<c>uint</c>/<c>ulong</c> 特意不算：旧判据把它俩也算进
-    /// "应用自维护"，与 <c>IncrementTokenValue</c> 的支持面（注释明写 <c>int/long/short/byte</c>）对不上，
-    /// 于是那类实体会安静通过启动期、到第一次 <c>SaveChanges</c> 的回填步才炸。收窄之后它们落
-    /// <c>storeFilled</c> 那一侧、走 OUTPUT/RETURNING 回读 —— 值库不改，回读交回的本来就是原值，
-    /// "只比较不书写"的并发语义原样成立，分类判据与支持面在启动期就对齐。
-    /// <c>datetime2</c>、<c>byte[]</c>（rowversion）等并发列不属于这一档。</summary>
+    /// 因为只有它们在回填那一步有 +1 语义。uint/ulong 特意不算：与 IncrementTokenValue 的支持面对不上，
+    /// 那类实体会安静通过启动期、到第一次 SaveChanges 的回填步才炸；收窄之后它们走回读——
+    /// 值库不改，"只比较不书写"的并发语义原样成立。datetime2、byte[]（rowversion）等并发列不属于这一档。</summary>
     static bool IsIntegerClrType(Type type)
     {
         var underlying = Nullable.GetUnderlyingType(type) ?? type;
@@ -1687,10 +1588,8 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
     static string Text(object?[] values)
         => string.Join("、", values.Select(static value => value?.ToString() ?? "NULL"));
 
-    /// <summary>主键合取式。<b>逐列 <c>=</c> 再 <c>AND</c>，不用 <c>(a, b) IN ((…))</c></b>：
-    /// 行值构造器的支持面在国产库里参差（PG 血统可用而达梦不稳），而一句单行的
-    /// <c>WHERE a = @p AND b = @q</c> 没有任何一家需要特殊照顾。跟踪器发的本来就是逐行语句，
-    /// 这里的形状只服务「哪一家都执行得动」这一条。</summary>
+    /// <summary>主键合取式。逐列 = 再 AND，不用 (a, b) IN ((…))：行值构造器的支持面在国产库里参差
+    /// （PG 血统可用而达梦不稳），一句单行的 WHERE a = @p AND b = @q 没有任何一家需要特殊照顾。</summary>
     SqlExpression KeyPredicate(object?[] values)
     {
         SqlExpression? where = null;
@@ -1706,11 +1605,9 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
         return where!;
     }
 
-    /// <summary>标识部分 ∧ 并发列。<b>并发谓词是并进 AST 的 <c>WHERE</c>、在发射之前</b>，不是往文本尾巴上接一句
-    /// <c>AND</c>：<c>UPDATE ... OUTPUT ... FROM ... WHERE</c> 与 <c>UPDATE ... SET ... WHERE ... RETURNING</c>
-    /// 两家的收尾位置不一样（T-SQL 的 <c>OUTPUT</c> 在 <c>FROM</c> 之前，PG 系的 <c>RETURNING</c> 在整句之后），
-    /// 文本级追加必在其中一家写出语法错，而且参数编号会跟着乱。旧注释里那句「落地位置在 CudBuilding 之后」
-    /// 说的就是这个尾巴，它不对 —— 顺序反过来：<c>AST → 文本 → CudBuilding → ParameterBinding</c>（§10.1）。</summary>
+    /// <summary>标识部分 ∧ 并发列。并发谓词是并进 AST 的 WHERE、在发射之前，不是往文本尾巴上接一句 AND：
+    /// UPDATE…OUTPUT…WHERE 与 UPDATE…SET…WHERE…RETURNING 两家的收尾位置不一样（T-SQL 的 OUTPUT 在 FROM 之前，
+    /// PG 系的 RETURNING 在整句之后），文本级追加必在其中一家写出语法错，参数编号也会跟着乱。</summary>
     SqlExpression WhereWithTokens(object?[] key, object?[] snapshot)
     {
         var tokens = ConcurrencyPredicate(snapshot);
@@ -1718,8 +1615,8 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
         return tokens is null ? KeyPredicate(key) : new SqlBinaryExpression(BinaryOperator.And, KeyPredicate(key), tokens);
     }
 
-    /// <summary>并发列的合取式，值取<em>快照</em>而不是实体当前值：这一句回答的是「我读到的那一版还在不在」，
-    /// 拿当前值去比就是拿「我想写成的样子」当「我以为库里的样子」，那样的 <c>WHERE</c> 永远命中 0 行。</summary>
+    /// <summary>并发列的合取式，值取快照而不是实体当前值：这一句回答的是「我读到的那一版还在不在」，
+    /// 拿当前值去比就是拿「我想写成的样子」当「我以为库里的样子」，那样的 WHERE 永远命中 0 行。</summary>
     SqlExpression? ConcurrencyPredicate(object?[] snapshot)
     {
         SqlExpression? and = null;
@@ -1730,9 +1627,8 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
             var value = snapshot[ordinal];
             var target = new ColumnExpression(_table, column);
 
-            // 可空的并发列：库里那一格当时是 NULL 就只能写 IS NULL —— [列] = @p 在哪家都是 UNKNOWN，
-            // 于是每一次保存都成假冲突，而异常会说"别人改过"。值的比较形状归 provider（§4），
-            // 因为只有它知道 rowversion 该按什么比。
+            // 可空的并发列：库里那一格当时是 NULL 就只能写 IS NULL——[列] = @p 在哪家都是 UNKNOWN，
+            // 每一次保存都成假冲突。值的比较形状归 provider，因为只有它知道 rowversion 该按什么比。
             var match = value is null
                 ? new SqlUnaryExpression(UnaryOperator.IsNull, target)
                 : _orm.Provider.Concurrency.BuildPredicate(target, column, value);
@@ -1743,11 +1639,9 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
         return and;
     }
 
-    /// <summary>一句 UPDATE 的执行出口。<b>有库维护并发列时它同时是回填口</b>：同一条语句既写出去又把
-    /// <c>OUTPUT</c>/<c>RETURNING</c> 回读的新值落进实体。应用自维护的并发列不走这条路 —— 它们在 SET 里
-    /// <c>Version = Version + 1</c>，写完后直接在实体上 +1（<see cref="IncrementTokenValue"/>），不需要回读。
-    /// 返回值按<em>回包行数</em>算（<see cref="AdoExecutor.WriteWithResultAsync"/> 的口径），对一句
-    /// <c>WHERE 主键 ∧ 并发列</c> 的单行 UPDATE 它就是受影响行数，0 就是 <see cref="ConflictAsync"/>。</summary>
+    /// <summary>一句 UPDATE 的执行出口。有库维护并发列时它同时是回填口：同一条语句既写出去又把
+    /// OUTPUT/RETURNING 回读的新值落进实体；应用自维护的并发列不走这条路（写完后直接在实体上 +1，不需要回读）。
+    /// 返回值按回包行数算，对一句 WHERE 主键 ∧ 并发列 的单行 UPDATE 它就是受影响行数，0 就是冲突。</summary>
     async Task<int> WriteAsync(DialectSql sql, T entity, ExecutionTag tag, CancellationToken ct)
     {
         if (_storeFilledTokens.Length == 0)
@@ -1760,8 +1654,8 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
         }, ct).ConfigureAwait(false);
     }
 
-    /// <summary>应用自维护的并发列在写成功后直接 +1：库已经把 <c>Version = Version + 1</c> 写进去了，
-    /// 实体手里那一格还停在旧值上，下一次保存的 <c>WHERE</c> 就会拿旧值去比 —— 假冲突。
+    /// <summary>应用自维护的并发列在写成功后直接 +1：库已经把 Version = Version + 1 写进去了，
+    /// 实体手里那一格还停在旧值上，下一次保存的 WHERE 会拿旧值去比——假冲突。
     /// 这里读当前值、加一、写回去，与库那一侧的改写保持同步。</summary>
     void IncrementTokenValue(T entity, int ordinal)
     {
@@ -1780,13 +1674,12 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
         _schema.SetValue(entity, ordinal, next);
     }
 
-    /// <summary>那一格的值。<c>GetValue</c> 对 NULL 给的是 <see cref="DBNull"/>，直接塞进实体属性就是一次
-    /// 类型不匹配，所以这里折成 <c>null</c> —— 可空的并发列（<c>DateTimeOffset?</c> 那一派）读回空值是常态。</summary>
+    /// <summary>那一格的值。GetValue 对 NULL 给的是 DBNull，直接塞进实体属性就是一次类型不匹配，
+    /// 所以这里折成 null——可空的并发列（DateTimeOffset? 那一派）读回空值是常态。</summary>
     static object? Value(DbDataReader reader, int ordinal) => reader.IsDBNull(ordinal) ? null : reader.GetValue(ordinal);
 
-    /// <summary>0 行那一条的成因分查：<b>"别人改过"与"这一行没了"在行数上一模一样</b>，而处置相反
-    /// （前者要合并，后者通常丢弃意图），所以抛出前按主键补读一次。代价只付在冲突那一条上 ——
-    /// 判据写在 <c>affected == 0</c> 后面就是为了这件事不影响正常保存。</summary>
+    /// <summary>0 行那一条的成因分查："别人改过"与"这一行没了"在行数上一模一样，而处置相反
+    /// （前者要合并，后者通常丢弃意图），所以抛出前按主键补读一次。代价只付在冲突那一条上。</summary>
     async Task<DbUpdateConcurrencyException> ConflictAsync(T entity, object?[] snapshot, object?[] key, string operation, DialectSql sql, CancellationToken ct)
     {
         var current = new Dictionary<string, object?>(_tokens.Length);
@@ -1825,10 +1718,9 @@ sealed class EntityTracker<T> : ITypeTracker where T : class
         return dictionary;
     }
 
-    /// <summary>按主键补读那几列。<b>只读并发列，不整行物化</b>：整行刷新是 <c>Refresh</c> 那一格的活
-    /// （§14 的 P1 余项，没接线），这里只要回答"这一行还在不在、那几列现在是什么"。
-    /// 这一条语句<em>不过</em> <c>CudBuilding</c> 也不过多出来的参数钩子：它的 <c>WHERE</c> 必须与刚才那句的
-    /// 标识部分逐字同一把尺子，被改写钩子换成别的东西就答错了题，而答错的题比不答更糟。</summary>
+    /// <summary>按主键补读那几列。只读并发列，不整行物化：整行刷新是 Refresh 那一格的活（未接线），
+    /// 这里只要回答"这一行还在不在、那几列现在是什么"。这一条语句不过 CudBuilding 也不过参数钩子：
+    /// 它的 WHERE 必须与刚才那句的标识部分逐字同一把尺子，被改写钩子换成别的东西就答错了题。</summary>
     async Task<object?[]?> ReadTokensAsync(object?[] key, CancellationToken ct)
     {
         var projections = new Projection[_tokens.Length];

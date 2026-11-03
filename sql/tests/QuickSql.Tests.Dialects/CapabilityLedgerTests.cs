@@ -1,4 +1,4 @@
-﻿using QuickSql.Metadata;
+using QuickSql.Metadata;
 using QuickSql.Providers;
 using QuickSql.TestInfra;
 using Xunit;
@@ -213,7 +213,7 @@ public sealed class CapabilityLedgerTests
 
     static readonly Ledger[] Ledgers =
     [
-        new("kingbase", static () => Kingbase.Provider(SqlServer.NoDriverFactory.Instance), 16, 7, 0,
+        new("kingbase", static () => Kingbase.Provider(SqlServer.NoDriverFactory.Instance), 15, 7, 0,
         [
             new(DbCapabilities.Paging_LimitOffset, Provenance.OfflineText, "golden/kingbase/paging-order-skip-take.sql"),
             new(DbCapabilities.Returning, Provenance.OfflineText, "golden/kingbase/insert-with-keys.sql"),
@@ -232,7 +232,6 @@ public sealed class CapabilityLedgerTests
             new(DbCapabilities.WindowFunctions, Provenance.VendorDoc, "消费方=QuickFx.RowNumber（行号）：文本由共用层 DialectBase.EmitRowNumber 出、十八家零登记模板，而本家这一格还没有活库对账"),
             new(DbCapabilities.Count_Over_Window, Provenance.VendorDoc, "无消费方：CountMethod.CountOverWindow 那一档今天在 QueryEngine 里还是那句未接入的抛（窗口函数那一格有行号了，这一格没有）"),
             new(DbCapabilities.Boolean_Type, Provenance.VendorDoc, "类型表 bool→BOOLEAN，但样例模型里没有布尔列，故无样本"),
-            new(DbCapabilities.Json_Type, Provenance.VendorDoc, "读侧类型表认 json/jsonb（→string），写侧没有 CLR→JSON 的映射，故无样本"),
             new(DbCapabilities.TempTable, Provenance.VendorDoc, "无消费方：Tp 临时主键走的是真实表而不是临时表（§8.2）"),
 
             // 第 15 位是本笔挂上血统基类的 Bulk_Copy，它与上面七颗同档而<em>异因</em>：那七颗是"文档说有而代码没接"，
@@ -263,7 +262,7 @@ public sealed class CapabilityLedgerTests
         // 本家比 tidb 那本多一颗<em>点名过的</em>【推断】前件：血统发的 IDENTITY 那一形在 PG 9.2 内核上
         // 可能整个不认（PostgreSqlCodeFirst 类注释自陈），所以 DDL 段那三位的 OfflineText 在本家读作
         // "若这一家认得血统今天发的形状则文本同形"——真库到场第一问记 §14 与本家类注释。
-        new("opengauss", static () => OpenGauss.Provider(SqlServer.NoDriverFactory.Instance), 16, 7, 0,
+        new("opengauss", static () => OpenGauss.Provider(SqlServer.NoDriverFactory.Instance), 15, 7, 0,
         [
             new(DbCapabilities.Paging_LimitOffset, Provenance.OfflineText, "OpenGaussDialectTests 那条 LIMIT/OFFSET 尾巴与只写 OFFSET 不补哨兵、与金仓家逐字相等的断言（同形交对拍，故无基线）"),
             new(DbCapabilities.Returning, Provenance.OfflineText, "OpenGaussDialectTests 键回读那条句尾 RETURNING 与金仓家逐字相等的断言（与 tidb/oceanbase 的\"语句后另发一句\"正对面）"),
@@ -280,7 +279,6 @@ public sealed class CapabilityLedgerTests
             new(DbCapabilities.WindowFunctions, Provenance.VendorDoc, "消费方=QuickFx.RowNumber（行号）：文本由共用层 DialectBase.EmitRowNumber 出、十八家零登记模板，而本家这一格还没有活库对账"),
             new(DbCapabilities.Count_Over_Window, Provenance.VendorDoc, "无消费方：CountMethod.CountOverWindow 那一档今天在 QueryEngine 里还是那句未接入的抛（窗口函数那一格有行号了，这一格没有）"),
             new(DbCapabilities.Boolean_Type, Provenance.VendorDoc, "类型表 bool→BOOLEAN，谓词侧 IS TRUE 有对拍见证但那是文本档，类型列本体无样本"),
-            new(DbCapabilities.Json_Type, Provenance.VendorDoc, "读侧类型表认 json/jsonb（→string），写侧没有 CLR→JSON 的映射，故无样本"),
             new(DbCapabilities.TempTable, Provenance.VendorDoc, "无消费方：Tp 临时主键走的是真实表而不是临时表（§8.2）"),
 
             // 第 15 位是本笔挂上血统基类的 Bulk_Copy，与上面七颗同档而异因（那七颗"文档说有而代码没接"，本颗
@@ -306,7 +304,7 @@ public sealed class CapabilityLedgerTests
         // GaussDB 自己分发的托管驱动连名字都没有入账读数，DDL 段那三位的 OfflineText 在本册读作
         // "若这一家认得血统今天发的形状则文本同形"，而"认不认"那一问前面还压着"这台库与 openGauss
         // 是不是同一套文本假设"——两问都记 §14 与本家类注释。
-        new("gaussdb", static () => GaussDb.Provider(SqlServer.NoDriverFactory.Instance), 16, 7, 0,
+        new("gaussdb", static () => GaussDb.Provider(SqlServer.NoDriverFactory.Instance), 15, 7, 0,
         [
             new(DbCapabilities.Paging_LimitOffset, Provenance.OfflineText, "GaussDbDialectTests 那条 LIMIT/OFFSET 尾巴与只写 OFFSET 不补哨兵、与金仓家逐字相等的断言（同形交对拍，故无基线）"),
             new(DbCapabilities.Returning, Provenance.OfflineText, "GaussDbDialectTests 键回读那条句尾 RETURNING 与金仓家逐字相等的断言（两颗分叉叶互读的成功侧另有一格）"),
@@ -323,7 +321,6 @@ public sealed class CapabilityLedgerTests
             new(DbCapabilities.WindowFunctions, Provenance.VendorDoc, "消费方=QuickFx.RowNumber（行号）：文本由共用层 DialectBase.EmitRowNumber 出、十八家零登记模板，而本家这一格还没有活库对账"),
             new(DbCapabilities.Count_Over_Window, Provenance.VendorDoc, "无消费方：CountMethod.CountOverWindow 那一档今天在 QueryEngine 里还是那句未接入的抛（窗口函数那一格有行号了，这一格没有）"),
             new(DbCapabilities.Boolean_Type, Provenance.VendorDoc, "类型表 bool→BOOLEAN，谓词侧 IS TRUE 有对拍见证但那是文本档，类型列本体无样本"),
-            new(DbCapabilities.Json_Type, Provenance.VendorDoc, "读侧类型表认 json/jsonb（→string），写侧没有 CLR→JSON 的映射，故无样本"),
             new(DbCapabilities.TempTable, Provenance.VendorDoc, "无消费方：Tp 临时主键走的是真实表而不是临时表（§8.2）"),
 
             // 第 15 位是本笔挂上血统基类的 Bulk_Copy，与上面七颗同档而异因（那七颗"文档说有而代码没接"，本颗
@@ -345,7 +342,7 @@ public sealed class CapabilityLedgerTests
         // 形状则文本同形"，而"认不认"连行级前件都没有，真实例第一问是"兼容的是哪一代 PG"（§14 行 2044
         // 本笔换主语处）。七颗 OfflineText 全部落在 HighgoDialectTests 的逐字相等断言上，其中两两互读
         // 补满格让血统四叶的 C(4,2)=6 条边至此每条至少一颗见证。
-        new("highgo", static () => Highgo.Provider(SqlServer.NoDriverFactory.Instance), 16, 7, 0,
+        new("highgo", static () => Highgo.Provider(SqlServer.NoDriverFactory.Instance), 15, 7, 0,
         [
             new(DbCapabilities.Paging_LimitOffset, Provenance.OfflineText, "HighgoDialectTests 那条 LIMIT/OFFSET 尾巴与只写 OFFSET 不补哨兵、与金仓家逐字相等的断言（同形交对拍，故无基线）"),
             new(DbCapabilities.Returning, Provenance.OfflineText, "HighgoDialectTests 键回读那条句尾 RETURNING 与金仓家逐字相等的断言（血统两两互读补满的六条边各含此形）"),
@@ -362,7 +359,6 @@ public sealed class CapabilityLedgerTests
             new(DbCapabilities.WindowFunctions, Provenance.VendorDoc, "消费方=QuickFx.RowNumber（行号）：文本由共用层 DialectBase.EmitRowNumber 出、十八家零登记模板，而本家这一格还没有活库对账"),
             new(DbCapabilities.Count_Over_Window, Provenance.VendorDoc, "无消费方：CountMethod.CountOverWindow 那一档今天在 QueryEngine 里还是那句未接入的抛（窗口函数那一格有行号了，这一格没有）"),
             new(DbCapabilities.Boolean_Type, Provenance.VendorDoc, "类型表 bool→BOOLEAN，谓词侧 IS TRUE 有对拍见证但那是文本档，类型列本体无样本"),
-            new(DbCapabilities.Json_Type, Provenance.VendorDoc, "读侧类型表认 json/jsonb（→string），写侧没有 CLR→JSON 的映射，故无样本"),
             new(DbCapabilities.TempTable, Provenance.VendorDoc, "无消费方：Tp 临时主键走的是真实表而不是临时表（§8.2）"),
 
             // 第 15 位是本笔挂上血统基类的 Bulk_Copy，与上面七颗同档而异因（那七颗"文档说有而代码没接"，本颗
@@ -384,7 +380,7 @@ public sealed class CapabilityLedgerTests
         // "与 openGauss 高度相似"，所以那一问要两跳才落到本家头上（本行→邻家行→内核代数）。同一句
         // "若这一家认得血统今天发的形状则文本同形"，第一次是替邻家问的。七颗 OfflineText 全部落在
         // Gbase8cDialectTests 的逐字相等断言上，其中两两互读那一格把血统五叶的 C(5,2)=10 条边补满（一册四条）。
-        new("gbase8c", static () => Gbase8c.Provider(SqlServer.NoDriverFactory.Instance), 16, 7, 0,
+        new("gbase8c", static () => Gbase8c.Provider(SqlServer.NoDriverFactory.Instance), 15, 7, 0,
         [
             new(DbCapabilities.Paging_LimitOffset, Provenance.OfflineText, "Gbase8cDialectTests 那条 LIMIT/OFFSET 尾巴与只写 OFFSET 不补哨兵、与金仓家逐字相等的断言（同形交对拍，故无基线）"),
             new(DbCapabilities.Returning, Provenance.OfflineText, "Gbase8cDialectTests 键回读那条句尾 RETURNING 与金仓家逐字相等的断言（血统两两互读补满的十条边各含此形）"),
@@ -401,7 +397,6 @@ public sealed class CapabilityLedgerTests
             new(DbCapabilities.WindowFunctions, Provenance.VendorDoc, "消费方=QuickFx.RowNumber（行号）：文本由共用层 DialectBase.EmitRowNumber 出、十八家零登记模板，而本家这一格还没有活库对账"),
             new(DbCapabilities.Count_Over_Window, Provenance.VendorDoc, "无消费方：CountMethod.CountOverWindow 那一档今天在 QueryEngine 里还是那句未接入的抛（窗口函数那一格有行号了，这一格没有）"),
             new(DbCapabilities.Boolean_Type, Provenance.VendorDoc, "类型表 bool→BOOLEAN，谓词侧 IS TRUE 有对拍见证但那是文本档，类型列本体无样本"),
-            new(DbCapabilities.Json_Type, Provenance.VendorDoc, "读侧类型表认 json/jsonb（→string），写侧没有 CLR→JSON 的映射，故无样本"),
             new(DbCapabilities.TempTable, Provenance.VendorDoc, "无消费方：Tp 临时主键走的是真实表而不是临时表（§8.2）"),
 
             // 第 15 位是本笔挂上血统基类的 Bulk_Copy，与上面七颗同档而异因（那七颗"文档说有而代码没接"，本颗
@@ -431,7 +426,7 @@ public sealed class CapabilityLedgerTests
         // 它是本仓库自己算的【推断】，而那一层下面 <c>PostgreSqlProvider</c> 类注释第三段与方言测试的版本格各钉一份。
         // 所以"零覆写的正典叶"在本家第一次带<em>代价</em>：正典叶对齐的是最老那一侧，而 MySQL 本尊对齐的是最新
         // 那一侧（8.0 的 <c>VALUES()</c> 读法），两颗本尊同为零覆写而选型方向相反。
-        new("postgresql", static () => PostgreSql.Provider(SqlServer.NoDriverFactory.Instance), 16, 7, 1,
+        new("postgresql", static () => PostgreSql.Provider(SqlServer.NoDriverFactory.Instance), 15, 7, 1,
         [
             new(DbCapabilities.Paging_LimitOffset, Provenance.OfflineText, "PostgreSqlDialectTests 那条 LIMIT/OFFSET 尾巴与只写 OFFSET 不补哨兵、与金仓家逐字相等的断言（同形交对拍，故无基线）"),
             new(DbCapabilities.Returning, Provenance.OfflineText, "PostgreSqlDialectTests 键回读那条句尾 RETURNING 与金仓家逐字相等的断言（血统两两互读补满的十五条边各含此形）"),
@@ -451,7 +446,6 @@ public sealed class CapabilityLedgerTests
             new(DbCapabilities.WindowFunctions, Provenance.VendorDoc, "消费方=QuickFx.RowNumber（行号）：文本由共用层 DialectBase.EmitRowNumber 出、十八家零登记模板，而本家这一格还没有活库对账"),
             new(DbCapabilities.Count_Over_Window, Provenance.VendorDoc, "无消费方：CountMethod.CountOverWindow 那一档今天在 QueryEngine 里还是那句未接入的抛（窗口函数那一格有行号了，这一格没有）"),
             new(DbCapabilities.Boolean_Type, Provenance.VendorDoc, "类型表 bool→BOOLEAN，谓词侧 IS TRUE 有对拍见证但那是文本档，类型列本体无样本"),
-            new(DbCapabilities.Json_Type, Provenance.VendorDoc, "读侧类型表认 json/jsonb（→string），写侧没有 CLR→JSON 的映射，故无样本"),
             new(DbCapabilities.TempTable, Provenance.VendorDoc, "无消费方：Tp 临时主键走的是真实表而不是临时表（§8.2）"),
 
             // 第 15 位是本笔挂上血统基类的 Bulk_Copy，与上面七颗同档而异因（那七颗"文档说有而代码没接"，本颗
@@ -884,7 +878,7 @@ public sealed class CapabilityLedgerTests
         // 零实测"的单层【文档口径行】，但本家不再是复点册 —— 声明位降到 6 颗，Transactions 从这一本起
         // 第一次被"内核写路径不开事务"那一格表态退回（交集就此削去那颗内检索引位，见下面的链），
         // 而插入那一份基线头一回代替"断言抛"出场（EmitReturning 整格抛，insert-with-keys 不落盘）。
-        new("duckdb", static () => DuckDb.Provider(SqlServer.NoDriverFactory.Instance), 16, 8, 0,
+        new("duckdb", static () => DuckDb.Provider(SqlServer.NoDriverFactory.Instance), 15, 8, 0,
         [
             // 八颗离线位各指一份自家基线。分页那一份钉的还多一格：skip-only 那颗"缺上限不补哨兵"
             // 由 golden/duckdb/paging-skip-only.sql 单独在场（能力位只有一颗，两形共用一行）。
@@ -910,7 +904,6 @@ public sealed class CapabilityLedgerTests
             new(DbCapabilities.Cte, Provenance.VendorDoc, "无消费方：共用层没有 WITH 的发射口"),
             new(DbCapabilities.WindowFunctions, Provenance.VendorDoc, "消费方=QuickFx.RowNumber（行号）：文本由共用层 DialectBase.EmitRowNumber 出、十八家零登记模板，而本家这一格还没有活库对账"),
             new(DbCapabilities.Count_Over_Window, Provenance.VendorDoc, "无消费方：CountMethod.CountOverWindow 那一档今天在 QueryEngine 里还是那句未接入的抛（窗口函数那一格有行号了，这一格没有）"),
-            new(DbCapabilities.Json_Type, Provenance.VendorDoc, "读侧索引认 json/jsonb（→string，照血统那份原样克隆），写侧没有 CLR→JSON 的映射，故无样本"),
             new(DbCapabilities.TempTable, Provenance.VendorDoc, "无消费方：Tp 临时主键走的是真实表而不是临时表（§8.2）"),
 
             // 第 15 位与邻本同一判据：装载通道已接线（血统那颗反射口 PostgreSqlBulk），而 DuckDB.NET

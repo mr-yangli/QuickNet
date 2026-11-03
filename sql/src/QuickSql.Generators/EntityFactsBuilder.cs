@@ -9,12 +9,10 @@ using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 namespace QuickSql.Generators;
 
-/// <summary>§10.2 解析链的编译期实现。<b>逐条对着 <c>ContractResolver</c> 写</b>：层优先级、每层的 note
-/// 文本、成员被跳过的条件都要一致——两侧一致性由 §13.11 的逐字段相等断言兜住，所以这里改一句话术，
-/// 那一层就会红，正是想要的接线。
-/// <b>唯一的刻意例外</b>是 <see cref="Build"/> 的 <c>xmlDocComments</c> 那一档：源码注释只有编译器看得见，
-/// 反射侧没有这份来源，所以它一旦开着，两侧对同一张表就能给出不同备注。默认关正是为了让"开它"是一次签字
-/// 而不是一次顺带。</summary>
+/// <summary>解析链的编译期实现，逐条对着 ContractResolver 写：层优先级、每层的 note 文本、
+/// 成员被跳过的条件都要一致——两侧一致性由逐字段相等断言兜住，这里改一句话术那一层就会红。
+/// 唯一的刻意例外是 Build 的 xmlDocComments 那一档：源码注释只有编译器看得见，反射侧没有这份来源，
+/// 它一旦开着两侧对同一张表就能给出不同备注，默认关正是为了让"开它"是一次签字而不是一次顺带。</summary>
 sealed class BuildOutcome
 {
     public EntityModel? Model;
@@ -43,6 +41,7 @@ static class EntityFactsBuilder
     const string DataDisplay = "System.ComponentModel.DataAnnotations.DisplayAttribute";
     const string DataKey = "System.ComponentModel.DataAnnotations.KeyAttribute";
     const string ScDescription = "System.ComponentModel.DescriptionAttribute";
+    const string ScDefaultValue = "System.ComponentModel.DefaultValueAttribute";
 
     static readonly SymbolDisplayFormat Qualified = new(
         globalNamespaceStyle: SymbolDisplayGlobalNamespaceStyle.Omitted,
@@ -56,10 +55,9 @@ static class EntityFactsBuilder
         "System.DateOnly", "System.TimeOnly", "System.TimeSpan",
     ];
 
-    /// <summary><paramref name="xmlDocComments"/> 是<b>整条链上唯一一颗 G1 独有的来源</b>：源码里的
-    /// <c>/// &lt;summary&gt;</c> 只有编译器看得见，反射侧没有这一份。开着它，同一张表在两条启动路径上就能给出
-    /// 两个备注（§13.11 的 <c>comment=</c> 那一格会红），所以它默认关、且只在消费方点名后才生效——
-    /// "开它"要是一次签字，不是一次顺带。</summary>
+    /// <summary>xmlDocComments 是整条链上唯一一颗 G1 独有的来源：源码里的 /// summary 只有编译器看得见，
+    /// 反射侧没有这一份。开着它，同一张表在两条启动路径上就能给出两个备注（对拍的 comment= 那一格会红），
+    /// 所以默认关、且只在消费方点名后才生效——"开它"要是一次签字，不是一次顺带。</summary>
     public static BuildOutcome Build(GeneratorAttributeSyntaxContext context, bool xmlDocComments)
     {
         var outcome = new BuildOutcome();
@@ -74,8 +72,7 @@ static class EntityFactsBuilder
             return Blocked(outcome, at, "有基类：继承来的属性列序与反射侧的 MetadataToken 序对不齐");
 
         // G1 的门槛留在公共这一格：生成的那一行是字面的 `new T()`，非公共的无参构造在生成侧编不出来
-        // （而 G2 反射侧认非公共，见 MemberAccessors.ParameterlessConstructor）——
-        // 所以这条挡住的是"少一份编译期事实册"，不是"这颗实体不能物化"，措辞按这个分寸写
+        // （而 G2 反射侧认非公共）——这条挡住的是"少一份编译期事实册"，不是"这颗实体不能物化"。
         if (!entity.InstanceConstructors.Any(static c => c.Parameters.IsEmpty && c.DeclaredAccessibility == Accessibility.Public))
             return Blocked(outcome, at, "无参构造器不是公共的，`new T()` 在生成侧编不出来");
 
@@ -88,9 +85,8 @@ static class EntityFactsBuilder
             Name = GeneratedName(entity),
             TableName = Text(dataTable, 0, "Name") ?? entity.Name,
             TableSchema = Text(dataTable, -1, "Schema"),
-            // 表备注：组件模型的 [Description]（System.ComponentModel）继承自研 [Table(Comment=…)]
-            // 退场后的那一格，座次照旧（排在 Fluent 之后；Fluent 这里本来就看不见）。
-            // 文档注释排在最末：注解写过就轮不到它（与下面列备注同一条取向）。
+            // 表备注：[Description]（System.ComponentModel）在前，文档注释排最末——
+            // 注解写过就轮不到它（与下面列备注同一条取向）。
             TableComment = Text(Find(attributes, ScDescription), 0, "Description") ?? (xmlDocComments ? SummaryOf(entity) : null),
             Split = SplitOf(attributes),
             Source = SourceOf(attributes),
@@ -109,18 +105,16 @@ static class EntityFactsBuilder
             if (IsExplicitlyIgnored(property))
                 continue;
 
-            // 没有写口 ⇒ 既落不回值也不是数据：ABP 那一族实体上的
-            // <c>public bool RequiresManualGrading => Type == …</c> 是算法，不是列。
-            // 这一格按"有没有设置器"问，而不是按"设置器公不公开"：{ get; protected set; }
-            // 与 { get; init; } 都落得回值（表达式树编译不受可访问性限制），把它们一起摘掉
+            // 没有写口 ⇒ 既落不回值也不是数据。这一格按"有没有设置器"问，而不是按"设置器公不公开"：
+            // { get; protected set; } 与 { get; init; } 都落得回值，把它们一起摘掉
             // 会让整族 ABP 实体的键与明细列凭空消失。反射侧 ReadMembers 同一位置同一判据。
             if (property.SetMethod is null)
                 continue;
 
             if (!IsColumnShape(property.Type))
             {
-                // 两格导航都收，收在<em>同一份列表</em>里按声明序：反射侧那一格是按 MetadataToken 序
-                // 一次走完的，而 §13.11 的对拍比的是逐行相等（顺序也算内容），分成两份列表去产出会把
+                // 两格导航都收，收在同一份列表里按声明序：反射侧那一格是按 MetadataToken 序
+                // 一次走完的，而对拍比的是逐行相等（顺序也算内容），分成两份列表去产出会把
                 // "先声明集合再声明引用"那一张实体判成分叉。
                 if (IsReferenceNavigation(property.Type))
                     navigations.Add(property);
@@ -155,7 +149,7 @@ static class EntityFactsBuilder
         return outcome;
     }
 
-    /// <summary>调用点已经判过"显式排除"与"这一格是不是列的形状"，所以这里只做 §10.2 的逐层取值。</summary>
+    /// <summary>调用点已经判过"显式排除"与"这一格是不是列的形状"，所以这里只做逐层取值。</summary>
     static ColumnModel? ColumnOf(
         IPropertySymbol property, EntityModel model, BuildOutcome outcome, Location entityLocation, ref bool conflicts, bool xmlDocComments)
     {
@@ -169,7 +163,7 @@ static class EntityFactsBuilder
         var maxLength = Find(declared, DataMaxLength);
 
         // 同层冲突：StringLength 与 MaxLength 都在 DataAnnotations 层。取严格者会把
-        // 「建表按 20、校验按 50」藏三个月，所以 G1 侧同样拒绝——只是拒绝发生在编译期。
+        // 「建表按 20、校验按 50」藏三个月，所以同样拒绝——只是拒绝发生在编译期。
         if (stringLength is not null && maxLength is not null)
         {
             outcome.Diagnostics.Add(Diagnostic.Create(QuickSqlDiagnostics.MetadataConflict, At(property, entityLocation),
@@ -207,15 +201,15 @@ static class EntityFactsBuilder
 
         var (isNullable, nullableNote, nullabilityDeclared) = NullableOf(type, property, column, required);
 
-        // 没打标记就不写来源：G2 侧那一格同样是 null，而 §13.11 的对拍比的是整个 ColumnFacts——
+        // 没打标记就不写来源：G2 侧那一格同样是 null，而对拍比的是整个 ColumnFacts——
         // 这里多写一句常量就是「两侧各自都合理、但文本不一样」。
-        // 名字约定与反射侧同一条：ConcurrencyStamp 直接认成应用给值的并发列（ABP 那一族的现成拼写）。
+        // 名字约定与反射侧同一条：ConcurrencyStamp 直接认成应用给值的并发列。
         var tokenAttribute = Find(declared, QuickSqlConcurrency);
         var conventionToken = name == "ConcurrencyStamp";
         var concurrency = tokenAttribute is not null || conventionToken;
 
-        // 应用给值那一族（第三族）：特性的 AppSetsValue 参数显式声明，或成员名 ConcurrencyStamp 的约定
-        //（与反射侧同一条判据）。Fluent 那一档生成期整体上看不见（与并发标记本身同一个限制）。
+        // 应用给值那一族（第三族）：AppSetsValue 显式声明，或 ConcurrencyStamp 名字约定
+        //（与反射侧同一条判据）。Fluent 那一档生成期整体上看不见。
         var appSets = false;
 
         if (concurrency)
@@ -246,25 +240,55 @@ static class EntityFactsBuilder
             Precision = Positive(Number(column, -1, "Precision")),
             Scale = Positive(Number(column, -1, "Scale")),
             StoreType = Text(dataColumn, -1, "TypeName"),
-            // 备注的链与反射侧同一条（[Description]（System.ComponentModel）> [Display(Description)]
-            // > [Display(Name)]，Fluent 那档生成期整体上看不见），文档注释接在链尾兜底：写过显式备注就不轮到它。
+            // 备注的链与反射侧同一条（[Description] > [Display(Description)] > [Display(Name)]），
+            // 文档注释接在链尾兜底：写过显式备注就不轮到它。
             Comment = Text(Find(declared, ScDescription), 0, "Description")
                       ?? Text(Find(declared, DataDisplay), -1, "Description")
                       ?? Text(Find(declared, DataDisplay), -1, "Name")
                       ?? (xmlDocComments ? SummaryOf(property) : null),
+            // 默认值的字面量档在生成期先拦一遍：生成器物理上产不出"任意对象"的字面量；
+            // DateTime/byte[]/枚举由反射侧收尾那一格拒，两侧的话术同源、判据同表。
+            DefaultValue = DefaultValueOf(property, declared, outcome, entityLocation),
             IsString = Core(type).SpecialType == SpecialType.System_String,
             DirectArm = DirectArmOf(type),
             CanBeNull = !(type.IsValueType && !IsNullableValue(type)),
         };
     }
 
-    /// <summary>这一列有没有直读臂（§16.21）。<b>这里只出方法名，不出编号</b>：
-    /// 编号是运行期按驱动交回的<em>实际</em>类型落的（<c>ReadOps.Probe</c>），名单与臂本体在
-    /// <c>QuickSql.Core/Materialization/ReadOps.cs</c> 那一个文件里，两侧唯一的连接就是这个名字 ——
-    /// 名字写错是编译错误，挑错臂是编号对不上、静默退回装箱口，所以能错的方向只有"没变快"。
-    /// 枚举不在名单里（成员型是 <c>State</c> 而驱动回的是底层整数，探测永远不落编号）；
-    /// <c>byte[]</c>、<c>DateOnly</c>、<c>TimeOnly</c>、<c>DateTimeOffset</c>、<c>TimeSpan</c>、<c>sbyte</c>、无符号整族也不在：
-    /// <c>DbDataReader</c> 对这几首没有"一次调用一个值"的原始访问器（<c>GetTimeSpan</c> 根本不存在，那是构建期撞出来的）。</summary>
+    /// <summary>默认值那一格的生成期半边：字面量档（string/bool/整型/浮点/decimal）把值原样带回去，
+    /// 其余档（生成器产不出字面量的对象、值域不要的 DateTime/byte[]/枚举）当场出 QuickSql005
+    /// 并照常生成其余各格——反射侧用同一张值域表拒，两侧的话术要点名同一个理由。</summary>
+    static object? DefaultValueOf(
+        IPropertySymbol property, IEnumerable<AttributeData> declared, BuildOutcome outcome, Location entityLocation)
+    {
+        if (Find(declared, ScDefaultValue) is not { } attribute)
+            return null;
+
+        var value = Argument(attribute, 0)?.Value;
+
+        if (value is null)
+            return null;
+
+        if (value is not (string or bool or byte or sbyte or short or ushort or int or uint or long or ulong
+            or float or double or decimal))
+        {
+            outcome.Diagnostics.Add(Diagnostic.Create(QuickSqlDiagnostics.DefaultValueNotLiteral, At(property, entityLocation),
+                $"属性 '{property.Name}' 的 [DefaultValue] 是 {value.GetType().Name}：" +
+                "默认值只收常量字面量档（string ∶ bool ∶ 整型 ∶ 浮点 ∶ decimal）。DateTime 会把首次建表那一刻冻进 DDL，" +
+                "byte[] 没有字面量形，枚举的字面量形各家不同。"));
+
+            return null;
+        }
+
+        return value;
+    }
+
+    /// <summary>这一列有没有直读臂。这里只出方法名，不出编号：
+    /// 编号是运行期按驱动交回的实际类型落的，名单与臂本体在 ReadOps 那一个文件里，
+    /// 两侧唯一的连接就是这个名字——名字写错是编译错误，挑错臂是编号对不上、静默退回装箱口，
+    /// 所以能错的方向只有"没变快"。枚举不在名单里；byte[]、DateOnly、TimeOnly 等也不在
+    /// （DbDataReader 对这几型没有"一次调用一个值"的原始访问器）。</summary>
+    // 直读臂名单：GetTimeSpan 不在——第一版写了它，构建期编译失败撞出来的缺席，不是没想过。
     static string? DirectArmOf(ITypeSymbol type)
     {
         var arm = FullName(Core(type)) switch
@@ -287,17 +311,15 @@ static class EntityFactsBuilder
         if (arm is null)
             return null;
 
-        // 可空<em>值</em>类型换一首臂：非空臂的返回类型是底层型，NULL 那一格由门给 default(T)，
-        // 交给 DateTime? 成员就是静默摊平（0001-01-01 冒充"没有值"）。可空那一族的非直读分支是
-        // Read<T?>，所以 NULL 仍是 null。字符串不换 —— string? 与 string 是同一个运行期类型，
-        // 非空臂交回的 null 本来就是门给的答案。
+        // 可空值类型换一首臂：非空臂的返回类型是底层型，NULL 那一格由门给 default(T)，
+        // 交给 DateTime? 成员就是静默摊平（0001-01-01 冒充"没有值"）；可空那一族的非直读分支
+        // 是 Read<T?>，所以 NULL 仍是 null。字符串不换——string? 与 string 是同一个运行期类型。
         return IsNullableValue(type) ? "ReadNullable" + arm : "Read" + arm;
     }
 
-    /// <summary>可空性的五档判定，顺序与 <c>ContractResolver.ResolveNullable</c> 一字不差
-    /// （第一档 Fluent 在编译期不存在，所以从自研属性起）。第三颗是"这句非空到底有没有人说过" ——
-    /// 可空上下文之外（<see cref="NullableAnnotation.None"/>）说的是"我没表过态"，
-    /// 它把 §10.6 的必填尺子摘掉，而不改列的形状。</summary>
+    /// <summary>可空性的五档判定，顺序与 ContractResolver.ResolveNullable 一字不差
+    /// （第一档 Fluent 在编译期不存在，所以从自研属性起）。第三颗是"这句非空到底有没有人说过"——
+    /// 可空上下文之外（NullableAnnotation.None）说的是"我没表过态"，它把必填尺子摘掉，而不改列的形状。</summary>
     static (bool, string, bool) NullableOf(ITypeSymbol type, IPropertySymbol property, AttributeData? column, AttributeData? required)
     {
         if (Tri(column, "IsPrimary") == 1)
@@ -320,10 +342,9 @@ static class EntityFactsBuilder
         if (type.IsValueType && !IsNullableValue(type))
             return (false, "值类型非 Nullable ⇒ 非空列", true);
 
-        // 反射侧读的是 NullabilityInfoContext 的 WriteState（三态：Unknown / NotNull / Nullable），
-        // 可空值类型那一档它给的就是 Nullable；而编译期这一侧的 <see cref="NullableAnnotation.None"/>
-        // 正是 WriteState=Unknown 那一格：可空上下文之外（<c>#nullable disable</c>、没带可空元数据的
-        // 引用程序集，整份 ABP 框架代码都在这一格）。两侧在这一格必须同形（§13.11 的逐字段对拍）。
+        // 反射侧读的是 NullabilityInfoContext 的 WriteState（三态），而编译期这一侧的
+        // NullableAnnotation.None 正是 WriteState=Unknown 那一格：可空上下文之外
+        // （#nullable disable、没带可空元数据的引用程序集）。两侧在这一格必须同形（逐字段对拍）。
         if (property.NullableAnnotation == NullableAnnotation.None)
             return (false, "C# 没表过态（可空上下文之外）⇒ 建表按非空列，不落必填尺子", false);
 
@@ -332,10 +353,8 @@ static class EntityFactsBuilder
         return (annotated, annotated ? "C# 可空 ⇒ 可空列" : "C# 非空 ⇒ 非空列", true);
     }
 
-    /// <summary>「被显式排除」= <c>[NotMapped]</c>（系统注解；自研 <c>[Column(IsIgnore)]</c> 随自研
-    /// <c>[Column]</c> 一并退场）。
-    /// 反射侧同一句判定，且它在链条上的位置也一样：排在类型判定<em>之前</em>，所以打在导航属性上的
-    /// 那颗 <c>[NotMapped]</c> 只是"不映射",不会被下面那条当成关系。</summary>
+    /// <summary>「被显式排除」= [NotMapped]（系统注解）。反射侧同一句判定，且在链条上同一位置：
+    /// 排在类型判定之前，所以打在导航属性上的那颗 [NotMapped] 只是"不映射"，不会被当成关系。</summary>
     static bool IsExplicitlyIgnored(IPropertySymbol property)
     {
         var declared = property.GetAttributes();
@@ -343,13 +362,13 @@ static class EntityFactsBuilder
         return Find(declared, DataNotMapped) is not null;
     }
 
-    /// <summary>能进列清单的形状：<c>byte[]</c> 单独放行，其余要落在可映射闭包里。反射侧同一句。</summary>
+    /// <summary>能进列清单的形状：byte[] 单独放行，其余要落在可映射闭包里。反射侧同一句。</summary>
     static bool IsColumnShape(ITypeSymbol type)
         => type is IArrayTypeSymbol { ElementType.SpecialType: SpecialType.System_Byte } || IsMappable(type);
 
-    /// <summary>引用导航 = 类类型、不是 <c>string</c>、不是集合形态（<c>byte[]</c> 与 <c>List&lt;T&gt;</c> 都在这条上
-    /// 落到"不可映射而跳过"）。判定不要求目标是实体：<c>Uri</c> 配 <c>UriId</c> 也会成一条边，
-    /// 而这条边唯一的用法（写序）对没有跟踪档的类型天然无效。反射侧 <c>IsReferenceNavigation</c> 同一条。</summary>
+    /// <summary>引用导航 = 类类型、不是 string、不是集合形态（byte[] 与 List〈T〉都在这条上
+    /// 落到"不可映射而跳过"）。判定不要求目标是实体：Uri 配 UriId 也会成一条边，
+    /// 而这条边唯一的用法（写序）对没有跟踪档的类型天然无效。反射侧同一条。</summary>
     static bool IsReferenceNavigation(ITypeSymbol type)
     {
         var core = Core(type);
@@ -359,9 +378,9 @@ static class EntityFactsBuilder
                && !ImplementsEnumerable(core);
     }
 
-    /// <summary><c>IEnumerable</c>（非泛型那一颗）是所有集合形态的公共祖先，与反射侧
-    /// <c>typeof(IEnumerable).IsAssignableFrom</c> 同一问句。自算闭包而不调 <c>Compilation.GetSpecialType</c>：
-    /// 生成器手里没有 <see cref="Compilation"/>，而多引一份上下文只为这一问不值。</summary>
+    /// <summary>IEnumerable（非泛型那一颗）是所有集合形态的公共祖先，与反射侧
+    /// typeof(IEnumerable).IsAssignableFrom 同一问句。自算闭包而不调 Compilation.GetSpecialType：
+    /// 生成器手里没有 Compilation，而多引一份上下文只为这一问不值。</summary>
     static bool ImplementsEnumerable(ITypeSymbol type)
     {
         if (FullName(type) == IEnumerable)
@@ -386,9 +405,8 @@ static class EntityFactsBuilder
         {
             var declared = ForeignKeyOf(property);
 
-            // 集合那一格：外键成员在<em>子端</em>那张表上，这里既拿本实体的列清单换算不了，也不该换算
-            // （换算要另一份契约，而注册表是按需解析的，子端契约此刻未必存在）。声明只带着成员名走，
-            // 真到了级联要用那一刻才解，解不出就响。约定那一档同理不在编译期判。
+            // 集合那一格：外键成员在子端那张表上，这里换算不了也不该换算（子端契约此刻未必存在）。
+            // 声明只带着成员名走，真到了级联要用那一刻才解，解不出就响。约定那一档同理不在编译期判。
             if (CollectionElementOf(property.Type) is { } child)
             {
                 model.Relationships.Add(new RelationshipModel
@@ -431,7 +449,7 @@ static class EntityFactsBuilder
                 continue;
             }
 
-            // 约定：导航属性名 + "Id"。命不中就没有这条关系（不是错误 —— 那正是 v0.19 之前两侧共同的行为）。
+            // 约定：导航属性名 + "Id"。命不中就没有这条关系（不是错误）。
             var convention = property.Name + "Id";
 
             if (!model.Columns.Any(c => c.Member == convention))
@@ -448,10 +466,9 @@ static class EntityFactsBuilder
         }
     }
 
-    /// <summary>集合导航的元素型：收下 <see cref="IEnumerable"/>（非泛型那一颗）又不是 <c>string</c>
-    /// 的形状，取它 <c>IEnumerable&lt;T&gt;</c> 的那个 <c>T</c>，<b>只有类形态的才算子行</b>
-    /// （<c>List&lt;string&gt;</c> 是标签、<c>Dictionary&lt;K,V&gt;</c> 的元素是 <c>KeyValuePair</c> 结构体，
-    /// 给它们出一条边等于让 <c>Add</c> 在根本没有子行的地方找外键）。反射侧 <c>CollectionElementOf</c> 同一条。</summary>
+    /// <summary>集合导航的元素型：收下 IEnumerable（非泛型那一颗）又不是 string 的形状，
+    /// 取它 IEnumerable〈T〉 的那个 T，只有类形态的才算子行（List〈string〉是标签、Dictionary 的元素
+    /// 是结构体，给它们出一条边等于让 Add 在根本没有子行的地方找外键）。反射侧同一条。</summary>
     static ITypeSymbol? CollectionElementOf(ITypeSymbol type)
     {
         var core = Core(type);
@@ -472,8 +489,8 @@ static class EntityFactsBuilder
         return null;
     }
 
-    /// <summary><c>[NoCascade]</c> 的两档：打在实体上这一张表的导航都不带人，打在那根集合导航上只有它不带。
-    /// 级联缺省为开，所以这里只判退出（反射侧 <c>IsNoCascade</c> 同一条）。</summary>
+    /// <summary>[NoCascade] 的两档：打在实体上这一张表的导航都不带人，打在那根集合导航上只有它不带。
+    /// 级联缺省为开，所以这里只判退出（反射侧同一条）。</summary>
     static bool IsNoCascade(IPropertySymbol property, INamedTypeSymbol entity)
         => Find(property.GetAttributes(), QuickSqlNoCascade) is not null
            || Find(entity.GetAttributes(), QuickSqlNoCascade) is not null;
@@ -482,7 +499,7 @@ static class EntityFactsBuilder
         => Find(property.GetAttributes(), DataForeignKey) is { } declared ? Split(Text(declared, 0, "Name")) : null;
 
     /// <summary>逗号分隔 = 复合外键。空串按"没声明"处理（反射侧同一个答案，于是两侧都会退回约定那一档）。
-    /// netstandard2.0 没有 <c>StringSplitOptions.TrimEntries</c>，所以逐条 <c>Trim()</c> —— 结果与反射侧那份一致。</summary>
+    /// netstandard2.0 没有 StringSplitOptions.TrimEntries，所以逐条 Trim——结果与反射侧那份一致。</summary>
     static string[]? Split(string? names)
     {
         if (names is null || names.Length == 0)
@@ -500,9 +517,9 @@ static class EntityFactsBuilder
 
         foreach (var index in entity.GetAttributes().Where(a => Name(a) == QuickSqlIndex))
         {
-            // EF 同形：构造参数就是成员名单，没有名字那一格 —— 索引名一律留给运行期按约定给。
-            // 那条约定与反射侧 EntityContractFactory 同一句：表名没模板用表名，分表（表名是 {year} 样模板）
-            // 用类名 —— 消息里那串名字要对得上反射侧抛的那句（§13.11 的对拍连错误话术一起管）。
+            // EF 同形：构造参数就是成员名单，没有名字那一格——索引名一律留给运行期按约定给。
+            // 那条约定与反射侧同一句：表名没模板用表名，分表（表名是 {year} 样模板）用类名——
+            // 对拍连错误话术一起管。
             var members = Texts(index, 0);
             var indexName = (model.TableName.Contains('{') ? entity.Name : model.TableName)
                             + "_" + string.Join("_", members);
@@ -529,12 +546,10 @@ static class EntityFactsBuilder
         }
     }
 
-    /// <summary>跳过索引声明抄进模型：类挂在前、列挂按属性次序在后（与反射侧
-    /// <c>ContractResolver.ResolveSkipIndexes</c> 同一份次序，§13.11 的对拍顺序也算内容）。
-    /// 只抄声明：成员 → 列换算、约定名、撞名判定全在运行期 <see cref="EntityContractFactory.MapSkipIndexes"/>
-    /// 那一份实现里（§10.3）。两件事编译期就要红（与反射侧同一句话，<c>QuickSql005</c>）：
-    /// <b>类挂没写表达式</b>（那一档没有"缺省成员"可言）与<b>声明打在没进列清单的属性上</b>（漏映射：
-    /// 导航、[NotMapped] 都算）——反射侧这一条由收尾器当场抛，编译期红的是同一句换了个场。</summary>
+    /// <summary>跳过索引声明抄进模型：类挂在前、列挂按属性次序在后（与反射侧同一份次序）。
+    /// 只抄声明：成员 → 列换算、约定名、撞名判定全在运行期那一份实现里。两件事编译期就要红
+    /// （与反射侧同一句话）：类挂没写表达式（那一档没有"缺省成员"可言）与
+    /// 声明打在没进列清单的属性上（漏映射：导航、[NotMapped] 都算）。</summary>
     static void SkipIndexesOf(INamedTypeSymbol entity, EntityModel model, BuildOutcome outcome, Location at, bool alreadyFailed)
     {
         if (alreadyFailed)
@@ -577,7 +592,7 @@ static class EntityFactsBuilder
         {
             Member = member,
             // 列挂且没写表达式 = 就是那颗列：写手不写 Expression 那一格，交缺省 null，
-            // 换算（成员 → 列名）留给运行期的同一份实现，两侧到收尾之前形状一致。
+            // 换算（成员 → 列名）留给运行期的同一份实现。
             Expression = expression,
             Name = Named(declared, "Name")?.Value as string,
             Kind = EnumExpression(declared, 0),
@@ -590,8 +605,8 @@ static class EntityFactsBuilder
         });
     }
 
-    /// <summary>Roslyn 4.14 的符号层面查不到 <c>init</c>，只能回到语法树。之所以要单独问一句：
-    /// init-only 属性写不了，G1 的 <c>SetValue</c> 就无从生成，与其生成一个半残的 schema，不如整条实体退回 G2。</summary>
+    /// <summary>Roslyn 的符号层面查不到 init，只能回到语法树。之所以要单独问一句：
+    /// init-only 属性写不了，G1 的 SetValue 就无从生成，与其生成一个半残的 schema，不如整条实体退回 G2。</summary>
     static bool IsInitOnly(IPropertySymbol property)
         => property.DeclaringSyntaxReferences.Any(static reference
             => reference.GetSyntax(default) is PropertyDeclarationSyntax { AccessorList: { } accessors }
@@ -600,24 +615,11 @@ static class EntityFactsBuilder
     /// <summary>属性自己的位置更好定位；合成成员没有位置时退回实体。</summary>
     static Location At(ISymbol symbol, Location fallback) => symbol.Locations.FirstOrDefault() ?? fallback;
 
-    /// <summary>取那一格 <c>&lt;summary&gt;</c> 作备注（只在开关开着时被调用）。
-    /// <b>自己扫前导 trivia，不走 <see cref="ISymbol.GetDocumentationCommentXml"/></b>：那颗 API 的源码侧文档
-    /// 要由 <c>DocumentationProvider</c> 供给，而 <c>csc</c> 批编译压根没装它——实测同一段
-    /// <c>/// &lt;summary&gt;</c> 在内存编译里有值、在真实 MSBuild 编译里交回<em>空串</em>（2026-10-08 端到端）。
-    /// 空串不是"没写注释"而是"读不到"，而"注释在、备注为空、构建还全绿"正是这一档最不能有的失效形状。
-    /// <b>筛子是 kind 与前缀两把并起来，单用一把都缺一档</b>：<c>DocumentationMode</c> 由编译器那一侧决定
-    /// （<c>csc</c> 不带 <c>/doc</c> 时实测为 <c>None</c>，IDE 与内存量具为 <c>Parse</c>），同一行 <c>///</c> 在
-    /// 前者是普通 <c>SingleLineCommentTrivia</c>、原文带着 <c>///</c>，在后者是
-    /// <c>SingleLineDocumentationCommentTrivia</c>、而 <c>ToString()</c> 交回的是<em>结构</em>文本（<c>///</c>
-    /// 已经不在里面了）。实测（2026-10-08）：只按 kind 筛 → <c>None</c> 档读不到（真实构建就是这一档，
-    /// 量具全绿而字段为空）；只按前缀筛 → <c>Parse</c> 档读不到。两把并起来，G1 在 IDE 与构建里才算得出
-    /// 同一份元数据，否则编辑期看到的备注和落库的那句不是一句话。同样不要求
-    /// <c>GenerateDocumentationFile</c>（那颗只管把注释落成 <c>.xml</c> 边车，是给运行期反射读的，
-    /// 生成期用不着它）。
-    /// <b>只截 <c>&lt;summary&gt;…&lt;/summary&gt;</c> 那一段来解析</b>，不把整块注释拼成一棵树：一行
-    /// <c>//// 分节线</c> 里出现裸 <c>&lt;</c> 时，整棵树的解析会连旁边写得好好的 summary 一起判死；截段解析只让
-    /// 那一段自己承担畸形——而<b>畸形交回 null 而不是抛</b>：作者写了裸 <c>&amp;</c> 时编译器已经有 CS1570 那句，
-    /// 生成器再说一遍只是把一条警告升成一次构建失败。</summary>
+    /// <summary>取那一格 summary 作备注（只在开关开着时被调用）。自己扫前导 trivia，
+    /// 不走 GetDocumentationCommentXml：csc 批编译没装 DocumentationProvider，同一段注释
+    /// 在真实 MSBuild 编译里交回空串——"注释在、备注为空、构建还全绿"正是这一档最不能有的失效形状。
+    /// 筛子是 kind 与前缀两把并起来，单用一把都缺一档；只截 summary 段来解析、畸形交回 null 而不是抛：
+    /// 编译器已有 CS1570 那句，再说一遍只是把一条警告升成一次构建失败。</summary>
     static string? SummaryOf(ISymbol symbol)
     {
         var node = symbol.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax(default);
@@ -632,8 +634,7 @@ static class EntityFactsBuilder
             var text = trivia.ToString();
 
             // 相邻两行 /// 是两条 trivia，中间那个换行不属于任何一条；这里补一个分隔，否则
-            // 「上一句」与「下一句」会粘成「上一句下一句」。补空格与补换行等价——下面的 Fold 都把
-            // 一段空白折成一个空格，而落库的备注本来就要折成一行。
+            // 「上一句」与「下一句」会粘成「上一句下一句」（下面的 Fold 会把一段空白折成一个空格）。
             if (text.StartsWith("///", StringComparison.Ordinal) || text.StartsWith("/**", StringComparison.Ordinal)
                 || trivia.IsKind(SyntaxKind.SingleLineDocumentationCommentTrivia)
                 || trivia.IsKind(SyntaxKind.MultiLineDocumentationCommentTrivia))
@@ -657,8 +658,7 @@ static class EntityFactsBuilder
         try
         {
             // 截的那一段必须连着关标签：只取到 </summary> 之前就是 XDocument 眼里的"标签没合上"，
-            // 一句写得好好的备注会被 XmlException 判成畸形。区间运算符在这里也用不了——本工程吐的是
-            // netstandard2.0 的生成器程序集，那套引用里没有 System.Index / System.Range（CS0518，不是缺 using）。
+            // 一句写得好好的备注会被 XmlException 判成畸形。
             var fragment = body.Substring(from, to - from + "</summary>".Length);
 
             return Fold(XDocument.Parse(fragment).Root!.Value);
@@ -668,10 +668,9 @@ static class EntityFactsBuilder
             return null;
         }
     }
-    /// <summary>折成一行并去首尾空：注释按 C# 惯例是换行缩进写的，而备注要落进一条 <c>COMMENT ON</c> 的字符串
-    /// 字面量里——换行留在库里，读回比对（§9.5 的那把尺子读的是目录里的备注文本）就永远差那一格。
-    /// 全空的 <c>&lt;summary&gt; &lt;/summary&gt;</c> 与只有 <c>&lt;inheritdoc/&gt;</c> 而没有 summary 的那一种
-    /// 都交回 null = 没声明，而不是空串（"说过而说的是没有备注"是另一档，见 <c>TableInfo.Comment</c>）。</summary>
+    /// <summary>折成一行并去首尾空：注释按 C# 惯例是换行缩进写的，而备注要落进一条 COMMENT ON 的
+    /// 字符串字面量里——换行留在库里，读回比对就永远差那一格。全空的 summary 与只有 inheritdoc
+    /// 而没有 summary 的那一种都交回 null = 没声明，而不是空串。</summary>
     static string? Fold(string text)
     {
         var builder = new StringBuilder(text.Length);
@@ -681,7 +680,7 @@ static class EntityFactsBuilder
         {
             if (char.IsWhiteSpace(ch))
             {
-                // 只在已经有内容时才记"欠一个空格"：注释首行紧跟在 <c>&lt;summary&gt;</c> 之后的那段换行不该变成前导空格。
+                // 只在已经有内容时才记"欠一个空格"：注释首行紧跟在 summary 标签之后的那段换行不该变成前导空格。
                 pending = builder.Length > 0;
                 continue;
             }
@@ -730,9 +729,8 @@ static class EntityFactsBuilder
 
     static ITypeSymbol Core(ITypeSymbol type) => IsNullableValue(type) ? ((INamedTypeSymbol)type).TypeArguments[0] : type;
 
-    /// <summary>默认格式的 <c>ToDisplayString()</c> 把内建类型写成关键字（<c>decimal</c>），
-    /// 那份名单是按全名匹配的，于是 decimal 会被判成导航属性并<b>静默少一列</b>。
-    /// 用 Qualified 格式是为了拿到 <c>System.Decimal</c>。</summary>
+    /// <summary>默认格式的 ToDisplayString 把内建类型写成关键字（decimal），那份名单是按全名匹配的，
+    /// 于是 decimal 会被判成导航属性并静默少一列。用 Qualified 格式是为了拿到 System.Decimal。</summary>
     static string FullName(ITypeSymbol type) => type.ToDisplayString(Qualified);
 
     static bool IsMappable(ITypeSymbol type)
@@ -751,9 +749,9 @@ static class EntityFactsBuilder
 
     static string? Name(AttributeData attribute) => attribute.AttributeClass is { } cls ? FullName(cls) : null;
 
-    /// <summary><c>[SplitTable]</c> 的抄本。档名存的是<em>可直接落进代码的表达式</em>而不是成员名，
-    /// 因为写注解的人也可以写 <c>(SplitKind)99</c> —— 那种值不该在生成期被咽掉：让它在运行期撞到
-    /// <c>SplitRouting</c> 那句「未知的分片档」，与反射路径同一句话（两侧一致性由此而来，而不是靠这里再校一遍）。</summary>
+    /// <summary>[SplitTable] 的抄本。档名存的是可直接落进代码的表达式而不是成员名，
+    /// 因为写注解的人也可以写 (SplitKind)99——那种值不该在生成期被咽掉：让它在运行期撞到
+    /// SplitRouting 那句「未知的分片档」，与反射路径同一句话（而不是靠这里再校一遍）。</summary>
     static SplitModel? SplitOf(IEnumerable<AttributeData> attributes)
     {
         var split = Find(attributes, QuickSqlSplit);
@@ -769,10 +767,9 @@ static class EntityFactsBuilder
         };
     }
 
-    /// <summary><c>[DataSource]</c> 的抄本：只抄集群名那一个字符串，<b>没打注解才是 null</b>。
-    /// 打了注解却交出空值（<c>[DataSource(null)]</c>）要落成 <c>""</c> 而不是 null：反射侧那种写法交回的是
-    /// <c>DataSourceFacts(null)</c>，两侧到 <c>EntityContractFactory</c> 撞的是同一句「名字是空的」（与
-    /// <see cref="SplitOf"/> 里 <c>Member ?? ""</c> 同一 handoff）。在这里咽成 null 就成了
+    /// <summary>[DataSource] 的抄本：只抄集群名那一个字符串，没打注解才是 null。
+    /// 打了注解却交出空值（[DataSource(null)]）要落成 "" 而不是 null：反射侧那种写法交回的是
+    /// DataSourceFacts(null)，两侧撞的是同一句「名字是空的」。在这里咽成 null 就成了
     /// 「G1 当没声明而照跑、G2 启动期抛」——那正是两侧不一致里最难查的那一种。</summary>
     static string? SourceOf(IEnumerable<AttributeData> attributes)
     {
@@ -781,9 +778,9 @@ static class EntityFactsBuilder
         return source is null ? null : Text(source, 0, "Cluster") ?? "";
     }
 
-    /// <summary>把枚举实参写成 <c>global::…SplitKind.Month</c>；按数值找不到成员名时退回强制转换。
-    /// <b>前缀在这里加、不在写手那里加</b>：三种退路（成员名、<c>(枚举)数值</c>、<c>default</c>）里只有前两种
-    /// 该带 <c>global::</c>，把它们各自写成完整形态，写手那一格就只管抄。</summary>
+    /// <summary>把枚举实参写成 global::…SplitKind.Month；按数值找不到成员名时退回强制转换。
+    /// 前缀在这里加、不在写手那里加：三种退路（成员名、(枚举)数值、default）里只有前两种
+    /// 该带 global::，把它们各自写成完整形态，写手那一格就只管抄。</summary>
     static string EnumExpression(AttributeData attribute, int position)
     {
         var argument = Argument(attribute, position);
@@ -791,8 +788,8 @@ static class EntityFactsBuilder
         if (argument?.Value is null)
             return "default";
 
-        // 两次 .Value：第一颗摘掉 <c>TypedConstant?</c> 的可空壳，第二颗才是实参那颗装箱的整数
-        // （枚举实参在 Roslyn 里存的就是底层整数值，与 <see cref="Tri"/> 同一件事）。
+        // 两次 .Value：第一颗摘掉 TypedConstant? 的可空壳，第二颗才是实参那颗装箱的整数
+        // （枚举实参在 Roslyn 里存的就是底层整数值，与 Tri 同一件事）。
         var raw = Convert.ToInt64(argument.Value.Value);
 
         if (argument?.Type is INamedTypeSymbol { TypeKind: TypeKind.Enum } enumType)
@@ -816,8 +813,8 @@ static class EntityFactsBuilder
     static TypedConstant? Named(AttributeData? attribute, string name)
         => attribute?.NamedArguments.FirstOrDefault(kv => kv.Key == name).Value;
 
-    /// <summary>先按位置读构造参数，读不到再按名字读命名参数——<c>[Column("x")]</c> 与
-    /// <c>[Column(Name = "x")]</c> 两种写法因此走同一条判定，与反射侧读到的属性值一致。</summary>
+    /// <summary>先按位置读构造参数，读不到再按名字读命名参数——[Column("x")] 与
+    /// [Column(Name = "x")] 两种写法因此走同一条判定，与反射侧读到的属性值一致。</summary>
     static string? Text(AttributeData? attribute, int position, string name)
         => Argument(attribute, position)?.Value as string ?? Named(attribute, name)?.Value as string;
 
@@ -826,7 +823,7 @@ static class EntityFactsBuilder
 
     static bool Bool(AttributeData? attribute, string name) => (bool)(Named(attribute, name)?.Value ?? false);
 
-    /// <summary>自研属性的三态：<c>Unset=0 / Yes=1 / No=2</c>。枚举实参在 <see cref="TypedConstant"/> 里就是底层整数。</summary>
+    /// <summary>自研属性的三态：Unset=0 / Yes=1 / No=2。枚举实参在 TypedConstant 里就是底层整数。</summary>
     static int Tri(AttributeData? attribute, string name) => (int)(Named(attribute, name)?.Value ?? 0);
 
     static List<string> Texts(AttributeData attribute, int position)

@@ -112,6 +112,60 @@ public sealed class SetOperationEmissionTests
         Assert.Contains("LEG2", plan.ModelText);
     }
 
+    /// <summary>①（2026-11-01 补的两口）：<c>INTERSECT</c> 与 <c>EXCEPT</c> 走同一条链路，关键字逐字是
+    /// 标准形 —— T-SQL 那一份。腿守卫与 <c>UnionAll</c> 同一条（同一颗 <c>SetOps</c>），不重复钉。</summary>
+    [Fact]
+    public void SqlServer_intersect_and_except_use_the_standard_keywords()
+    {
+        var intersect = Paid(SqlServerOrm).Intersect(Recent(SqlServerOrm)).ToSql();
+        var except = Paid(SqlServerOrm).Except(Recent(SqlServerOrm)).ToSql();
+
+        Assert.Equal(1, CountOf(intersect, " INTERSECT "));
+        Assert.Equal(1, CountOf(except, " EXCEPT "));
+        Assert.DoesNotContain(" UNION ", intersect);
+        Assert.DoesNotContain(" MINUS ", except);
+    }
+
+    /// <summary>①：PG 那一份 <c>INTERSECT</c> 同构 —— 确认方言分岔只落在 EXCEPT 那一档，
+    /// <c>INTERSECT</c> 全家标准字。</summary>
+    [Fact]
+    public void PostgreSql_intersect_keeps_the_standard_keyword()
+    {
+        var sql = Paid(PostgreSqlOrm).Intersect(Recent(PostgreSqlOrm)).ToSql();
+
+        Assert.Equal(3, CountOf(sql, "SELECT "));
+        Assert.Equal(1, CountOf(sql, " INTERSECT "));
+    }
+
+    /// <summary>①+③：Oracle 血统的 <c>EXCEPT</c> 发 <c>MINUS</c>（四种集合运算里唯一进方言的关键字分岔，
+    /// <c>DialectBase.ExceptKeyword</c> 那一格），包装式分页照旧包整串。</summary>
+    [Fact]
+    public void Oracle_family_emits_minus_for_except_and_wraps_for_paging()
+    {
+        var sql = Paid(OracleOrm)
+            .Except(Recent(OracleOrm))
+            .OrderBy(o => o.Id)
+            .Take(2)
+            .ToSql();
+
+        Assert.Equal(4, CountOf(sql, "SELECT "));
+        Assert.Equal(1, CountOf(sql, " MINUS "));
+        Assert.DoesNotContain(" EXCEPT ", sql);
+        Assert.Contains("ROWNUM", sql);
+    }
+
+    /// <summary>④：四种集合运算在模型文本里各自看得见 —— SOURCE 行随档落字（打规范形，
+    /// Oracle 族的 MINUS 是方言话，不进跨库稳定的模型文本）。</summary>
+    [Fact]
+    public void Explain_shows_intersect_and_except_lines()
+    {
+        var intersect = Paid(SqlServerOrm).Intersect(Recent(SqlServerOrm)).Explain();
+        var except = Paid(SqlServerOrm).Except(Recent(SqlServerOrm)).Explain();
+
+        Assert.Contains("SOURCE INTERSECT", intersect.ModelText);
+        Assert.Contains("SOURCE EXCEPT", except.ModelText);
+    }
+
     static int CountOf(string text, string token)
     {
         var count = 0;

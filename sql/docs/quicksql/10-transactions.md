@@ -28,7 +28,7 @@ using var ambient = orm.BeginAmbientTransaction();
 using var pinned = orm.BeginSessionTransaction();
 ```
 
-事务默认 `IsolationLevel.ReadCommitted`，可换；`propagation: TransactionPropagation.RequiresNew` 开独立新事务（`IQuickSqlTransaction`/`TransactionResult`/`TransactionPropagation` 在 `QuickSql.Transactions` 命名空间）。
+事务默认 `IsolationLevel.ReadCommitted`，可换；`BeginAmbientTransaction(level)` 同样收级别；`propagation: TransactionPropagation.RequiresNew` 开独立新事务（`IQuickSqlTransaction`/`TransactionResult`/`TransactionPropagation` 在 `QuickSql.Transactions` 命名空间）。**保存点路径上隔离级别继承外层**（SAVEPOINT 没有自己的隔离级别，SQL 标准行为）：嵌套时传了与外层不同的级别当场抛 `QuickSqlException` 指路 `RequiresNew`，传 `Unspecified`（没有表态）或相同级别照常放行。
 
 ### 四种形态怎么选
 
@@ -42,6 +42,7 @@ using var pinned = orm.BeginSessionTransaction();
 ## 2. 嵌套与保存点
 
 - **同一座集群上嵌套 `BeginTransaction`（默认 `Requires`）= 保存点**：内层 `Commit` 释放保存点、`Rollback` 回到保存点，计数器按嵌套深度命名（多层嵌套不会互撞同名）。
+- **嵌套传的 `IsolationLevel` 必须与外层一致（或 `Unspecified`）**：保存点继承外层的隔离级别，传不同级别当场拒——"要别的级别"的正当出口是 `RequiresNew`（挂起外层、按传入级别新开一条独立事务，两边互不影响）。
 - `RequiresNew` 挂起外层、开真正的新事务；**新事务开不出来时被挂起的那条会恢复回槽位**，不会永远回不来。
 - 跨集群的嵌套不是保存点（两阶段提交/XA 未建模）：`main` 的事务还开着时 `BeginTransaction("report")` 当场抛，消息写"请按集群分别开事务"。
 - 一只实例同时只钉一场会话事务（再钉当场抛）；提交/回滚/`Dispose` 后摘钩，还能再钉。

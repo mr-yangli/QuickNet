@@ -11,9 +11,9 @@ using Sc = System.ComponentModel;
 
 namespace QuickSql.Metadata;
 
-/// <summary>§10.2 的解析链实现：Fluent &gt; 自研属性 &gt; DataAnnotations &gt; 约定 &gt; provider 兜底。
-/// 这是 G2 兜底路径（启动期反射一次、结果冻结）；G1 源生成器产出同样的 <see cref="EntityContract"/>，
-/// 两条路径由 §13.11 的用例断言逐字段相等。</summary>
+/// <summary>注解解析链实现：Fluent > 自研属性 > DataAnnotations > 约定 > provider 兜底。
+/// 这是 G2 兜底路径（启动期反射一次、结果冻结）；G1 源生成器产出同样的 EntityContract，
+/// 两条路径由对拍用例断言逐字段相等。</summary>
 public sealed class ContractResolver(IDbProvider provider, ModelConfiguration? configuration = null,
     bool integralPrimaryKeyAutoIncrement = true)
 {
@@ -23,7 +23,7 @@ public sealed class ContractResolver(IDbProvider provider, ModelConfiguration? c
 
     public ModelConfiguration Configuration { get; } = configuration ?? new ModelConfiguration();
 
-    /// <summary>约定那一档给不给"整型主键 ⇒ 自增"（<see cref="QuickSqlOrmOptions.IntegralPrimaryKeyAutoIncrement"/>）。
+    /// <summary>约定那一档给不给"整型主键 ⇒ 自增"（QuickSqlOrmOptions.IntegralPrimaryKeyAutoIncrement）。
     /// 它只挪约定：注解与 Fluent 表过态的列照旧赢过它。</summary>
     public bool IntegralPrimaryKeyAutoIncrement { get; } = integralPrimaryKeyAutoIncrement;
 
@@ -36,8 +36,8 @@ public sealed class ContractResolver(IDbProvider provider, ModelConfiguration? c
     public EntityContract Resolve<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>()
         where T : class => Resolve(typeof(T));
 
-    /// <summary>那一根集合边上点名的外键成员（<c>[ForeignKey]</c> 的第二档）。
-    /// 找不到那一根边（导航没被契约收录）就给空串，调用方照旧走第一、第三档 —— 这一格不替配置错误编一个"没有声明"。</summary>
+    /// <summary>那一根集合边上点名的外键成员（[ForeignKey] 的第二档）。
+    /// 找不到那一根边（导航没被契约收录）就给空串，调用方照旧走第一、第三档——这一格不替配置错误编一个"没有声明"。</summary>
     static IReadOnlyList<string> DeclaredFkMembers(EntityContract parent, string memberName)
     {
         foreach (var edge in parent.Collections)
@@ -47,10 +47,10 @@ public sealed class ContractResolver(IDbProvider provider, ModelConfiguration? c
         return [];
     }
 
-    /// <summary>第二档：把集合导航上点名的外键成员换算成<b>子端的列名</b>；这根导航没有点名就返回 <c>null</c>。
-    /// 三处反推外键的路（<c>DbSet.Load</c>、<c>IncludeMany</c>、子查询里的集合导航）与级联落键那一条
-    /// （<c>ChangeTracker.ResolveCascadeForeignKey</c>）共用这一颗：同一根边不许在两条路径上得到两个答案，
-    /// 否则"级联插得进去、Load 捞不上来"会把级联删除那条出路（先捞进会话再删）走成死路。</summary>
+    /// <summary>第二档：把集合导航上点名的外键成员换算成子端的列名；这根导航没有点名就返回 null。
+    /// 三处反推外键的路（DbSet.Load、IncludeMany、子查询里的集合导航）与级联落键那一条共用这一颗：
+    /// 同一根边不许在两条路径上得到两个答案，否则"级联插得进去、Load 捞不上来"
+    /// 会把级联删除那条出路（先捞进会话再删）走成死路。</summary>
     internal static IReadOnlyList<string>? ResolveDeclaredFkColumns(EntityContract parent, EntityContract child, string memberName)
     {
         var declared = DeclaredFkMembers(parent, memberName);
@@ -96,7 +96,7 @@ public sealed class ContractResolver(IDbProvider provider, ModelConfiguration? c
         }
 
         // 收尾（provider 的 storage defaults、自增约定、索引与外键的列名换算）在 EntityContractFactory 里，
-        // 与 G1 生成的事实共用同一段代码：这条链的正确性由 §13.11 的两侧逐字段相等断言兜住。
+        // 与 G1 生成的事实共用同一段代码：这条链的正确性由两侧逐字段相等的对拍断言兜住。
         return EntityContractFactory.Build(clrType, table, [.. columns], ResolveIndexFacts(clrType, fluent),
             ResolveRelationships(members, columns), Provider.Types, IntegralPrimaryKeyAutoIncrement,
             ResolveSkipIndexes(clrType));
@@ -121,9 +121,8 @@ public sealed class ContractResolver(IDbProvider provider, ModelConfiguration? c
         var source = clrType.GetCustomAttribute<DataSourceAttribute>();
 
         // 表备注与表名同一条优先级链（Fluent > 注解 > 文档兜底），只是最后一层只长在 G1（xmlDoc 开关）。
-        // 系统的 <c>System.ComponentModel.DataAnnotations.Schema.TableAttribute</c> 只有 Name/Schema 两格，
-        // 备注那一格由组件模型的 <c>[Description]</c>（System.ComponentModel）继承：它就是从前的
-        // 自研 <c>[Table(Comment=…)]</c> 那一格退场后的接棒者，座次也照旧 —— 排在 Fluent 之后。
+        // 系统的 TableAttribute 只有 Name/Schema 两格，备注那一格由组件模型的 [Description]
+        // （System.ComponentModel）提供，座次排在 Fluent 之后。
         var comment = fluent?.Comment ?? clrType.GetCustomAttribute<Sc.DescriptionAttribute>()?.Description;
 
         return new TableInfo(fluent?.Schema ?? data?.Schema, name,
@@ -154,25 +153,24 @@ public sealed class ContractResolver(IDbProvider provider, ModelConfiguration? c
                 facts.Ignored = "[NotMapped]";
             else if (!property.CanWrite)
                 // 没有写口的成员既落不回值（读取器给它赋值会在编译当场 ArgumentException:
-                // Expression must be writeable），也不是数据：ABP 那一族实体上的
-                // <c>public bool RequiresManualGrading =&gt; Type == …</c> 就是这一形 —— 它是算法。
-                // 按非公开写口问一次（<c>CanWrite</c>）而不是按公共写口：{ get; protected set; }
-                // 与 { get; init; } 都是能落的形状（编译后的表达式树不受可访问性限制），
-                // 把它们一起摘掉会让整族 ABP 实体的键与明细列凭空消失。
+                // Expression must be writeable），也不是数据：public bool X => Type == … 那一形是算法。
+                // 按非公开写口问一次（CanWrite）而不是按公共写口：{ get; protected set; } 与 { get; init; }
+                // 都是能落的形状（编译后的表达式树不受可访问性限制），
+                // 把它们一起摘掉会让整族实体的键与明细列凭空消失。
                 facts.Ignored = "没有写口（计算属性，不是列）";
             else if (property.PropertyType == typeof(byte[]) || IsMappable(property.PropertyType))
                 facts.Nullability = nullability.Create(property).WriteState;
             else if (IsReferenceNavigation(property.PropertyType))
             {
-                // 引用导航不是列，但它是关系：外键列在依赖侧这一张表上，早先那一版把它连同别的
-                // 不可映射类型一起丢掉，于是写侧连"谁依赖谁"都无从知道（§8.2 的拓扑那一格）。
+                // 引用导航不是列，但它是关系：外键列在依赖侧这一张表上。把它连同别的不可映射类型
+                // 一起丢掉的话，写侧连"谁依赖谁"都无从知道。
                 facts.Ignored = "引用导航（不是列）";
                 facts.Reference = Nullable.GetUnderlyingType(property.PropertyType) ?? property.PropertyType;
                 facts.ForeignKeyMembers = ForeignKeyOf(property);
             }
             else if (property.CanRead && CollectionElementOf(property.PropertyType) is { } element)
             {
-                // 集合导航也不是列，但它是<em>朝反了的那一根</em>关系（父端 → 子端，外键在子端那张表上）。
+                // 集合导航也不是列，但它是朝反了的那一根关系（父端 → 子端，外键在子端那张表上）。
                 // 丢掉它 = 级联没有边可走，于是 Add 不带子实体、Remove 留一串孤行。
                 facts.Ignored = "集合导航（不是列）";
                 facts.Collection = element;
@@ -202,10 +200,9 @@ public sealed class ContractResolver(IDbProvider provider, ModelConfiguration? c
                || core.IsEnum;
     }
 
-    /// <summary>引用导航 = 类类型、不是 <c>string</c>、不是集合形态（数组与 <c>List&lt;T&gt;</c> 走
-    /// <see cref="CollectionElementOf"/> 那一格，成为朝反了的边）。
-    /// <b>判定不要求目标类型是实体</b>——一个 <c>Uri</c> 属性配上 <c>UriId</c> 列也会算出一条边，
-    /// 而这条边今天唯一的用法（写序）对没有跟踪档的类型天然无效。G1 侧 <c>IsReferenceNavigation</c> 同一条。</summary>
+    /// <summary>引用导航 = 类类型、不是 string、不是集合形态（数组与 List 走 CollectionElementOf 那一格，
+    /// 成为朝反了的边）。判定不要求目标类型是实体——一个 Uri 属性配上 UriId 列也会算出一条边，
+    /// 而这条边今天唯一的用法（写序）对没有跟踪档的类型天然无效。G1 侧同一条判据。</summary>
     static bool IsReferenceNavigation(Type type)
     {
         var core = Nullable.GetUnderlyingType(type) ?? type;
@@ -213,12 +210,10 @@ public sealed class ContractResolver(IDbProvider provider, ModelConfiguration? c
         return core.IsClass && core != typeof(string) && !typeof(IEnumerable).IsAssignableFrom(core);
     }
 
-    /// <summary>集合导航的元素型：收下了 <see cref="IEnumerable"/>（非泛型那一颗）又不是 <c>string</c>
-    /// 也不是 <c>byte[]</c>（那两格在上面那条链里已经是列）的形状，取它 <c>IEnumerable&lt;T&gt;</c> 的那个 <c>T</c>。
-    /// <b>只有类形态的元素才算集合导航</b>：<c>List&lt;string&gt;</c>、<c>List&lt;int&gt;</c>、
-    /// <c>Dictionary&lt;K,V&gt;</c>（元素是 <c>KeyValuePair</c> 结构体）这些都是标签或配置，不是一串子行，
-    /// 给它们出一条边会让 <c>Add</c> 在根本不该级联的地方找外键。两侧同一判据（G1 侧
-    /// <c>CollectionElementOf</c>）。</summary>
+    /// <summary>集合导航的元素型：收下了 IEnumerable（非泛型）又不是 string、也不是 byte[]（那两格在上面
+    /// 那条链里已经是列）的形状，取它 IEnumerable&lt;T&gt; 的那个 T。只有类形态的元素才算集合导航：
+    /// List&lt;string&gt;、List&lt;int&gt;、Dictionary（元素是 KeyValuePair 结构体）这些都是标签或配置，
+    /// 不是一串子行，给它们出一条边会让 Add 在根本不该级联的地方找外键。两侧同一判据（G1 侧同名）。</summary>
     [RequiresUnreferencedCode("按运行期 Type 反射判集合元素型。")]
     [RequiresDynamicCode("按运行期 Type 反射判集合元素型。")]
     static Type? CollectionElementOf(Type type)
@@ -239,14 +234,14 @@ public sealed class ContractResolver(IDbProvider provider, ModelConfiguration? c
         return null;
     }
 
-    /// <summary><c>[NoCascade]</c> 的两档：打在实体上是"这一张表的导航都不带人"，打在具体那根集合导航上
+    /// <summary>[NoCascade] 的两档：打在实体上是"这一张表的导航都不带人"，打在具体那根集合导航上
     /// 是"只有这一根不带"。级联缺省为开，所以这里只判退出（G1 侧同一条，注解读的是源码符号）。</summary>
     static bool IsNoCascade(MemberFacts member)
         => member.Property.GetCustomAttribute<NoCascadeAttribute>() is not null
            || member.Property.DeclaringType!.GetCustomAttribute<NoCascadeAttribute>() is not null;
 
-    /// <summary><c>[ForeignKey]</c> 只读<em>导航属性</em>上那一颗（反向标注在属性上、指向导航的那一种
-    /// 形态没有实现，§10.2 的层清单里它本来就只有一格）。逗号分隔 = 复合外键，两侧同一句拆分。</summary>
+    /// <summary>[ForeignKey] 只读导航属性上那一颗（反向标注在属性上、指向导航的那一种形态没有实现）。
+    /// 逗号分隔 = 复合外键，两侧同一句拆分。</summary>
     static string[]? ForeignKeyOf(PropertyInfo property)
         => property.GetCustomAttribute<DaSchema.ForeignKeyAttribute>() is { } declared ? Split(declared.Name) : null;
 
@@ -261,14 +256,12 @@ public sealed class ContractResolver(IDbProvider provider, ModelConfiguration? c
         return members.Length > 0 ? members : null;
     }
 
-    /// <summary>声明折成 <see cref="RelationshipFacts"/>，与索引同一取向：列名换算、
-    /// 「外键指向未映射属性」那条拒绝都在 <see cref="EntityContractFactory"/>，只有一份。
-    /// <b>约定那一档要先自己确认属性在场</b>：命不中就根本没有关系（不是错误），
-    /// 而 <c>[ForeignKey]</c> 写了却没那一列 = 配置错误，交给收尾那条消息抛出去。
-    ///
-    /// <para>集合那一格另算：它的外键成员在<em>子端</em>那张表上，这里既换算不了、也不该拿本实体的列清单
-    /// 去比，所以声明只带着成员名原样走（没声明就是空数组，运行期级联那一处再解），而级联要的那把读口
-    /// 在这里编译一次 —— 启动期反射、级联每行只调委托（§12.7 C 那条界线）。</para></summary>
+    /// <summary>声明折成 RelationshipFacts，与索引同一取向：列名换算、「外键指向未映射属性」那条拒绝
+    /// 都在 EntityContractFactory，只有一份。约定那一档要先自己确认属性在场：命不中就根本没有关系（不是错误），
+    /// 而 [ForeignKey] 写了却没那一列 = 配置错误，交给收尾那条消息抛出去。集合那一格另算：
+    /// 它的外键成员在子端那张表上，这里既换算不了、也不该拿本实体的列清单去比，所以声明只带着成员名
+    /// 原样走（没声明就是空数组，运行期级联那一处再解），而级联要的那把读口在这里编译一次——
+    /// 启动期反射、级联每行只调委托。</summary>
     [RequiresUnreferencedCode("集合导航的读口按运行期类型与成员名定位属性。")]
     [RequiresDynamicCode("集合导航的读口是编译出来的表达式树。")]
     static IReadOnlyList<RelationshipFacts> ResolveRelationships(List<MemberFacts> members, List<ColumnFacts> columns)
@@ -347,7 +340,7 @@ public sealed class ContractResolver(IDbProvider provider, ModelConfiguration? c
         var stringLength = property.GetCustomAttribute<Da.StringLengthAttribute>();
         var maxLength = property.GetCustomAttribute<Da.MaxLengthAttribute>();
 
-        // 同层冲突：StringLength 与 MaxLength 都在 DataAnnotations 层（§10.2）。取严格者会把
+        // 同层冲突：StringLength 与 MaxLength 都在 DataAnnotations 层。取严格者会把
         // 「建表按 20、校验按 50」这种三个月后才现形的 bug 藏起来，所以直接抛。
         if (stringLength is not null && maxLength is not null)
             throw new MetadataConflictException(name, [$"[StringLength({stringLength.MaximumLength})]", $"[MaxLength({maxLength.Length})]"]);
@@ -383,17 +376,20 @@ public sealed class ContractResolver(IDbProvider provider, ModelConfiguration? c
 
         var storeType = fluentMember?.StoreTypeName ?? dataColumn?.TypeName;
 
-        // 备注的两档注解：组件模型的 [Description]（System.ComponentModel）是自研 [Column(Comment=…)]
-        // 退场后的接棒者，座次照旧 —— 排在 Fluent 之后；DataAnnotations 的 [Display]（描述/显示名）
-        // 接在它后面作兜底（这条链从前只到 Display，[Description] 与它们同层竞争）。
+        // 备注的两档注解：组件模型的 [Description]（System.ComponentModel）座次排在 Fluent 之后；
+        // DataAnnotations 的 [Display]（描述/显示名）接在它后面作兜底。
         var description = property.GetCustomAttribute<Sc.DescriptionAttribute>()?.Description;
         var display = property.GetCustomAttribute<Da.DisplayAttribute>();
         var comment = fluentMember?.Comment ?? description ?? display?.Description ?? display?.Name;
 
-        // 并发列的来源：自研属性与 Fluent（DataAnnotations 那一层没有等价注解 —— 带这个语义的
-        // TimestampAttribute/ConcurrencyCheckAttribute 住在 EF Core 的程序集里，引它等于引 EF Core），
-        // 再加一条成员名约定 —— ConcurrencyStamp 就是 ABP/IHasConcurrencyStamp 那一族的现成拼写，
-        // 约定直接把它认成应用给值的并发列，那一族实体一个注解都不用加。
+        // 默认值的两档：Fluent 的 HasDefaultValue 在上，组件模型的 [DefaultValue]（System.ComponentModel）
+        // 在下 —— 与备注那条链同一个座次。值域与类型相容的门禁不在这一格跑：它在 EntityContractFactory
+        // 收尾那一格（G1 ∶ G2 两侧共用一份），这里只把声明抄进事实。
+        var defaultValue = fluentMember?.DefaultValue ?? property.GetCustomAttribute<Sc.DefaultValueAttribute>()?.Value;
+
+        // 并发列的来源：自研属性与 Fluent（DataAnnotations 那一层没有等价注解——带这个语义的注解
+        // 住在 EF Core 的程序集里，引它等于引 EF Core），再加一条成员名约定：ConcurrencyStamp 那一族
+        // 的现成拼写直接认成应用给值的并发列，那一族实体一个注解都不用加。
         // 显式声明压在约定之上：打了 [ConcurrencyToken] 的列按声明那一档算（默认只比较不书写），
         // 要第三族就明说（AppSetsValue 参数 / Fluent 同名口）。
         var tokenAttribute = property.GetCustomAttribute<ConcurrencyTokenAttribute>();
@@ -426,6 +422,7 @@ public sealed class ContractResolver(IDbProvider provider, ModelConfiguration? c
             Scale = scale,
             StoreTypeName = storeType,
             Comment = comment,
+            DefaultValue = defaultValue,
             IsConcurrencyToken = token == true,
             AppSetsValue = token == true && appSets == true,
             ConcurrencyNote = token == true
@@ -462,10 +459,10 @@ public sealed class ContractResolver(IDbProvider provider, ModelConfiguration? c
         if (type.IsValueType && Nullable.GetUnderlyingType(type) is null)
             return (false, MetadataLayer.Convention, "值类型非 Nullable ⇒ 非空列", true);
 
-        // Unknown = 这段代码根本不在可空上下文里（`#nullable disable`、没带可空元数据的引用程序集 ——
-        // 整份 ABP/DDD 框架代码天天在这一格）。它说的是"我没表过态"，不是"我说了非空"，所以列的形状
-        // 照旧按非空建（改那一格等于替现库批量 DROP NOT NULL），而 §10.6 的必填尺子不量它。
-        // 编译期那侧的同一格是 NullableAnnotation.None，两侧同形由 §13.11 的对拍钉住。
+        // Unknown = 这段代码根本不在可空上下文里（#nullable disable、没带可空元数据的引用程序集——
+        // 整份框架代码天天在这一格）。它说的是"我没表过态"，不是"我说了非空"，所以列的形状照旧按非空建
+        // （改那一格等于替现库批量 DROP NOT NULL），而必填尺子不量它。
+        // 编译期那侧的同一格是 NullableAnnotation.None，两侧同形由对拍钉住。
         if (member.Nullability == NullabilityState.Unknown)
             return (false, MetadataLayer.Convention, "C# 没表过态（可空上下文之外）⇒ 建表按非空列，不落必填尺子", false);
 
@@ -473,9 +470,8 @@ public sealed class ContractResolver(IDbProvider provider, ModelConfiguration? c
             member.Nullability == NullabilityState.Nullable ? "C# 可空 ⇒ 可空列" : "C# 非空 ⇒ 非空列", true);
     }
 
-    /// <summary>只把声明抄成 <see cref="IndexFacts"/>：名字/量纲的换算、同名冲突判定都在
-    /// <see cref="EntityContractFactory"/>，与 G1 生成的那条共用一份。<b>顺序即优先级</b>（§10.2），
-    /// 所以 Fluent 必须排在注解后面。</summary>
+    /// <summary>只把声明抄成 IndexFacts：名字/量纲的换算、同名冲突判定都在 EntityContractFactory，
+    /// 与 G1 生成的那条共用一份。顺序即优先级，所以 Fluent 必须排在注解后面。</summary>
     [RequiresUnreferencedCode("读取 [Index] 注解。")]
     IReadOnlyList<IndexFacts> ResolveIndexFacts(Type clrType, FluentEntity? fluent)
     {
@@ -491,8 +487,8 @@ public sealed class ContractResolver(IDbProvider provider, ModelConfiguration? c
     }
 
     /// <summary>跳过索引声明只认自研注解那一层（Fluent 侧今天不落这一格）。类挂与属性挂两条来路
-    /// 收进同一份名单按声明序排：表级在前、列级在后，与 G1 生成器 <c>SkipIndexesOf</c> 的次序一致 ——
-    /// 顺序也算对拍的内容（§13.11）。抄声明而已：成员换算与约定名都在收尾那一份里（§10.3）。</summary>
+    /// 收进同一份名单按声明序排：表级在前、列级在后，与 G1 生成器的次序一致——顺序也算对拍的内容。
+    /// 抄声明而已：成员换算与约定名都在收尾那一份里。</summary>
     [RequiresUnreferencedCode("G2 兜底路径按 Type 扫描属性与注解；主路径是 G1 源生成。")]
     IReadOnlyList<SkipIndexFacts> ResolveSkipIndexes(Type clrType)
     {
@@ -547,20 +543,20 @@ public sealed class ContractResolver(IDbProvider provider, ModelConfiguration? c
 
         public string? Ignored { get; set; }
 
-        /// <summary>反射侧读的是 <see cref="NullabilityInfoContext"/> 的 WriteState，三态原样留着：
-        /// <c>Unknown</c>（可空上下文之外，没表过态）与 <c>NotNull</c>（表过态说非空）在必填尺子上是两个答案。
-        /// 缺省取 <see cref="NullabilityState.NotNull"/> —— 走不到这一格的成员本来就不是列。</summary>
+        /// <summary>反射侧读的是 NullabilityInfoContext 的 WriteState，三态原样留着：
+        /// Unknown（可空上下文之外，没表过态）与 NotNull（表过态说非空）在必填尺子上是两个答案。
+        /// 缺省取 NotNull——走不到这一格的成员本来就不是列。</summary>
         public NullabilityState Nullability { get; set; } = NullabilityState.NotNull;
 
-        /// <summary>非 null = 这一格是引用导航，值为主端实体的 CLR 类型。它与 <see cref="Ignored"/> 同时存在
-        /// 是故意的：「不是列」与「是一条关系」是两个问题，各自有各自的答案。</summary>
+        /// <summary>非 null = 这一格是引用导航，值为主端实体的 CLR 类型。它与 Ignored 同时存在是故意的：
+        /// 「不是列」与「是一条关系」是两个问题，各自有各自的答案。</summary>
         public Type? Reference { get; set; }
 
-        /// <summary>非 null = 这一格是<em>集合</em>导航，值为元素型（子端 CLR 型）。与 <see cref="Reference"/>
-        /// 互斥：一根导航的型要么是引用要么是集合，判定链上先问引用。</summary>
+        /// <summary>非 null = 这一格是集合导航，值为元素型（子端 CLR 型）。与 Reference 互斥：
+        /// 一根导航的型要么是引用要么是集合，判定链上先问引用。</summary>
         public Type? Collection { get; set; }
 
-        /// <summary>只有 <c>[ForeignKey]</c> 给过名字才非 null；约定那一档在 <c>ResolveRelationships</c> 里判。</summary>
+        /// <summary>只有 [ForeignKey] 给过名字才非 null；约定那一档在 ResolveRelationships 里判。</summary>
         public string[]? ForeignKeyMembers { get; set; }
     }
 }

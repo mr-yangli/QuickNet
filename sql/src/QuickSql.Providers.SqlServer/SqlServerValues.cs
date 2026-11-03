@@ -7,10 +7,10 @@ using QuickSql.Values;
 
 namespace QuickSql.Providers.SqlServer;
 
-/// <summary>T-SQL 的参数绑定与字面量内联（§4 的差异面收口）。
-/// 两条硬事实决定了这里的默认值：一是 <c>varchar</c> 在 cp1252 排序规则下会把中文静默写成 <c>?</c>（§10.4），
-/// 所以字符串一律按 Unicode 传参、字面量带 <c>N''</c>；二是 <c>uniqueidentifier</c> 是原生类型，
-/// 所以 <c>Guid</c> 不做文本化（跨库对齐的场景才需要 <c>GuidAsText</c>）。</summary>
+/// <summary>T-SQL 的参数绑定与字面量内联。
+/// 两条硬事实决定了这里的默认值：一是 varchar 在 cp1252 排序规则下会把中文静默写成 ?，
+/// 所以字符串一律按 Unicode 传参、字面量带 N''；二是 uniqueidentifier 是原生类型，
+/// 所以 Guid 不做文本化（跨库对齐的场景才需要 GuidAsText）。</summary>
 public sealed class SqlServerValues : IValueBinder
 {
     public static SqlServerValues Instance { get; } = new();
@@ -30,7 +30,7 @@ public sealed class SqlServerValues : IValueBinder
     {
         null => DBNull.Value,
 
-        // enum 存 INT 是 §9.3 的既定映射，而驱动不会替我们转：直接传枚举实例会被当成字符串或报错。
+        // enum 存 INT 是既定映射，而驱动不会替我们转：直接传枚举实例会被当成字符串或报错。
         { } typed when typed.GetType().IsEnum => Convert.ChangeType(typed, Enum.GetUnderlyingType(typed.GetType()), CultureInfo.InvariantCulture),
 
         var typed => typed,
@@ -74,7 +74,7 @@ public sealed class SqlServerValues : IValueBinder
             var t when t == typeof(decimal) => DbType.Decimal,
 
             // DateTime 必须给 DateTime2：默认的 DbType.DateTime 上线的是遗留 datetime，会先把值取整到
-            // 1/300 秒（.456 → .457）才进那个 datetime2(3) 的列，等值查询就此永远差那几毫秒（§9.3）。
+            // 1/300 秒（.456 → .457）才进那个 datetime2(3) 的列，等值查询就此永远差那几毫秒。
             var t when t == typeof(DateTime) => DbType.DateTime2,
             var t when t == typeof(DateTimeOffset) => DbType.DateTimeOffset,
             var t when t == typeof(DateOnly) => DbType.Date,
@@ -96,7 +96,7 @@ public sealed class SqlServerValues : IValueBinder
                 sql = "NULL";
                 return true;
 
-            // 字面量必须带 N 前缀，否则字串在解析期就被降级成排序规则的代码页（§10.4 第一行）。
+            // 字面量必须带 N 前缀，否则字串在解析期就被降级成排序规则的代码页。
             case string text:
                 sql = Literal(text, hint is not { Unicode: false });
                 return true;
@@ -148,13 +148,10 @@ public sealed class SqlServerValues : IValueBinder
         }
     }
 
-    /// <summary>浮点内联只有一件事要做对：<b>纯整数形式要补小数点，指数式不许补</b>。
-    /// 前者是 <c>3</c> 贴进 SSMS 会按 int 常量处理、小数位丢失；后者实测过 —— <c>SELECT 1E-08</c> 是合法的
-    /// float 常量（回读 1E-08），而补出来的 <c>1E-08.0</c> 报「.0 附近有语法错误」，
-    /// 也就是原来那一格把方向写反了：它对指数式补、对纯整数也补，前者补坏了产物。
-    /// 非有限值（<c>NaN</c> / <c>∞</c> / <c>-∞</c>）交回空串，由调用方退回参数路径 —— 判据是「整串都是浮点
-    /// 字面量允许的字符」而不是「首字符像数字」：<c>-∞</c> 打头那颗 <c>-</c> 是合法的浮点首字符，
-    /// 只判首字符会把它放过来并补成 <c>-∞.0</c>（这一格 v0.22 写了两次才发现）。</summary>
+    /// <summary>浮点内联只有一件事要做对：纯整数形式要补小数点（3 贴进 SSMS 会按 int 常量处理、
+    /// 小数位丢失），指数式不许补（SELECT 1E-08 是合法的 float 常量，补成 1E-08.0 报「.0 附近有语法错误」）。
+    /// 非有限值（NaN / ∞ / -∞）交回空串，由调用方退回参数路径——判据是「整串都是浮点字面量允许的字符」
+    /// 而不是「首字符像数字」：-∞ 打头那颗 - 是合法的浮点首字符，只判首字符会把它放过来并补成 -∞.0。</summary>
     static string InlineNumber(object? value)
     {
         var text = Convert.ToString(value, CultureInfo.InvariantCulture)!;

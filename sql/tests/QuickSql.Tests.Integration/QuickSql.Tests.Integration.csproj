@@ -36,39 +36,18 @@
     <ProjectReference Include="..\QuickSql.Tests.Common\QuickSql.Tests.Common.csproj" />
   </ItemGroup>
 
-  <PropertyGroup>
-    <!-- 【v0.33】原生同伴按平台选路的那一颗：win / X64 / Arm64 三个取值，默认由构建主机算出，
-         命令行 -p:XuguHostPlatform=… 可强制（全局属性压过下面两句），三条分支因此都能被求值测试摸到。
-         它只决定"拷哪一颗原生同伴进 drivers/"；托管那一份 XuguClient.dll 两家同名同颗，不参与条件。 -->
-    <XuguHostPlatform Condition="'$(OS)' == 'Windows_NT'">win</XuguHostPlatform>
-    <XuguHostPlatform Condition="'$(OS)' != 'Windows_NT'">$([System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture)</XuguHostPlatform>
-  </PropertyGroup>
-
   <ItemGroup>
     <!-- 虚谷那一份驱动：把厂商交付物（src/QuickSql.Providers.Xugu/Driver/，本仓库只存字节、编译期不引用）
          Link 到输出目录的 drivers/ 下 —— 这正是"信创现场把 DLL 丢进 drivers/"那一手的仓库内复刻，
          让 §9.5 的运行期解析链在集成层也真跑一次，而不是靠某台机器上手工拷过的一份副本。
-         托管那一份与原生同伴必须<em>一起</em>放：只有前者时解析照样成功、要到 Open 才抛
-         DllNotFoundException（v0.32 第一格 bare 那颗反证），那种红读起来像"库连不上"。
-         只有 QUICKSQL_TEST_PROVIDER=xugu 那一跑会用到它们；SQL Server 那一跑不认识 drivers/ 里的这两颗，
+         只有 QUICKSQL_TEST_PROVIDER=xugu 那一跑会用到它；SQL Server 那一跑不认识 drivers/ 里这颗，
          所以这一句不会把默认路径变成"依赖第五家的产物"。
-         【v0.33 条件化】这四行以前只有两颗无条件拷贝，而第二颗把 Windows 的 xugusql.dll 写死了 ——
-         在 Linux 构建主机上它照样拷（拷进去一颗 PE），真正要的 libxugusql.so 反而一颗都不到。
-         厂商文档（驱动安装一节）与实测字节两头都对上了这个分岔：Windows 载荷 = XuguClient.dll + xugusql.dll，
-         Linux 载荷 = XuguClient.dll + libxugusql.so，且 x86_64 与 aarch64 各一颗（sha256 互不相同）。
-         厂商交付的字节如今按平台分三格躺：Driver/windows/、Driver/linux-x86_64/、Driver/linux-aarch64/，
-         三格各带自己那颗原生同伴（sha256 互不相同，Linux 那两颗连架构都不同），托管那一份 XuguClient.dll
-         在根上不分平台。下面四行因此一一对齐：win 那档取 windows/xugusql.dll（MZ/PE），X64 与 Arm64
-         各取自己那一格的 libxugusql.so（ELF64）。
-         顺带记一笔订正：Driver/windows/ 里曾经还躺着 libxugusql.so / _static.a / .h 三颗，magic 全数过
-         才发现是厂商把 ELF64 x86-64 的载荷放错了目录（e_machine 0x3e，不是 Windows 载荷），72d9256 已把那三颗删掉；
-         这一句的 Include 也曾跟着那次整理一并断了，今天重新接上 —— 三档从此同构。
-         macOS 与其他 CPU 架构没有厂商载荷，三条分支之外 drivers/ 里就只有托管那一份：
-         照 bare 那颗反证的形状，Open 才炸 —— 那种红从此有了名字。 -->
+         【本版改判，厂商 4.0.0.8】v0.32–v0.33 那三行"按平台拷原生同伴"（windows/xugusql.dll、
+         linux-x86_64 与 linux-aarch64 各一颗 libxugusql.so）连同选档那颗 XuguHostPlatform 一并删了，
+         厂商交付物从此只有托管这一颗：实测 drivers/ 里只摆 XuguClient.dll 时 Open 照样成功、
+         没有 DllNotFoundException。所以 v0.32 bare 那颗反证（"只有托管那一份时到 Open 才炸"）
+         从今天起是 3.3.4.5 的事实，不再是本仓库交付物的事实。 -->
     <None Include="..\..\src\QuickSql.Providers.Xugu\Driver\XuguClient.dll" Link="drivers\XuguClient.dll" CopyToOutputDirectory="PreserveNewest" />
-    <None Include="..\..\src\QuickSql.Providers.Xugu\Driver\windows\xugusql.dll" Link="drivers\xugusql.dll" CopyToOutputDirectory="PreserveNewest" Condition="'$(XuguHostPlatform)' == 'win'" />
-    <None Include="..\..\src\QuickSql.Providers.Xugu\Driver\linux-x86_64\libxugusql.so" Link="drivers\libxugusql.so" CopyToOutputDirectory="PreserveNewest" Condition="'$(XuguHostPlatform)' == 'X64'" />
-    <None Include="..\..\src\QuickSql.Providers.Xugu\Driver\linux-aarch64\libxugusql.so" Link="drivers\libxugusql.so" CopyToOutputDirectory="PreserveNewest" Condition="'$(XuguHostPlatform)' == 'Arm64'" />
   </ItemGroup>
 
   <ItemGroup>

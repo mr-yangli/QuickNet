@@ -112,7 +112,21 @@ model.Entity<Order>().Property(o => o.RowVersion).IsConcurrencyToken(false);
 model.Entity<Order>().Property(o => o.Id).HasColumnName("OrderId").IsIdentity(true);
 ```
 
-`PropertyBuilder` 全量：`HasColumnName`、`HasMaxLength`、`HasPrecision(int, int)`、`HasDbType(string)`、`HasComment`、`IsRequired(bool = true)`、`IsKey(bool = true)`、`IsIdentity(bool = true)`、`IsIgnore()`、`IsConcurrencyToken(bool = true)`、`AppSetsValue(bool = true)`。
+Fluent 有两个入口：**orm 级全局默认**（`QuickSqlOrmOptions.Model`，对不覆写钩子的上下文生效）与**上下文级**（派生类 `protected override void OnModelCreating(ModelBuilder mb)`，EF 同形；**覆写即整份模型**——这一只上下文不再吃 orm 级那份，细节见 [09 篇 §1.5](09-dbcontext-and-tracking.md)）。两处配的是同一套 builder：
+
+```csharp
+protected override void OnModelCreating(ModelBuilder mb)
+{
+    mb.Entity<Order>(e =>
+    {
+        e.ToTable("Orders");
+        e.Property(o => o.CustomerName).HasColumnName("CustName").HasMaxLength(64).IsRequired();
+        e.HasIndex(o => o.CreatedAt);
+    });
+}
+```
+
+`PropertyBuilder` 全量：`HasColumnName`、`HasMaxLength`、`HasPrecision(int, int)`、`HasDbType(string)`、`HasComment`、`HasDefaultValue(object)`（列默认值，见 [13 篇 §7](13-schema-sync.md)；值域只收常量字面量档，DateTime/byte[]/枚举与自增/主键列声明期拒）、`IsRequired(bool = true)`、`IsKey(bool = true)`、`IsIdentity(bool = true)`、`IsIgnore()`、`IsConcurrencyToken(bool = true)`、`AppSetsValue(bool = true)`。
 
 装配：
 

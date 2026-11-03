@@ -104,6 +104,23 @@ await orm.SyncStructureAsync();
 - 反向工程只有 SPI 形状（`ISchemaReader`），读不回主键/注释/自增标记——别指望 CodeFirst + SchemaReader 做双向。
 - DDL 全家（建表、结构同步、建片）**不走 `Aop.Executing` 日志钩子**（连的是自己的连接）；要在外部看见发了什么，读 `result.DdlStatements`。
 
+## 7. 列默认值
+
+```csharp
+[DefaultValue(7)]
+public int Reserved { get; set; }                  // DataAnnotations：System.ComponentModel 的 [DefaultValue]
+
+fluent.Entity<Order>()
+      .Property(o => o.Level).HasDefaultValue(3);  // Fluent 同一格、座次更高（与备注那条链同把尺）
+```
+
+- **值域只收常量字面量档**：string ∶ bool ∶ 整型 ∶ 浮点 ∶ decimal。DateTime 会把"首次建表那一刻"冻进 DDL、byte[] 没有字面量形、枚举的字面量形各家不同——声明期（`EntityContractFactory` 收尾，G1 ∶ G2 两侧共用）当场拒。
+- **类型要精确同型**（可空列剥掉 `Nullable` 比对）：宽窄转换不经这一格，`[DefaultValue(0.5)]` 落在 decimal 列上会红——`decimal` 本来也不是合法的特性实参，它只能走 Fluent。
+- **自增/主键列不收**：库给值的列配默认是自相矛盾的配置。
+- **出现在哪**：建表（`CREATE TABLE … DEFAULT …`）与补列两句。**不参与形状补差比对**（库里读不回默认值），"改默认值"这一趟不发任何语句——要换默认值请手工 `ALTER`。
+- **它救回的那一格**：NOT NULL 新列此前"存量行没有值可填"永远拒；带默认值就发 `ADD COLUMN … DEFAULT … NOT NULL`，库自己把存量行填上（SQLite 的 313 ∶ 2811 旧门禁同笔翻案）。可空列 + DEFAULT 的存量回填各家口径不同（SQL Server 不回填），别拿它当回填工具。
+- 布尔默认按各家的存储形落字：BIT/TINYINT/INTEGER 家落 `1/0`，原生 BOOLEAN 家落 `TRUE/FALSE`，ClickHouse 落 `true/false`。
+
 ---
 
 [← 上一篇：12 分表分库与读写分离](12-split-tables-and-sharding.md) · [下一篇：14 原生 SQL →](14-raw-sql.md)

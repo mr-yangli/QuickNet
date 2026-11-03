@@ -1,6 +1,6 @@
 # 06 · 查询数据
 
-> 本篇解决：条件、排序（含按名字排序）、投影（含行号）、Distinct、分页与总数、计数与存在性探针、顶层聚合、流式读取、无序分页策略。
+> 本篇解决：条件、排序（含按名字排序）、投影（含行号）、Distinct、分页与总数、计数与存在性探针、单行出口与全称量词、顶层聚合、集合运算（UNION 族）、流式读取、无序分页策略。
 
 读侧链是 `IQuery<T>`，从 `orm.Select<T>()` 起手。它**刻意不是 `IQueryable`**——不能塞进 LINQ 生态，也没有非泛型口。所有能力都是链上的显式方法，出口才连库。
 
@@ -21,9 +21,13 @@ var rows = await orm.Select<Order>()
 | --- | --- | --- |
 | `ToListAsync(ct)` | `ToList()` | `List<T>` |
 | `ToArrayAsync(ct)` | `ToArray()` | `T[]`（与 `ToList` 同一条路，多一次拷贝；要"交出去后改不动"用这颗） |
-| `FirstOrDefaultAsync(ct)` | `FirstOrDefault()` | 第一行或 null（没有 `First`/`FirstAsync`——"没有行"不是错误） |
+| `FirstOrDefaultAsync(ct)` | `FirstOrDefault()` | 第一行或 null（"没有行"不是错误） |
+| `FirstAsync(ct)` | `First()` | 第一行；**空集抛 `QuickSqlException`**——"没有行算错误"的那一档（v0.39 补齐） |
+| `SingleAsync(ct)` | `Single()` | 恰一行；0 行与多行都抛（句子上限 2 行判重，多行 = 链条算错了） |
+| `SingleOrDefaultAsync(ct)` | `SingleOrDefault()` | 恰一行或 null；多行照旧抛 |
 | `CountAsync(ct)` / `LongCountAsync(ct)` | `Count()` / `LongCount()` | 计数 |
 | `AnyAsync(ct)` | `Any()` | **存在性探针**：`SELECT 1 … 取第一行`，不数全表（`Skip(n)` 语义保留） |
+| `AllAsync(pred, ct)` | `All(pred)` | **全称量词**：数出"不满足"的行，计数 0 即真（NULL 谓词按通过计，与 `NOT EXISTS` 反形同语义） |
 | `ToPagedAsync(page, size, options?, ct)` | — | `PagedResult<T>` |
 | `ToAsyncEnumerable(batchSize)` | — | 流式逐行（大结果集不整段驻留内存） |
 
@@ -152,7 +156,30 @@ var any   = await orm.Select<Order>().Where(o => o.Amount > 0m).AnyAsync();
 
 按条件聚合的场景（"分组之后的 `SUM`"）当前没有链式入口——用 [14 篇原生 SQL](14-raw-sql.md) 或 [08 篇](08-groupby-aggregate.md)分组投影。
 
-## 7. `IN` 查询与分块
+## 7. 集合运算（UNION 族）
+
+两条**同型**的查询合并成一句，整串占一个表位（2026-10-30 落 `UnionAll`/`Union`，2026-11-01 补齐 `Intersect`/`Except`）：
+
+```csharp
+var paid = orm.Select<Order>().Where(o => o.State == OrderState.Paid);
+var owed = orm.Select<Order>().Where(o => o.State == OrderState.Owed);
+
+var rows = await paid.UnionAll(owed).ToListAsync();   // UNION ALL：合并不去重
+var once = await paid.Union(owed).ToListAsync();      // UNION：合并后整句去重
+var both = await paid.Intersect(owed).ToListAsync();  // INTERSECT：两腿都有的行（各腿去重后求交）
+var diff = await paid.Except(owed).ToListAsync();     // EXCEPT：第一腿有、第二腿没有（Oracle 血统发 MINUS，语义同格）
+```
+
+**序与分页只长在外层**（合并之后再 `OrderBy/Skip/Take`），外层的 `Where`/`Count` 同样落在整串上。腿的形状守卫在**接链那一刻**就响：
+
+- 腿必须是**实体整行投影**——要先合并再投影（`UnionAll(...).Select(...)`）；投影/聚合腿的列清单与实体列对不上；
+- 腿不接急切加载（`Include`/`IncludeMany` 的 JOIN 展开列会让两腿列清单不同形）、不接分组、不套娃、不接分表实体（选片之后那条腿自己已经是一只 UNION）；
+- 腿上点 `IgnoreQueryFilters` 当场拒——过滤器落在合并后的整串上，点了名的腿会被静默压掉；
+- `Explain()` 的模型文本里带 `SOURCE UNION` 一行与两条腿的全文。
+
+关键字除 `EXCEPT` 外全家同字：Oracle 血统（Oracle/达梦/神通）发 `MINUS`，其余逐字 `EXCEPT`。老版本不发 `INTERSECT`/`EXCEPT` 的库在库侧报语法错——与 `UNION` 在老库上的口径一致。
+
+## 8. `IN` 查询与分块
 
 ```csharp
 var ids = new List<int> { 1, 2, 3, /* … 3000 个 */ };
@@ -162,13 +189,13 @@ var rows = await orm.Select<Order>().Where(o => ids.Contains(o.Id)).ToListAsync(
 
 `query.Contains(row)` 与子查询 `Contains` 见 [07 篇](07-joins-and-navigation.md)。
 
-## 8. 跟踪与过滤器
+## 9. 跟踪与过滤器
 
 - 链式默认**不跟踪**（裸 `orm.Select` 不进变更跟踪）；工作单元里用 `db.Set<T>()` 才跟踪，`AsNoTracking()` 显式声明不跟踪。
 - `IgnoreQueryFilters()` 本链一条过滤器都不贴；`IgnoreQueryFilter<TFilter>()` 按注册键点名跳过（见 [11 篇](11-filters-behaviors-aop.md)）。
 - `WithCache(key, ttl)` 要接缓存需实现 `ICacheAdapter` 赋给 `Aop.Cache`（仓库不带实现）。
 
-## 9. 诊断
+## 10. 诊断
 
 ```csharp
 var plan = orm.Select<Order>().Where(o => o.Id == 7).Explain();

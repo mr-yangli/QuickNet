@@ -34,7 +34,7 @@ var sql = orm.Select<Order>().Where(o => o.Id == 7).ToSql();
 | `MetadataConflictException` | 同一层元数据对同一事实重复声明（编译期 `QuickSql001` 同源） |
 | `DriverNotAvailableException` | 驱动解析链走完仍找不到 |
 | `ValidationFailedException` | 写入校验被整批拒（语句还没生成，库里什么都没发生；`Failures` 逐条定位，消息按「成员+规则」归并） |
-| `DbUpdateException` 及四子类 `UniqueConstraintException` / `NotNullConstraintException` / `ForeignKeyConstraintException` / `CheckConstraintException` | 写入时完整性违例（带 `Sql`、`ConstraintName`） |
+| `DbUpdateException` 及四子类 `UniqueConstraintException` / `NotNullConstraintException` / `ForeignKeyConstraintException` / `CheckConstraintException` | 写入时完整性违例（带 `Sql`、`ConstraintName`；`Columns` 是冲突的库里列名——拿 `ConstraintName` 回契约查唯一索引，查得到就给、查不到（驱动不给名 ∶ 契约外对象）就是 null，不抛不猜） |
 | `DbUpdateConcurrencyException` | 乐观锁冲突（带 `Entity`/`Operation`/`CurrentValues`/`DatabaseValues`/`RowIsGone`） |
 | `SchemaSyncFailedException` | 结构同步 DDL 被库拒（带失败句、目标格、已生效清单） |
 | `QuickSqlCommandCancelledException` | `Aop.CommandTerminating` 取消了语句 |

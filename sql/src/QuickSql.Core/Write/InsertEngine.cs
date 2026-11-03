@@ -11,15 +11,11 @@ using QuickSql.Sql.Ast;
 
 namespace QuickSql.Write;
 
-/// <summary>插入链（§5.4 的写侧、§12.3 的 L3 多值语句 + 客户端分块）。
-/// 分两段跑：<b>取值段</b>（列合成 → <c>AuditValue</c> → 契约校验）一次，<b>发射段</b>（分块 → 方言 →
-/// <c>CudBuilding</c> → <c>ParameterBinding</c>）按出口形态各一次。分开是因为三个出口（不回填 / 只回填自增键 /
-/// 连并发列一起回填）产出的文本不同，
-/// 而取值段的副作用（钩子写实体、校验拒绝）必须只发生一次 —— 否则 <c>CreatedAt</c> 会被填两个不同的时间，
-/// §12.4 第 4 项那条「审计列刷新次数一致」就没有可比的对象了。</summary>
-/// <remarks>值级钩子按<b>构建次数</b>触发而不是按执行次数：同一条语句先 <c>ToSql()</c> 再
-/// <c>ExecuteReturnKeysAsync()</c> 会构建两次（两个出口的文本不同），<c>ParameterBinding</c> 因此过两遍。
-/// §10.1 硬规则 1 要求钩子幂等，正是为了这种情况；<c>AuditValue</c> 更严——它只可能跑一次。</remarks>
+/// <summary>插入链（L3 多值语句 + 客户端分块）。分两段跑：取值段（列合成 → AuditValue → 契约校验）一次，
+/// 发射段（分块 → 方言 → CudBuilding → ParameterBinding）按出口形态各一次。分开是因为三个出口（不回填 /
+/// 只回填自增键 / 连并发列一起回填）产出的文本不同，而取值段的副作用（钩子写实体、校验拒绝）必须只发生一次
+/// ——否则 CreatedAt 会被填两个不同的时间。值级钩子按构建次数触发而不是按执行次数（同一条语句先 ToSql() 再
+/// 执行会构建两次，ParameterBinding 因此过两遍，钩子必须幂等）；AuditValue 更严——它只可能跑一次。</summary>
 sealed class InsertEngine<T> : IInsert<T> where T : class
 {
     readonly QuickSqlOrm _orm;
@@ -30,8 +26,8 @@ sealed class InsertEngine<T> : IInsert<T> where T : class
     InsertPlan? _withKeys;
     InsertPlan? _withGenerated;
 
-    // §12.2 的三格请求。null 不是"没决定"，是"这条出口自己的默认"：ExecuteAffrowsAsync 默认文本层，
-    // ExecuteBulkAsync 默认 Auto（判据与理由见 IInsert.WithBulk 的抬头，落在下面的 Decide / ExecuteAffrowsAsync）。
+    // 批量阶梯的三格请求。null 不是"没决定"，是"这条出口自己的默认"：ExecuteAffrowsAsync 默认文本层，
+    // ExecuteBulkAsync 默认 Auto（判据落在下面的 Decide / ExecuteAffrowsAsync）。
     BulkMethod? _requested;
     FallbackPolicy _fallback = FallbackPolicy.DegradeAndLog;
     int? _rowsPerRoundTrip;
@@ -42,14 +38,14 @@ sealed class InsertEngine<T> : IInsert<T> where T : class
         _rows = rows;
     }
 
-    // ── 离线出口（§3：不连库） ────────────────────────────────────────
+    // ── 离线出口（不连库） ────────────────────────────────────────
 
     public InsertPlan Explain() => Plan(Backfill.None);
 
     public InsertPlan ExplainKeys() => Plan(Backfill.Keys);
 
-    /// <summary>「库里给的那些列」= 自增列 ∪ 并发列（§8.2 的回填集）。跟踪器走这一档：并发列的值不进
-    /// 列清单、只进 <c>WHERE</c>，插完不读回来，手里的值就永远是空的，下一次保存必假冲突。</summary>
+    /// <summary>「库里给的那些列」= 自增列 ∪ 并发列（跟踪器的回填集）。并发列的值不进列清单、只进 WHERE，
+    /// 插完不读回来，手里的值就永远是空的，下一次保存必假冲突。</summary>
     public InsertPlan ExplainGenerated() => Plan(Backfill.Generated);
 
     public string ToSql() => Plan(Backfill.None).ToSql();
@@ -68,7 +64,7 @@ sealed class InsertEngine<T> : IInsert<T> where T : class
 
     public string ToLogSql() => Plan(Backfill.None).ToLogSql();
 
-    // ── 批量阶梯（§12.2） ────────────────────────────────────────────
+    // ── 批量阶梯 ────────────────────────────────────────────
 
     public IInsert<T> WithBulk(BulkMethod method, FallbackPolicy fallback = FallbackPolicy.DegradeAndLog, int? rowsPerRoundTrip = null)
     {
@@ -79,8 +75,8 @@ sealed class InsertEngine<T> : IInsert<T> where T : class
         _fallback = fallback;
         _rowsPerRoundTrip = rowsPerRoundTrip;
 
-        // 每块行数是发射段的输入，改过它，缓存里那三份文本就过期了。取值段那份不动 ——
-        // AuditValue 只许跑一次（§10.1 硬规则 1 与上面抬头的两段之分）。
+        // 每块行数是发射段的输入，改过它，缓存里那三份文本就过期了。取值段那份不动——
+        // AuditValue 只许跑一次（与上面抬头的两段之分同一条理由）。
         _plain = _withKeys = _withGenerated = null;
 
         return this;
@@ -93,15 +89,10 @@ sealed class InsertEngine<T> : IInsert<T> where T : class
 
     // ── 执行出口 ──────────────────────────────────────────────────────
 
-    /// <summary>文本层出口：<b>认得的请求是 <see cref="BulkMethod.MultiValue"/> 与
-    /// <see cref="BulkMethod.SingleRow"/> 那一档</b>（连同 <see cref="WithBulk"/> 那句里的每块行数），
-    /// <b>而指向装载通道的请求在这里当场拒，不是"默默当没看见"</b>。
-    /// 拒的理由与默认层为什么是文本层是同一条（<c>IInsert.WithBulk</c> 的抬头）：这一颗返回的是一颗
-    /// <see cref="int"/>，装不下"走了哪一层、几次往返、为什么"，而装载通道那一档根本不产文本 ——
-    /// <see cref="QuickSqlAop.CudBuilding"/>（软删改写、影子表）与 <see cref="QuickSqlAop.ParameterBinding"/>
-    /// 两个改写钩子会集体失效，而调用方只看到一个数字。<b>结构上的另一半收益是这条出口不欠修剪税</b>：
-    /// 它不可能走到 <see cref="AdoExecutor.CopyAsync"/>，所以签名上没有
-    /// <see cref="RequiresUnreferencedCodeAttribute"/>，写路径上今天已有的每一个调用点都不必改。</summary>
+    /// <summary>文本层出口：认得的请求是 MultiValue 与 SingleRow 那一档（连同 WithBulk 里的每块行数），
+    /// 指向装载通道的请求在这里当场拒、不是默默当没看见——这一颗返回的只是一颗行数，装不下
+    /// "走了哪一层、几次往返、为什么"，而装载通道不产文本，两个改写钩子会集体失效。
+    /// 这条出口因此不欠修剪税：不可能走到装载通道，签名上没有 RequiresUnreferencedCode。</summary>
     public async Task<int> ExecuteAffrowsAsync(CancellationToken ct = default)
     {
         if (_requested is BulkMethod.Auto or BulkMethod.CopyChannel)
@@ -129,7 +120,7 @@ sealed class InsertEngine<T> : IInsert<T> where T : class
         var tag = Tag();
 
         // 留痕在动手之前：降级之后那句写还可能失败，而"它退到哪一层"正是排查那一半要用的信息。
-        // DegradeSilently 走不到这里（§12.2 那一格给的就是"纯优化路径不必声张"）。
+        // DegradeSilently 走不到这里（纯优化路径不必声张）。
         if (report.Degraded && _fallback == FallbackPolicy.DegradeAndLog && _orm.Aop.BulkDegraded is { } degraded)
             _orm.Aop.Observe(() => degraded(new BulkDegradedEvent(report.Requested, report.Method, report.RowCount, report.Reason)));
 
@@ -137,8 +128,8 @@ sealed class InsertEngine<T> : IInsert<T> where T : class
 
         if (decision.Channel is { } channel)
         {
-            // 分表时一片一次递交（装载通道的目标表是一次一个，混不了两片的行），
-            // 所以"几次往返"是逐片取整再相加，而递交次数上限按各片自己的行数算。
+            // 分表时一片一次递交（装载通道的目标表一次一个，混不了两片的行），
+            // 所以"几次往返"是逐片取整再相加。
             var batches = CopyRequests(preparation);
             var width = 0;
             var trips = 0;
@@ -147,8 +138,8 @@ sealed class InsertEngine<T> : IInsert<T> where T : class
 
             foreach (var batch in batches)
             {
-                // rowsPerRoundTrip 在装载通道这一档说的是"一次递交几行"（IInsert.WithBulk 的抬头），与文本层同一个旋钮、
-                // 同一条只压不抬：这里没有参数预算那道界，所以上限只有这一片的行数本身。
+                // rowsPerRoundTrip 在装载通道这一档说的是"一次递交几行"，与文本层同一个旋钮、
+                // 同一条只压不抬：这里没有参数预算那道界，上限只有这一片的行数本身。
                 var slice = _rowsPerRoundTrip is { } cap && cap < batch.Rows.Count ? cap : batch.Rows.Count;
 
                 width = Math.Max(width, slice);
@@ -160,8 +151,8 @@ sealed class InsertEngine<T> : IInsert<T> where T : class
                         .ConfigureAwait(false);
             }
 
-            // 通道报回的数与递交的数不等 = 部分写入。少报的数比少一列危险（v0.32 那一判同一条：
-            // 绿着交出一个看着合法的结果，调用方拿不到异常），所以这里抛而不是把 report 改小。
+            // 通道报回的数与递交的数不等 = 部分写入。少报的数比少一列危险（绿着交出看着合法的结果），
+            // 所以这里抛而不是把 report 改小。
             if (written != report.RowCount)
                 throw new QuickSqlException(
                     $"{_orm.Provider.Kind} 的装载通道报回 {written}/{report.RowCount} 行：这一家的批量入口给不出「进了几行」，" +
@@ -170,7 +161,7 @@ sealed class InsertEngine<T> : IInsert<T> where T : class
             return report with { ChunkSize = width, RoundTrips = trips };
         }
 
-        // 文本层：把决策里的估算换成发射段的实数（块数与每块行数都由 Build 那一份算，两处不许各算一遍）。
+        // 文本层：把决策里的估算换成发射段的实数（块数与每块行数都由 Build 算，两处不许各算一遍）。
         var plan = Plan(Backfill.None);
 
         report = report with { ChunkSize = plan.RowsPerStatement, RoundTrips = plan.Chunks.Count };
@@ -183,14 +174,10 @@ sealed class InsertEngine<T> : IInsert<T> where T : class
         return report;
     }
 
-    /// <summary>§12.2 那张阶梯今天能落的三档，由这一颗纯函数选：<b>不建文本、不碰连接、不发钩子</b>
-    /// （<see cref="ExplainBulk"/> 与 <see cref="ExecuteBulkAsync"/> 共用它，所以"离线看到的层"与
-    /// "执行走的那一层"之间没有第二套判据可漂移）。</summary>
-    /// <remarks><b>两次判定之间不许有第二份真相</b>是这里唯一的难点：装载通道那一条分支必须在建文本
-    /// <em>之前</em>定下来，否则 <c>CudBuilding</c> 会为一句丢掉的分块语句白跑一遍；而文本层那两档的
-    /// 往返次数又是 <c>Build</c> 算出来的（它才知道预算、钩子改过的东西）。做法是让 <see cref="BulkReport"/>
-    /// 先带公式的估算、执行时由 <c>Plan</c> 的实数覆写（<see cref="ExecuteBulkAsync"/> 那一句 <c>with</c>），
-    /// 而不是让 <c>Decide</c> 去建一份它用不到的文本。</remarks>
+    /// <summary>批量阶梯今天能落的三档，由这一颗纯函数选：不建文本、不碰连接、不发钩子
+    /// （ExplainBulk 与 ExecuteBulkAsync 共用它，"离线看到的层"与"执行走的那一层"没有第二套判据可漂移）。
+    /// 装载通道那一条分支必须在建文本之前定下来（否则 CudBuilding 为一句丢掉的分块语句白跑一遍）；
+    /// 文本层那两档的往返次数由 Build 算，BulkReport 先带公式估算、执行时由实数覆写。</summary>
     [RequiresUnreferencedCode("调用 IBulkStrategy.ResolveCopyChannel() 那一次按类型名的反射查找：税从这里往上冒到两条公开出口（ExplainBulk / ExecuteBulkAsync）。")]
     [RequiresDynamicCode("与 RequiresUnreferencedCode 同一条：反射解析装载类需要运行时生成代码。")]
     BulkDecision Decide(Preparation preparation, BulkMethod requested)
@@ -212,7 +199,7 @@ sealed class InsertEngine<T> : IInsert<T> where T : class
             if (refusal is null)
             {
                 // 装载通道这一档没有参数预算那道界，所以 _rowsPerRoundTrip 的上限就是这批的行数；
-                // 不压时一次递交（执行段用同一组数，两处不许各算一遍）。
+                // 不压时一次递交（执行段用同一组数）。
                 var width = _rowsPerRoundTrip is { } cap && cap < rows ? cap : rows;
                 var trips = CopyTrips(preparation, width);
 
@@ -224,9 +211,9 @@ sealed class InsertEngine<T> : IInsert<T> where T : class
                     "通道内部怎么分批是驱动的事，对上层是一次递交一块；改写类钩子（CudBuilding / ParameterBinding）在这一档不适用。"), channel);
             }
 
-            // 请求过装载通道而拿不到：Never 不许退（§12.2 那句"唯一能防住静默逐条的手段"）。
-            // Auto 不算降级 —— 它没有承诺过任何一层，取到阶梯上第一档满足条件的层就是它的定义，
-            // 于是留痕位也不派发（BulkDegradedEvent 的抬头写的就是"只在真的降级时派发"）。
+            // 请求过装载通道而拿不到：Never 不许退（那是唯一能防住静默逐条的手段）。
+            // Auto 不算降级——它没有承诺过任何一层，取到阶梯上第一档满足条件的层就是它的定义，
+            // 留痕位也不派发。
             if (requested == BulkMethod.CopyChannel)
             {
                 if (_fallback == FallbackPolicy.Never)
@@ -238,10 +225,9 @@ sealed class InsertEngine<T> : IInsert<T> where T : class
                 }, null);
             }
 
-            // 不降级不等于不解释：<b>那句拒绝要进 Reason</b>。判窄成"整批静默走 L3"会让调优的人去查 provider
-            // 那一侧，而现场缺的常常是一颗连接串参数（MySQL 血统的 AllowLoadLocalInfile 就是第一颗）——
-            // Reason 里点名拒的是哪一层、为什么，是 Auto 那条"没承诺"唯一的可见面。措辞用"取第一档满足条件的层"，
-            // 不用"退回"：那个词在这一格里只属于承诺过而没拿到的档。
+            // 不降级不等于不解释：那句拒绝要进 Reason。现场缺的常常是一颗连接串参数
+            // （MySQL 血统的 AllowLoadLocalInfile 就是第一颗），Reason 里点名拒的是哪一层、为什么。
+            // 措辞用"取第一档满足条件的层"，不用"退回"——那个词只属于承诺过而没拿到的档。
             return new BulkDecision(TextReport(preparation, requested, BulkMethod.MultiValue, degraded: false) with
             {
                 Reason = $"{refusal} → Auto 取阶梯上第一档满足条件的层。{TextReason(preparation, BulkMethod.MultiValue)}",
@@ -251,20 +237,16 @@ sealed class InsertEngine<T> : IInsert<T> where T : class
         return new BulkDecision(TextReport(preparation, requested, requested, degraded: false), null);
     }
 
-    /// <summary>这一家能不能整批进装载通道的判据，<b>交回的是话而不是布尔</b>：拒绝的理由要进
-    /// <see cref="BulkReport.Reason"/> 给现场读，也要进 <see cref="FallbackPolicy.Never"/> 那句异常，
-    /// 两处同一份文本。null = 可以进。</summary>
-    /// <remarks>第三道闸门（连接串）交回的话由通道自己编：<b>哪颗参数放行哪一家的装载，是驱动侧的事实，
-    /// 内核不认识任何一家的连接串键名</b>（§1.2 原则 3 的同一族纪律）。<b>这一句读的是 <see cref="ConnectionSources"/>
-    /// 上写集群那条串</b>：DbContext 会话经工厂给连接时串可能另有来路，那种现场下闸门按在册那条判——
-    /// 判宽了装载当场抛（驱动的话，可行动），判窄了退 L3（慢而不错），两种都比拿连接对象猜便宜。</remarks>
+    /// <summary>这一家能不能整批进装载通道的判据，交回的是话而不是布尔：拒绝的理由要进 BulkReport.Reason
+    /// 给现场读，也要进 Never 那句异常，两处同一份文本。null = 可以进。连接串闸门交回的话由通道自己编
+    /// （哪颗参数放行哪一家的装载是驱动侧的事实，内核不认识任何一家的连接串键名）；这一句读的是在册那条
+    /// 主库串——判宽了装载当场抛（驱动的话，可行动），判窄了退 L3（慢而不错）。</summary>
     static string? Refusal(IDbProvider provider, IBulkCopyChannel? channel, ColumnContract[] columns, string connectionString)
     {
         if (channel is null)
             return $"{provider.Kind} 没有可用的装载通道（IBulkStrategy.ResolveCopyChannel() 交回 null：这一家没接，或这一支驱动里没有装载类）";
 
-        // 一列不合格就整批退回，不是把那一列从通道里省掉：省一列等于那一列的值不进库，那是丢写
-        // （IBulkCopyChannel.SupportsColumn 的抬头，与 IChangeGuard.Compares 同一个道理）。
+        // 一列不合格就整批退回，不是把那一列从通道里省掉：省一列等于那一列的值不进库，那是丢写。
         foreach (var column in columns)
             if (!channel.SupportsColumn(column))
                 return $"{column.ColumnName}（CLR {column.ClrType.Name}）不在 {provider.Kind} 装载通道收下的类型里";
@@ -272,8 +254,8 @@ sealed class InsertEngine<T> : IInsert<T> where T : class
         return channel.UnavailableBecauseOf(connectionString);
     }
 
-    /// <summary>写侧那一条串：装载通道落在哪座集群，闸门就问哪一座的主库串（写永远是主库那一格，
-    /// 判据在 <c>AdoExecutor.RentAsync</c>，这里只跟着它点名过的同一座读，不另立一套）。</summary>
+    /// <summary>写侧那一条串：装载通道落在哪座集群，闸门就问哪一座的主库串
+    /// （写永远是主库那一格，判据在 AdoExecutor.RentAsync 一处，不另立一套）。</summary>
     string WriteConnectionString(Preparation preparation)
         => _orm.Sources.PrimaryConnectionString(DataSourceRouting.ClusterOf(preparation.Contract.Table));
 
@@ -297,11 +279,8 @@ sealed class InsertEngine<T> : IInsert<T> where T : class
                    : string.Empty);
     }
 
-    /// <summary>每块几行 —— <c>Build</c> 里那一句的同一个公式，两处不许各写一遍算式：都由这一个出口取。</summary>
-    /// <remarks><b><see cref="BulkMethod.SingleRow"/> 不是第二套逐条实现，就是把块宽定成 1</b>：
-    /// 阶梯最底那一档今天已经在走这条代码路径（回填链上<em>没有</em>独立的逐条循环，块宽为 1 时
-    /// 每行拿到的是<em>自己那份</em>经 <c>CudBuilding</c> 改写过的文本，而块与块之间不共享软删后缀），
-    /// 所以按请求逐条走的也是同一条：一行一块 = 一次改写 = 一次往返。分岔点在 <c>Build</c> 之下，不在它旁边。</remarks>
+    /// <summary>每块几行——Build 里那一句的同一个公式，两处不许各写一遍算式：都由这一个出口取。
+    /// SingleRow 不是第二套逐条实现，就是把块宽定成 1：一行一块 = 一次改写 = 一次往返，分岔点在 Build 之下。</summary>
     int ChunkRows(Preparation preparation, BulkMethod method)
     {
         if (method == BulkMethod.SingleRow)
@@ -312,9 +291,8 @@ sealed class InsertEngine<T> : IInsert<T> where T : class
         return Math.Min(StatementEmitter.RowsPerStatement(budget, preparation.Columns.Length), _rowsPerRoundTrip ?? int.MaxValue);
     }
 
-    /// <summary>往返次数。<b>分表时逐片取整再相加</b>：三片各 7 行、块宽 10 是 3 次而不是一次 ——
-    /// 一块的 <c>VALUES</c> 只进得了一张表，跨片合并那"半块"没有能落的目标。不分表时那个分支
-    /// 就是原来那一句，一个字节都不多分配。</summary>
+    /// <summary>往返次数。分表时逐片取整再相加：三片各 7 行、块宽 10 是 3 次而不是一次——
+    /// 一块的 VALUES 只进得了一张表，跨片合并那"半块"没有能落的目标。</summary>
     int Trips(Preparation preparation, BulkMethod method)
     {
         var width = ChunkRows(preparation, method);
@@ -330,10 +308,8 @@ sealed class InsertEngine<T> : IInsert<T> where T : class
         return trips;
     }
 
-    /// <summary>装载通道的递交次数：不分表就是 <c>ceil(总行数 / 块宽)</c>；分表时逐片取整再相加 ——
-    /// 三片各 7 行、块宽 10 是 3 次而不是一次，因为一次递交只有一个目标表。
-    /// <b><see cref="Decide"/> 的估算与 <see cref="ExecuteBulkAsync"/> 的实数共用这一颗</b>（§12.2 那句
-    /// "离线看到的层与执行走的那一层之间没有第二套判据可漂移"）。</summary>
+    /// <summary>装载通道的递交次数：不分表就是 ceil(总行数 / 块宽)；分表时逐片取整再相加（一次递交只有一个目标表）。
+    /// Decide 的估算与 ExecuteBulkAsync 的实数共用这一颗，离线看到的层与执行走的那一层没有第二套判据。</summary>
     int CopyTrips(Preparation preparation, int width)
     {
         if (preparation.Groups is not { } groups)
@@ -347,8 +323,8 @@ sealed class InsertEngine<T> : IInsert<T> where T : class
         return trips;
     }
 
-    /// <summary>递给装载通道的那一批，<b>分表时一片一份</b>（装载通道的目标表是一次递交一个，
-    /// 混不了两片的行）。非分表实体只产出一颗，与不分表的今天逐字同形。</summary>
+    /// <summary>递给装载通道的那一批，分表时一片一份（一次递交只有一个目标表，混不了两片的行）；
+    /// 非分表实体只产出一颗。</summary>
     List<BulkCopyRequest> CopyRequests(Preparation preparation)
     {
         if (preparation.Groups is not { } groups)
@@ -362,10 +338,8 @@ sealed class InsertEngine<T> : IInsert<T> where T : class
         return requests;
     }
 
-    /// <summary><see cref="CopyRequests"/> 的那一份产物：<b>列清单照文本层</b>（自增列与并发列都不进，理由与
-    /// <see cref="Prepare"/> 那两条 continue 同一条），每格过 <see cref="Values.IValueBinder"/> 那一扇门。
-    /// 目标表名由 <see cref="ISqlDialect.EmitTableName"/> 产，所以 COPY 落的那一张与 <c>INSERT</c> 写的必然是同一张
-    /// —— 分表时也是同一张：两者拿的都是 <see cref="Preparation"/> 里那一份已换算好的片名。</summary>
+    /// <summary>CopyRequests 的产物：列清单照文本层（自增列与并发列都不进，理由与 Prepare 那两条 continue
+    /// 同一条），每格过 IValueBinder 那一扇门。目标表名由方言 EmitTableName 产，COPY 落的那一张与 INSERT 写的必然是同一张。</summary>
     BulkCopyRequest CopyRequestFor(Preparation preparation, TableInfo table, int[]? ordinals)
     {
         var binder = _orm.Provider.Values;
@@ -373,9 +347,8 @@ sealed class InsertEngine<T> : IInsert<T> where T : class
         var count = ordinals?.Length ?? preparation.Cells.Length;
         var payload = new object?[count][];
 
-        // 名字按列物化一次：名字在这一趟里是白花的（装载通道不接 DbParameter），但类型归一只长在这颗门上，
-        // 另起一条"不带名字的转换"就是第七份 Normalize（§12.1 那句"同一条插入在几家参数化形状不同"的第二个出处）。
-        // 此前 $"c{column}" 在 row × column 双层循环里逐格插值 —— 百万行宽表的 COPY 预处理就是上百万次字符串分配。
+        // 名字按列物化一次：装载通道不接 DbParameter，但类型归一长在这颗门上，
+        // 另起一条"不带名字的转换"就是多一份要维护的 Normalize。逐格插值在宽表上是上百万次字符串分配。
         var names = new string[columns.Length];
 
         for (var column = 0; column < names.Length; column++)
@@ -395,9 +368,8 @@ sealed class InsertEngine<T> : IInsert<T> where T : class
         return new BulkCopyRequest(DestinationTable(preparation, table), columns, payload);
     }
 
-    /// <summary>把已算好的那一批切出第 <paramref name="first"/> 行起的 <paramref name="width"/> 行。
-    /// <b>切的是行数组，不重走取值与归一</b>：<see cref="CopyRequests"/> 每片只算一次，格子值与列清单在几次递交之间
-    /// 是同一份 —— 而 §12.4 第 1 项那句"行序就是入参顺序"要靠这一点才成立。</summary>
+    /// <summary>把已算好的那一批切出第 first 行起的 width 行。切的是行数组，不重走取值与归一：
+    /// 每片只算一次，格子值与列清单在几次递交之间是同一份——"行序就是入参顺序"靠这一点才成立。</summary>
     static BulkCopyRequest Slice(BulkCopyRequest batch, int first, int width)
     {
         var count = Math.Min(width, batch.Rows.Count - first);
@@ -419,17 +391,16 @@ sealed class InsertEngine<T> : IInsert<T> where T : class
         return writer.ToSqlString();
     }
 
-    /// <summary>0 列的插入只剩 <c>DEFAULT VALUES</c> 一种写法，而本版本未接入（§12.3）。
-    /// 抽成一处是因为它有<em>两个</em>读者：文本层在建语句之前要问，装载通道在选层之前也要问
-    /// —— 而"零列的 COPY"恰好是那种能绿着把 0 个字段写进 N 行的形状，不能让它比文本层更晚红。</summary>
+    /// <summary>0 列的插入只剩 DEFAULT VALUES 一种写法，本版本未接入。两个读者（文本层建语句之前、
+    /// 装载通道选层之前）都要问——"零列的 COPY"恰好是能绿着把 0 个字段写进 N 行的形状，不能比文本层更晚红。</summary>
     static void RequireColumns(Preparation preparation)
     {
         if (preparation.Columns.Length == 0)
             throw new QuickSqlException($"{preparation.Table} 的每一列都不进列清单（自增列或并发列），插入只剩 DEFAULT VALUES 这一种写法，本版本未接入（§12.3）。");
     }
 
-    /// <summary>决策 + 决策依据的那一个通道对象。<see cref="BulkDecision.Channel"/> 只在method == CopyChannel 时非 null：
-    /// "能不能用"与"用它"因此是同一次判定的两个产物，执行时不再取第二次 <c>Bulk?.ResolveCopyChannel()</c>（那一取会看到另一个实例）。</summary>
+    /// <summary>决策 + 决策依据的那一个通道对象。Channel 只在 method == CopyChannel 时非 null：
+    /// "能不能用"与"用它"是同一次判定的两个产物，执行时不再取第二次 ResolveCopyChannel（那一取会看到另一个实例）。</summary>
     sealed record BulkDecision(BulkReport Report, IBulkCopyChannel? Channel);
 
 
@@ -468,8 +439,8 @@ sealed class InsertEngine<T> : IInsert<T> where T : class
         return ReadBackAsync(preparation, preparation.KeyOrdinals, Plan(Backfill.Keys), ct);
     }
 
-    /// <summary>把「值归库管的那几列」（自增列 ∪ 并发列）读回实体 —— <see cref="ExecuteReturnKeysAsync"/> 的超集，
-    /// 没有并发列时两档产出逐字相同的文本、走同一次往返。跟踪器的那一档插入走这里（§8.2 的回填集）。</summary>
+    /// <summary>把「值归库管的那几列」（自增列 ∪ 并发列）读回实体——ExecuteReturnKeysAsync 的超集，
+    /// 没有并发列时两档产出逐字相同的文本、走同一次往返。跟踪器的那一档插入走这里。</summary>
     public Task ExecuteGeneratedAsync(CancellationToken ct = default)
     {
         var preparation = Prepare();
@@ -480,8 +451,8 @@ sealed class InsertEngine<T> : IInsert<T> where T : class
         return ReadBackAsync(preparation, preparation.GeneratedOrdinals, Plan(Backfill.Generated), ct);
     }
 
-    /// <summary>回填的那一段。<paramref name="ordinals"/> 已经按 <c>Returning</c> 的列序排好，
-    /// 所以回包的第 <c>column</c> 列直接落进实体的对应槽位，不需要再查一次名字。</summary>
+    /// <summary>回填的那一段。ordinals 已经按 Returning 的列序排好，
+    /// 回包的第 column 列直接落进实体的对应槽位，不需要再查一次名字。</summary>
     async Task<List<T>> ReadBackAsync(Preparation preparation, int[] ordinals, InsertPlan plan, CancellationToken ct)
     {
         var expected = ordinals.Length;
@@ -498,10 +469,9 @@ sealed class InsertEngine<T> : IInsert<T> where T : class
                 if (index == 0 && reader.FieldCount != expected)
                     throw new QuickSqlException($"{_orm.Provider.Kind} 的回填结果集有 {reader.FieldCount} 列，期望 {expected} 列：发射层与键策略对不上，不能假设回填可用。");
 
-                // 回包第 index 行 ↔ 这一块的第 index 行。这条映射就是 §12.4 第 1 项的全部内容，
-                // 集成测试按 payload 逐行证明它，而不是只证明"拿到了某个键"。
-                // 分表时那一块行在入参数组里不连续，所以块自己带着那份下标表；不分表时它是 null，
-                // 走的还是 FirstRow + 行号那一句（不多一次数组分配）。
+                // 回包第 index 行 ↔ 这一块的第 index 行（回填映射的全部内容）。
+                // 分表时那一块行在入参数组里不连续，块自带那份下标表；不分表时是 null，
+                // 走 FirstRow + 行号（不多一次数组分配）。
                 var entity = _rows[rowOrdinals is null ? first + index : rowOrdinals[index]];
 
                 for (var column = 0; column < expected; column++)
@@ -510,17 +480,9 @@ sealed class InsertEngine<T> : IInsert<T> where T : class
                 backfilled++;
             }, ct).ConfigureAwait(false);
 
-            // <b>v0.32 第二格补的那一判</b>：上面那句列数检查只在<em>至少回来一行</em>时才走得到，
-            // 而虚谷把这一格踩空了 —— <c>INSERT … RETURNING "ID"</c> 在那台活库上<em>执行成功、行也真进去了</em>，
-            // 回包却是 <c>FIELDS=0 ROWS=0</c>（出处 <c>obj/logs/v32-recon-keys-1.log</c> 的 N-06，
-            // 多行 VALUES 那一形同红：N-07），于是实体上的自增列留在 <c>default</c>，
-            // 而 <c>obj/logs/v32-recon-orm-2.log</c> 的 O-11 把这件事印成了"写侧 OK 回填的 Id=0"。
-            // 少一行比少一列更危险：少一列当场红，少几行是<em>绿着把错值交出去</em>，
-            // 调用方拿到的是"看着合法"的 0 而不是异常（§10.2 说的"三个月后才现形"那一类）。
-            // 这一判不改变任何一家已连过库的产出：四家里的 SQL Server 走 <c>OUTPUT</c>、金仓走 <c>RETURNING</c>，
-            // 两家的回包行数本来就等于块行数，而达梦/Oracle 两家在 <c>SupportsBulkKeyRetrieval</c>
-            // 那里已经被拆成逐条了（<see cref="Build"/> 的那条分支）—— 而"不改变"这句在本版不由我说，
-            // 由 §13.4 那 95 条在两台授权 SQL Server 实例上复跑说了算。
+            // 上面那句列数检查只在"至少回来一行"时才走得到：有的驱动执行成功、行也真进去了，
+            // 回包却是 FIELDS=0 ROWS=0，实体上的自增列留在 default。少一行比少一列更危险：
+            // 少一列当场红，少几行是绿着把错值交出去，调用方拿到的是"看着合法"的 0 而不是异常。
             if (backfilled != chunk.RowCount)
                 throw new QuickSqlException(
                     $"{_orm.Provider.Kind} 的插入执行成功却只回填了 {backfilled}/{chunk.RowCount} 行：" +
@@ -535,7 +497,7 @@ sealed class InsertEngine<T> : IInsert<T> where T : class
     InsertPlan Plan(Backfill backfill)
     {
         // 三条分支各自缓存一份，而不是 ref 三元链套一个 switch：编译器不接受嵌套的 ref 条件运算符，
-        // 而换成一个按枚举下标取的数组就等于给每条链多一次分配（§12.7 的每查询字节是钉住的数）。
+        // 换成按枚举下标取的数组等于给每条链多一次分配。
         if (backfill == Backfill.None)
             return _plain ??= Build(Prepare(), backfill);
 
@@ -559,7 +521,7 @@ sealed class InsertEngine<T> : IInsert<T> where T : class
         var ordinals = new List<int>(contract.Columns.Length);
         var keys = new List<ColumnContract>();
         var keyOrdinals = new List<int>();
-        // 没有并发列的实体占绝大多数，所以这两张表是懒出来的：先建好再判断等于向每一条批量插入收一笔"为别人设计的列"的钱。
+        // 没有并发列的实体占绝大多数，这两张表懒出来：先建好再判断等于向每条批量插入收一笔"为别人设计的列"的钱。
         List<ColumnContract>? tokens = null;
         List<int>? tokenOrdinals = null;
 
@@ -567,8 +529,8 @@ sealed class InsertEngine<T> : IInsert<T> where T : class
         {
             var column = contract.Columns[ordinal];
 
-            // 自增列不进列清单（§12.4 第 1 项）：它的值由库决定，写进去只会得到一个"填的数被忽略"的错。
-            // 要显式写自增列是 IDENTITY_INSERT 那条路（IKeyStrategy.IdentityInsertToggle），P0 未接。
+            // 自增列不进列清单：它的值由库决定，写进去只会得到一个"填的数被忽略"的错。
+            // 要显式写自增列是 IDENTITY_INSERT 那条路（本版本未接）。
             if (column.IsIdentity)
             {
                 keys.Add(column);
@@ -577,10 +539,10 @@ sealed class InsertEngine<T> : IInsert<T> where T : class
                 continue;
             }
 
-            // 并发列同样不进列清单，理由与自增列同一条：那一列的值不归这一侧决定（SQL Server 的 rowversion 由库递增）。
-            // 它也不进 AuditValue 与 §10.6 校验 —— 一列不写出去，就没有可校验的值。
-            // 应用给值那一族（AppSetsValue，如 ABP 的 string ConcurrencyStamp）例外：新值由应用生成、
-            // 要随行写出去，所以进列清单、也进 AuditValue 与校验；它也不需要回读（值就是刚写的这一个）。
+            // 并发列同样不进列清单，理由与自增列同一条：那一列的值不归这一侧决定（rowversion 由库递增）。
+            // 它也不进 AuditValue 与契约校验——一列不写出去，就没有可校验的值。
+            // 应用给值那一族（AppSetsValue，如 ABP 的 ConcurrencyStamp）例外：新值由应用生成、要随行写出去，
+            // 所以进列清单、也进 AuditValue 与校验；它不需要回读（值就是刚写的这一个）。
             if (column.IsConcurrencyToken && !column.AppSetsValue)
             {
                 (tokens ??= []).Add(column);
@@ -593,9 +555,8 @@ sealed class InsertEngine<T> : IInsert<T> where T : class
             ordinals.Add(ordinal);
         }
 
-        // 回填集 = 自增列 ∪ 并发列，两半的下标表按同一顺序并起来：回包是按位置落进实体的，
-        // 所以 Returning 的列序与这张下标表必须是同一把尺子（因此写在一处，不各自再排一遍）。
-        // 没有并发列时两半是同一份数组 —— 逐字同文的两个出口不必各自占一格（§8.2 那一档插入因此不加倍）。
+        // 回填集 = 自增列 ∪ 并发列，两半的下标表按同一顺序并起来：回包按位置落进实体，
+        // Returning 的列序与这张下标表必须是同一把尺子。没有并发列时两半是同一份数组。
         ColumnContract[] keyColumns = [.. keys];
         int[] identityOrdinals = [.. keyOrdinals];
 
@@ -612,13 +573,13 @@ sealed class InsertEngine<T> : IInsert<T> where T : class
             cells[row] = new object?[columns.Count];
 
             // 顺序是「先填充、后校验」：租户列这类 NOT NULL 列正是靠 AuditValue 补上的，
-            // 反过来会把钩子刚填好的值判成缺，或者更糟——把本该由钩子补的列静默放过。
+            // 反过来会把钩子刚填好的值判成缺，或把本该由钩子补的列静默放过。
             for (var column = 0; column < columns.Count; column++)
             {
                 var ordinal = ordinals[column];
                 var value = schema.GetValue(entity, ordinal);
 
-                // 硬规则 2「未订阅即零成本」：不订阅就不构造事件对象。
+                // 未订阅即零成本：不订阅就不构造事件对象。
                 if (audit is null)
                 {
                     cells[row][column] = value;
@@ -627,7 +588,7 @@ sealed class InsertEngine<T> : IInsert<T> where T : class
 
                 var @event = new AuditValueEvent(entity, columns[column], value, "insert", written => schema.SetValue(entity, ordinal, written));
 
-                // 改写类钩子的异常直接向上失败（硬规则 3）：吞掉等于写出一份"填充没发生"的行。
+                // 改写类钩子的异常直接向上失败：吞掉等于写出一份"填充没发生"的行。
                 audit(@event);
 
                 if (@event.WasSet)
@@ -647,7 +608,7 @@ sealed class InsertEngine<T> : IInsert<T> where T : class
             if (validator.TryValidate(entity, rowFailures))
                 continue;
 
-            // 单行时不加行号：那时"哪一行"没有意义，而消息文本已经点了成员与列（§10.6 要的正是定位到行）。
+            // 单行时不加行号：那时"哪一行"没有意义，消息文本已经点了成员与列。
             foreach (var failure in rowFailures)
                 failures.Add(_rows.Length == 1 ? failure : failure with { Message = $"[第 {row} 行] {failure.Message}" });
         }
@@ -673,15 +634,10 @@ sealed class InsertEngine<T> : IInsert<T> where T : class
         };
     }
 
-    /// <summary>分表实体把整批按目标片分组（片内保留<em>入参顺序</em>的行下标，片的先后按各片首行第一次
-    /// 出现的先后），非分表实体交回 <c>null</c> = "整批同一张表，照旧按连续区间切块"。
-    ///
-    /// <para><b>算在取值段而不是发射段</b>：<see cref="SplitRouting.Resolve"/> 读的是实体上的分片键值，而
-    /// <c>AuditValue</c> 刚在那一段跑过 —— 发射段再读一次，三个出口（各自的文本、各自的构建时机）就可能读到
-    /// 钩子改过的与没改过的两份值，于是同一批行在不同出口里进了不同的片。</para>
-    ///
-    /// <para>分片键为空的那一行在这里当场抛：一条都不写，而不是按 SqlSugar 那一族的"空值当作今天"
-    /// 把行静默送进本月那张表（<c>SplitTableService.cs:65,75-76</c> 的读码结论）。</para></summary>
+    /// <summary>分表实体把整批按目标片分组（片内保留入参顺序的行下标，片的先后按各片首行第一次出现的先后），
+    /// 非分表实体交回 null = "整批同一张表，照旧按连续区间切块"。算在取值段而不是发射段：分片键的读数
+    /// 要在 AuditValue 之后定格，发射段再读就可能读到钩子改过的与没改过的两份值，同一批行进了不同的片。
+    /// 分片键为空的那一行当场抛：一条都不写，不把行静默送进"本月"那张表。</summary>
     List<(TableInfo Table, int[] Rows)>? SplitGroups(EntityContract contract, IEntityTypeSchema<T> schema)
     {
         if (contract.Table.Split is not { } split)
@@ -707,7 +663,7 @@ sealed class InsertEngine<T> : IInsert<T> where T : class
         return [.. groups.ConvertAll(g => (g.Table, g.Rows.ToArray()))];
     }
 
-    /// <summary>发射段：按 §12.3 的公式分块，每块一份独立 AST + <see cref="DialectSql"/> + 参数表。</summary>
+    /// <summary>发射段：按参数预算的公式分块，每块一份独立 AST + DialectSql + 参数表。</summary>
     InsertPlan Build(Preparation preparation, Backfill backfill)
     {
         var provider = _orm.Provider;
@@ -723,7 +679,7 @@ sealed class InsertEngine<T> : IInsert<T> where T : class
         RequireColumns(preparation);
 
         // 回填集为空就没有那一档：带 Returning 的文本会生成一条「看着像在回填」的普通 INSERT。
-        // 执行口自己会拒（ReadBackAsync 之前先查），但离线口是给人审阅用的，读到一条假 OUTPUT 就已经误导了。
+        // 执行口自己会拒（ReadBackAsync 之前先查），但离线口是给人审阅用的，读到一条假 OUTPUT 就已经误导。
         ColumnContract[] returning = backfill switch
         {
             Backfill.None => [],
@@ -731,30 +687,29 @@ sealed class InsertEngine<T> : IInsert<T> where T : class
             _ => Require(preparation.Generated, "既没有自增列也没有并发列：没有任何一列的值归库管，回填那一档无事可做。"),
         };
 
-        // §12.3：预算先留十分之一的余量（文本里还有表名/列名/OUTPUT），再除以每行参数个数，至少 1 行。
-        // 请求把块宽压下来（WithBulk 的 rowsPerRoundTrip）或按请求逐条，都走这同一个出口取数（见 ChunkRows 的抬头）。
+        // 参数预算先留十分之一的余量（文本里还有表名/列名/OUTPUT），再除以每行参数个数，至少 1 行。
+        // 请求把块宽压下来或按请求逐条，都走同一个出口取数（见 ChunkRows）。
         var budgetRows = StatementEmitter.RowsPerStatement(budget, columns.Length);
         var rowsPerStatement = ChunkRows(preparation, _requested ?? BulkMethod.MultiValue);
         var degraded = false;
 
-        // L3 → L5 的那一跳（§12.4 第 1 项）：没有批量 RETURNING/OUTPUT 的库要回填，只能逐条。
-        // SQL Server 走不到（Keys.SupportsBulkKeyRetrieval = true），达梦/Oracle 系必然走到。
+        // L3 → L5 的那一跳：没有批量 RETURNING/OUTPUT 的库要回填，只能逐条。
+        // SQL Server 走不到（SupportsBulkKeyRetrieval = true），达梦/Oracle 系必然走到。
         if (backfill != Backfill.None && !provider.Keys.SupportsBulkKeyRetrieval)
         {
             rowsPerStatement = 1;
             degraded = true;
         }
 
-        // 逐条之后键落在哪里 —— v0.34 立的那颗口子（§14 卡了两家的那格）。资格收窄到三件同时成立：
-        // 这一家没有批量 RETURNING、声明了"语句后回读"、而回填集恰好是一颗自增列。并发列与多颗键
-        // 都不在回读句给得出的东西里，它们照旧走 EmitReturning 的拒绝路径，不在这里假装覆盖。
+        // 逐条之后键落在哪里：资格收窄到三件同时成立——这一家没有批量 RETURNING、声明了"语句后回读"、
+        // 而回填集恰好是一颗自增列。并发列与多颗键不在回读句给得出的东西里，照旧走拒绝路径，不假装覆盖。
         var postRead = degraded && provider.Keys.SupportsPostStatementKeyRead && returning is [{ IsIdentity: true }];
 
         var chunks = new List<InsertChunk>((_rows.Length + rowsPerStatement - 1) / rowsPerStatement);
 
         // 建一段文本：不分表时是"连续的这几行"（ordinals 为 null，回填按 FirstRow + 行号对回去），
-        // 分表时是"这一张片的那几行"，它们的下标不连续，所以块要自带那份下标表。
-        // 两条路共用同一段发射与钩子代码 —— 差别只在表位给哪张表、哪几行进这一块。
+        // 分表时是"这一张片的那几行"，下标不连续，块自带那份下标表。
+        // 两条路共用同一段发射与钩子代码——差别只在表位给哪张表、哪几行进这一块。
         void EmitChunk(TableInfo table, int[]? ordinals, int first, int count)
         {
             var ast = new InsertStatement
@@ -822,9 +777,8 @@ sealed class InsertEngine<T> : IInsert<T> where T : class
     ColumnContract[] Require(ColumnContract[] columns, string whyEmpty)
         => columns.Length > 0 ? columns : throw new QuickSqlException($"{Prepare().Table} {whyEmpty}");
 
-    /// <summary>每格都参数化；<c>ParameterBinding</c> 的回放在 <c>StatementEmitter.ApplyBinding</c>，三条写链共用一份。
-    /// <b>不分表走这一颗，一块不给它多分配一个下标数组</b>（§12.7 钉的是每次插入的字节数与分配数，
-    /// 为分表那一条路把连续区间物化成 <c>int[]</c> 是让整批调用方替它付钱）。</summary>
+    /// <summary>每格都参数化；ParameterBinding 的回放在 StatementEmitter.ApplyBinding，三条写链共用一份。
+    /// 不分表走这一颗，一块不给它多分配一个下标数组（为分表把连续区间物化成 int[] 是让整批调用方替它付钱）。</summary>
     static IReadOnlyList<IReadOnlyList<SqlExpression?>> RowsOf(object?[][] cells, int first, int count, ColumnContract[] columns)
     {
         var rows = new IReadOnlyList<SqlExpression?>[count];
@@ -834,8 +788,8 @@ sealed class InsertEngine<T> : IInsert<T> where T : class
             var source = cells[first + row];
             var values = new SqlExpression?[columns.Length];
 
-            // 每一格都是参数：这一版不产生 DEFAULT 格（那要走"部分列插入"，见 §16 的 IgnoreColumns）。
-            // 值为 null 也照样参数化成 NULL，而不是让那一格落 DEFAULT —— 有默认值约束的列上这两者不同。
+            // 每一格都是参数：这一版不产生 DEFAULT 格（那要走"部分列插入"）。
+            // 值为 null 也照样参数化成 NULL，而不是让那一格落 DEFAULT——有默认值约束的列上这两者不同。
             for (var column = 0; column < columns.Length; column++)
                 values[column] = new ParameterValue(source[column], columns[column]);
 
@@ -845,9 +799,8 @@ sealed class InsertEngine<T> : IInsert<T> where T : class
         return rows;
     }
 
-    /// <summary>分表那一块：行在入参数组里不连续（按月切表时相邻两行可以隔三个月），所以这里按
-    /// 那一份下标表取行，其余与上面那颗逐字相同。两棵的<em>内层</em>只有一份参数化形状可言，
-    /// 是因为它总共就三行 —— 抽成一颗共享方法要为每次分块多走一层调用与一个数组。</summary>
+    /// <summary>分表那一块：行在入参数组里不连续（按月切表时相邻两行可以隔三个月），按那一份下标表取行，
+    /// 其余与上面那颗相同。内层不抽共享方法：总共三行，抽取要为每次分块多走一层调用与一个数组。</summary>
     static IReadOnlyList<IReadOnlyList<SqlExpression?>> RowsOf(object?[][] cells, int[] ordinals, ColumnContract[] columns)
     {
         var rows = new IReadOnlyList<SqlExpression?>[ordinals.Length];
@@ -866,7 +819,7 @@ sealed class InsertEngine<T> : IInsert<T> where T : class
         return rows;
     }
 
-    /// <summary>只用于 <see cref="StringBuilder"/> 的预容量（§12.7 E）：每颗参数按 <c>@p123, </c> 估 7 个字符。</summary>
+    /// <summary>只用于 StringBuilder 的预容量：每颗参数按 "@p123, " 估 7 个字符。</summary>
     static int EstimateLength(ColumnContract[] columns, int rows)
     {
         var length = 96 + rows * (columns.Length * 7 + 4);
@@ -877,8 +830,8 @@ sealed class InsertEngine<T> : IInsert<T> where T : class
         return length;
     }
 
-    /// <summary>集群从契约的表位算（§16.4）：写侧永远是主库那一格，所以这里只带名字，不带角色 ——
-    /// 那个结论由 <c>AdoExecutor.RentAsync</c> 一处下，两处各下一遍就会漂移。</summary>
+    /// <summary>集群从契约的表位算：写侧永远是主库那一格，所以这里只带名字，不带角色——
+    /// 那个结论由 AdoExecutor.RentAsync 一处下，两处各下一遍就会漂移。</summary>
     ExecutionTag Tag()
     {
         var table = Prepare().Contract.Table;
@@ -886,7 +839,7 @@ sealed class InsertEngine<T> : IInsert<T> where T : class
         return new ExecutionTag("insert", [table.Name], DataSourceRouting.ClusterOf(table));
     }
 
-    /// <summary>取值段的产物。<see cref="Cells"/> 已经是 <c>AuditValue</c> 之后的值，
+    /// <summary>取值段的产物。Cells 已经是 AuditValue 之后的值，
     /// 所以三个出口共用它 = 同一份数据、几种文本。</summary>
     sealed record Preparation(
         EntityContract Contract,
@@ -901,23 +854,21 @@ sealed class InsertEngine<T> : IInsert<T> where T : class
         IReadOnlyList<HookTrace> Traces)
     {
         /// <summary>分表实体的目标片分组，null = 不分表（整批同一张表，切块照旧走连续区间）。
-        /// 片的<em>内容</em>是那几行在入参数组里的下标，所以一个块装的行可以不连续，而回填仍按
-        /// <see cref="InsertChunk.RowOrdinals"/> 对得回去。<b>在取值段一次算完</b>：发射段、装载通道、
-        /// 往返次数估算三处都要分组，而 <see cref="SplitRouting.Resolve"/> 读的是实体上已被
-        /// <c>AuditValue</c> 填过的分片键值 —— 三处各读各的就会给出三份可能不同的分片答案。</summary>
+        /// 片的内容是那几行在入参数组里的下标，一个块装的行可以不连续，回填仍按 InsertChunk.RowOrdinals 对得回去。
+        /// 在取值段一次算完：发射段、装载通道、往返次数估算三处都要分组，而分片键值刚被 AuditValue 填过——
+        /// 三处各读各的就会给出三份可能不同的分片答案。</summary>
         public IReadOnlyList<(TableInfo Table, int[] Rows)>? Groups { get; init; }
 
         public string Table => Contract.Table.Name;
     }
 
-    /// <summary>发射段要不要带 <c>Returning</c>，以及带哪几列。三档而不是布尔：并发列（§8.2）落地后，
-    /// 「回填主键」（公开口那一档）与「回填库里给的那些列」（跟踪器那一档）是两件事，
-    /// 而只有后者在 <c>OUTPUT</c> 里多出一列 —— 让前者跟着变就把黄金样本白改了一遍。</summary>
+    /// <summary>发射段要不要带 Returning，以及带哪几列。三档而不是布尔：「回填主键」（公开口那一档）与
+    /// 「回填库里给的那些列」（跟踪器那一档）是两件事，只有后者在 OUTPUT 里多出并发列一列。</summary>
     enum Backfill
     {
         None,
 
-        /// <summary>只有自增列。没有并发列时与 <see cref="Generated"/> 逐字同文。</summary>
+        /// <summary>只有自增列。没有并发列时与  逐字同文。</summary>
         Keys,
 
         /// <summary>自增列 ∪ 并发列。</summary>

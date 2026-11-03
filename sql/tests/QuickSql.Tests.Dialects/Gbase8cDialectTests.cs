@@ -142,7 +142,7 @@ public sealed class Gbase8cDialectTests
         Assert.Equal(
             DbCapabilities.Paging_LimitOffset | DbCapabilities.Returning | DbCapabilities.Upsert_OnConflict |
             DbCapabilities.Cte | DbCapabilities.WindowFunctions | DbCapabilities.Count_Over_Window |
-            DbCapabilities.Boolean_Type | DbCapabilities.Guid_Raw16 | DbCapabilities.Schemas | DbCapabilities.Json_Type |
+            DbCapabilities.Boolean_Type | DbCapabilities.Guid_Raw16 | DbCapabilities.Schemas |
             DbCapabilities.CaseSensitive_Identifiers | DbCapabilities.Comment_On_Column |
             DbCapabilities.Alter_Column_Precision | DbCapabilities.TempTable | DbCapabilities.Bulk_Copy | DbCapabilities.Transactions,
             Provider.Capabilities);

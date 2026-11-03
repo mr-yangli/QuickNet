@@ -4,9 +4,9 @@ using QuickSql.Sql;
 
 namespace QuickSql.Providers.SqlServer;
 
-/// <summary>C# 形状 → T-SQL 模板表（§5.8）。键一律是 <c>Fn.Key(符号, 元数)</c> 的形态，
-/// 所以 <c>Math.Round(x)</c> 与 <c>Math.Round(x, 2)</c> 各占一条，不会因为 <c>string.Format</c>
-/// 忽略多余实参而静默生成少一截的 SQL。表里没有的键会抛 <c>UntranslatableExpressionException</c>。</summary>
+/// <summary>C# 形状 → T-SQL 模板表。键一律是 Fn.Key(符号, 元数) 的形态，
+/// 所以 Math.Round(x) 与 Math.Round(x, 2) 各占一条，不会因为 string.Format 忽略多余实参
+/// 而静默生成少一截的 SQL。表里没有的键会抛 UntranslatableExpressionException。</summary>
 public sealed class SqlServerExpressions : IExpressionRules
 {
     FrozenDictionary<string, FunctionMapping> _map = Build();
@@ -15,10 +15,10 @@ public sealed class SqlServerExpressions : IExpressionRules
 
     public string ConcatOperator => "+";
 
-    /// <summary>T-SQL 的 <c>LIKE</c> 没有默认转义符，只有 <c>ESCAPE</c> 子句，所以固定用反斜杠并总把子句写出来。</summary>
+    /// <summary>T-SQL 的 LIKE 没有默认转义符，只有 ESCAPE 子句，所以固定用反斜杠并总把子句写出来。</summary>
     public char LikeEscapeCharacter => '\\';
 
-    /// <summary>不开正则：T-SQL 的 <c>LIKE</c> 只有字符类通配，模式匹配得走 CLR 集成或 <c>PATINDEX</c>，语义与 <c>Regex</c> 差得远。</summary>
+    /// <summary>不开正则：T-SQL 的 LIKE 只有字符类通配，模式匹配得走 CLR 集成或 PATINDEX，语义与 Regex 差得远。</summary>
     public bool SupportsRegex => false;
 
     public bool TryGetFunction(string key, out FunctionMapping mapping) => _map.TryGetValue(key, out mapping!);
@@ -49,9 +49,7 @@ public sealed class SqlServerExpressions : IExpressionRules
         [QuickFn.Key(QuickFn.Substring, 2)] = new("SUBSTRING({0}, {1} + 1, LEN({0}))", RequiresNonNegativeLength: true),
         [QuickFn.Key(QuickFn.Substring, 3)] = new("SUBSTRING({0}, {1} + 1, {2})", RequiresNonNegativeLength: true),
         // 元数把接收者算在内（Template 收到的实参清单里第一个就是它），所以三槽的 REPLACE 登记在 /3、
-        // 两槽的 CHARINDEX 在 /2。这两行原本写成了 /2 与 /1，于是那一格永远查不到：不是渲染错，
-        // 是 <c>str.Replace</c>/<c>str.IndexOf</c> 从来没被翻译出来过（仓库里连一条含这两个函数的黄金样本都没有）。
-        // 撞出来的是第二个方言族（金仓的 STRPOS），两家同源同错，见 §13.5。
+        // 两槽的 CHARINDEX 在 /2——按 C# 方法形参个数想当然登记，那一格就永远查不到、函数静默不可翻译。
         [QuickFn.Key(QuickFn.Replace, 3)] = new("REPLACE({0}, {1}, {2})"),
 
         // CHARINDEX 返回 1 基且找不到给 0，而 IndexOf 是 0 基且找不到给 -1；实参顺序也是反的。

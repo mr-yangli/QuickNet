@@ -113,7 +113,7 @@ builder.Services.AddQuickSqlOrm(DbKind.SqlServer, connectionString, b =>
 QuickSql 包**不引用任何 ADO.NET 驱动**，驱动由应用侧提供，解析顺序：
 
 1. **NuGet 驱动包**（绝大多数库种）：装上后驱动程序集在应用输出目录，`Assembly.Load` 直接命中；
-2. **`drivers/` 目录**：把厂商给的 ADO.NET 程序集放进输出目录的 `drivers/` 子目录（信创现场不装 NuGet 包、不 csproj 时用；虚谷一族还要把原生库 `xugusql.dll`/`libxugusql.so` 放在同目录）；
+2. **`drivers/` 目录**：把厂商给的 ADO.NET 程序集放进输出目录的 `drivers/` 子目录（信创现场不装 NuGet 包、不 csproj 时用；虚谷一族 4.0.0.8 起只有托管那一份 `XuguClient.dll`，没有原生库要摆）；
 3. **代码注入**：`DriverRegistry.Register("dameng", factory)` 把已在进程里的 `DbProviderFactory` 交进去（要覆盖内建程序集名/工厂类型时唯一手段）。
 
 每家 `DbKind` 对应的驱动包与内建程序集名：
@@ -128,7 +128,7 @@ QuickSql 包**不引用任何 ADO.NET 驱动**，驱动由应用侧提供，解�
 | 人大金仓 KingbaseES | `Kdbndp`（金仓官方） | `Kdbndp` |
 | 达梦 Dameng | `DmProvider`（官方包在 .NET 10 上实测还原失败，走 `drivers/` 或 `Register` 注入） | `DmProvider` |
 | 神通 ShenTong | 无公开 NuGet 包 | `Oscar`（厂商给件） |
-| 虚谷 Xugu | 无公开 NuGet 包 | `XuguClient`（厂商给件 + 原生库） |
+| 虚谷 Xugu | 无公开 NuGet 包 | `XuguClient`（厂商给件，4.0.0.8 起纯托管一颗） |
 | GBase 8s | 无公开 NuGet 包 | `GBase.DataDB`（厂商给件） |
 | DuckDB | `DuckDB.NET.Data.Full` | `DuckDB.NET.Data` |
 | ClickHouse | `ClickHouse.Client` | `ClickHouse.Client` |

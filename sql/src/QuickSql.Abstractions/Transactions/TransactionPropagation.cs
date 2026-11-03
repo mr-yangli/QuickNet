@@ -1,6 +1,6 @@
 namespace QuickSql.Transactions;
 
-/// <summary>事务传播模式（§6 (4)）。决定 <c>BeginTransaction</c> 在已有环境事务时的行为。</summary>
+/// <summary>事务传播模式。决定 BeginTransaction 在已有环境事务时的行为。</summary>
 public enum TransactionPropagation
 {
     /// <summary>加入当前环境事务（SAVEPOINT 嵌套）。没有环境事务时新开一条。默认值。</summary>

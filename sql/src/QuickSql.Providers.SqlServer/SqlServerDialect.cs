@@ -4,16 +4,10 @@ using QuickSql.Sql.Ast;
 
 namespace QuickSql.Providers.SqlServer;
 
-/// <summary>T-SQL 方言（§9.4）。四个必须记住的分岔点：
-/// <list type="bullet">
-/// <item>分页 <c>OFFSET n ROWS FETCH NEXT m ROWS ONLY</c> 强制要求 <c>ORDER BY</c>，所以
-/// <see cref="PagingRequiresOrdering"/> 为 true —— §5.12 的「聚合剥序但分页绝不剥序」在这里是编译器不管、
-/// 写错就报错的硬约束。</item>
-/// <item>标识符用方括号，且目标别名只能出现在 <c>UPDATE alias FROM table AS alias</c> 这种写法里，
-/// 所以 UPDATE/DELETE 整个覆写。</item>
-/// <item><c>OUTPUT inserted.*</c> 位于列清单与 <c>VALUES</c> 之间，而 PG 系的 <c>RETURNING</c> 在语句末尾。</item>
-/// <item>字符串字面量要带 <c>N</c> 前缀（§10.4）。</item>
-/// </list></summary>
+/// <summary>T-SQL 方言的四个分岔点：分页 OFFSET n ROWS FETCH NEXT m ROWS ONLY 强制要求 ORDER BY
+/// （PagingRequiresOrdering 为 true，编译器不管、写错就报错的硬约束）；标识符用方括号，且目标别名只能出现在
+/// UPDATE alias FROM table AS alias 这种写法里，所以 UPDATE/DELETE 整个覆写；OUTPUT inserted.* 位于
+/// 列清单与 VALUES 之间（PG 系的 RETURNING 在语句末尾）；字符串字面量要带 N 前缀。</summary>
 public sealed class SqlServerDialect(SqlServerTypes types, SqlServerKeys keys, SqlServerValues values, SqlServerExpressions expressions)
     : DialectBase(IdentifierPolicy.SqlServer, values, expressions)
 {
@@ -21,9 +15,8 @@ public sealed class SqlServerDialect(SqlServerTypes types, SqlServerKeys keys, S
 
     public override char ParameterPrefix => '@';
 
-    /// <summary>五家里唯一一颗 true（v0.34 第二笔）：带前缀的参数名（<c>@p0</c>）在本家驱动上绿过两段历史 ——
-    /// v0.19–v0.31 一直是原样递 <c>@p0</c>（两台实例 95 条全绿），v0.32 摘前缀之后也全绿。
-    /// 摘法是为虚谷立的，本家不为它付每颗参数一次的 <c>Substring</c>（§12.8 第 6/11/12 行那五枚钉的量就是这笔账）。</summary>
+    /// <summary>五家里唯一一颗 true：带前缀的参数名（@p0）在本家驱动上一直可用。
+    /// 摘前缀那一手是为虚谷立的，本家不为它付每颗参数一次的 Substring。</summary>
     public override bool DriverAcceptsPrefixedParameterNames => true;
 
     public override bool PrefixUnicodeLiterals => true;
@@ -58,8 +51,8 @@ public sealed class SqlServerDialect(SqlServerTypes types, SqlServerKeys keys, S
         }
     }
 
-    /// <summary><c>UPDATE [t0] SET [Name] = @p FROM [Orders] AS [t0] WHERE [t0].[Id] = @p</c>：
-    /// T-SQL 的 <c>UPDATE</c> 目标不接受别名声明，别名要在 <c>FROM</c> 里给。</summary>
+    /// <summary>UPDATE [t0] SET [Name] = @p FROM [Orders] AS [t0] WHERE [t0].[Id] = @p：
+    /// T-SQL 的 UPDATE 目标不接受别名声明，别名要在 FROM 里给。</summary>
     public override void Emit(in UpdateStatement update, SqlWriter writer)
     {
         writer.Append("UPDATE ");
@@ -77,7 +70,7 @@ public sealed class SqlServerDialect(SqlServerTypes types, SqlServerKeys keys, S
             EmitExpression(update.Sets[i].Value, writer);
         }
 
-        // UPDATE 的 OUTPUT 在 SET 之后、FROM 之前；不回写就等于"无痕降级"（§1.2 原则 4），所以这里必须落地。
+        // UPDATE 的 OUTPUT 在 SET 之后、FROM 之前；不回写就等于"无痕降级"，所以这里必须落地。
         if (update.Returning.Count > 0)
         {
             writer.Append(' ');
@@ -117,26 +110,23 @@ public sealed class SqlServerDialect(SqlServerTypes types, SqlServerKeys keys, S
         }
     }
 
-    /// <summary>行集源在本家起的别名：目标用 <c>t0</c>（<see cref="DialectBase.WriteTargetAlias"/>），源用另一颗
-    /// 不与业务列撞的字面名。两边都过 <see cref="EmitIdentifier"/> 取号，引号与折叠由策略给。</summary>
+    /// <summary>行集源在本家起的别名：目标用 t0，源用另一颗不与业务列撞的字面名。
+    /// 两边都过 EmitIdentifier 取号，引号与折叠由策略给。</summary>
     const string MergeSource = "qsrc";
 
-    /// <summary><c>InsertOrUpdate</c> 在本家的发射：<b>T-SQL 的 <c>MERGE INTO … USING (VALUES …) … WHEN MATCHED …
-    /// WHEN NOT MATCHED … ;</b></b>。这一族有真正的多行 <c>VALUES</c> 行集语法（不像虚谷那一家 <c>(VALUES …)</c>
-    /// 当场语法错），所以源直接落一颗带列名清单的行集，参数逐格登记一次、后面各支都引它的别名；
-    /// <c>ON</c> 与两支的去向由共用层那份 <see cref="DialectBase.EmitMergeTail"/> 发（三家一处真相）。</summary>
-    ///
-    /// <para><b>目标位带 <c>WITH (HOLDLOCK)</c></b>：这是 T-SQL <c>MERGE</c> 那条有名的并发缺口
-    /// （两条并发 <c>MERGE</c> 能在"没命中→插"与"命中→改"之间交错，插出重复键或丢更新）的官方缓解——文档口径
-    /// 是把 <c>MERGE</c> 当一条 <c>SERIALIZABLE</c> 范围的读来锁住目标；<c>HOLDLOCK</c> 只在事务里持续到提交，
-    /// 与 <c>InsertOrUpdateEngine</c> 那句"多块时自开一条事务"配套。这一格【文档·Microsoft MERGE 语句】，
-    /// 是否真挡住那一竞态要在一台活 SQL Server 上并发跑一次才算结清（§14、集成册补一场）。</para></summary>
+    /// <summary>InsertOrUpdate 在本家的发射：T-SQL 的 MERGE INTO … USING (VALUES …) … WHEN MATCHED …
+    /// WHEN NOT MATCHED … ;。这一族有真正的多行 VALUES 行集语法（不像虚谷那一家当场语法错），所以源直接落
+    /// 一颗带列名清单的行集，参数逐格登记一次、后面各支都引它的别名；ON 与两支的去向由共用层那份
+    /// EmitMergeTail 发。目标位带 WITH (HOLDLOCK)：这是 T-SQL MERGE 那条有名的并发缺口（两条并发 MERGE
+    /// 能在"没命中→插"与"命中→改"之间交错，插出重复键或丢更新）的官方缓解——文档口径是把 MERGE 当一条
+    /// SERIALIZABLE 范围的读来锁住目标，HOLDLOCK 只在事务里持续到提交，与"多块时自开一条事务"配套；
+    /// 是否真挡住那一竞态要在一台活 SQL Server 上并发跑一次才算结清。</summary>
     public override void Emit(in UpsertStatement upsert, SqlWriter writer)
     {
         // 主键是自增列时整句裹一对 SET IDENTITY_INSERT … ON/OFF：这一格是活库抓出来的——SQL Server 编译整条 MERGE
-        // 时就验 WHEN NOT MATCHED INSERT 那一支写了显式自增键，于是"全命中、INSERT 根本不触发"也照样报 544
-        // （集成册 QUICKSQL_TEST_CONNECTION 第一跑红在此）。打开让显式自增键合法（本家声明了 SupportsExplicitIdentityInsert），
-        // 关掉恢复；SQL Server 收 MultiStatement，这对开关与 MERGE 同一条命令递交、同一个会话。
+        // 时就验 WHEN NOT MATCHED INSERT 那一支写了显式自增键，于是"全命中、INSERT 根本不触发"也照样报 544。
+        // 打开让显式自增键合法（本家声明了 SupportsExplicitIdentityInsert），关掉恢复；
+        // SQL Server 收 MultiStatement，这对开关与 MERGE 同一条命令递交、同一个会话。
         var identityKey = upsert.Keys.Any(static k => k.IsIdentity);
 
         if (identityKey)

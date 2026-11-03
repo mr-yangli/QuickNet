@@ -1,6 +1,6 @@
 namespace QuickSql.Metadata;
 
-/// <summary>元数据来源层，优先级从高到低（§10.2）。</summary>
+/// <summary>元数据来源层，优先级从高到低。</summary>
 public enum MetadataLayer
 {
     ProviderFallback = 0,
@@ -10,13 +10,13 @@ public enum MetadataLayer
     Fluent = 4,
 }
 
-/// <summary>长度的量纲。混用这两把尺子是国产化联调第一天炸中文列的根因（§10.4）。</summary>
+/// <summary>长度的量纲。字符与字节两把尺子混用是中文列炸掉的典型根因。</summary>
 public enum LengthSemantics
 {
-    /// <summary>n 表示字符数：PG 系的 <c>varchar(n)</c>、SQL Server 的 <c>nvarchar(n)</c>。</summary>
+    /// <summary>n 表示字符数：PG 系的 varchar(n)、SQL Server 的 nvarchar(n)。</summary>
     Char = 0,
 
-    /// <summary>n 表示字节数：Oracle/DM 的 <c>VARCHAR2(n)</c>、SQL Server 非 UTF-8 排序规则下的 <c>varchar(n)</c>。</summary>
+    /// <summary>n 表示字节数：Oracle/DM 的 VARCHAR2(n)、SQL Server 非 UTF-8 排序规则下的 varchar(n)。</summary>
     Byte = 1,
 }
 

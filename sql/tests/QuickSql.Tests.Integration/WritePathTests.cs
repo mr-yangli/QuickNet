@@ -428,6 +428,54 @@ public sealed class WritePathTests
         Assert.Equal(1, storedOrders(innerCommitted));
     }
 
+    /// <summary>保存点路径的隔离级别门禁（2026-11-01，规格 §14 那笔「level 传了不生效、无警告无门禁」的销账）：
+    /// 嵌套（Requires）传与根不同的级别当场拒 —— SAVEPOINT 没有自己的隔离级别（继承外层是 SQL 标准），
+    /// 此前是静默忽略、调用方读不出来。传 Unspecified（没有表态）或与根相同的级别照常放行；
+    /// 拒的时候保存点没有发出去，外层事务照常可用。"要别的级别"的正当出口 RequiresNew
+    /// 在上一颗测试里钉（新开一条独立事务，各开各的）。</summary>
+    [Fact]
+    public async Task A_savepoint_with_a_different_isolation_level_is_refused()
+    {
+        Database.Ready();
+
+        var name = tagged(73);
+
+        using (var outer = Orm.BeginTransaction(IsolationLevel.ReadCommitted))
+        {
+            await Orm.Insert(row(name, 1m, scope("outer"))).ExecuteAffrowsAsync(TestContext.Current.CancellationToken);
+
+            // 与根相同 → 放行，照旧是保存点。
+            using (var same = Orm.BeginTransaction(IsolationLevel.ReadCommitted))
+            {
+                Assert.True(same.IsSavepoint);
+                same.Commit();
+            }
+
+            // 没有表态（Unspecified）→ 放行。
+            using (var unspecified = Orm.BeginTransaction(IsolationLevel.Unspecified))
+            {
+                Assert.True(unspecified.IsSavepoint);
+                unspecified.Commit();
+            }
+
+            // 与根不同 → 当场拒。同步口调用保证还在外层的帧里（环境槽位可见、走保存点路径）；
+            // Task.Run 会换一帧，那一路走到的是 RequiresNew 根事务，不是这一格。
+            Assert.Throws<QuickSqlException>(
+                () => Orm.BeginTransaction(IsolationLevel.Serializable).Dispose());
+
+            // 门禁没有弄坏外层：嵌套保存点照常能开，外层提交照常落库。
+            using (var after = Orm.BeginTransaction())
+            {
+                Assert.True(after.IsSavepoint);
+                after.Commit();
+            }
+
+            outer.Commit();
+        }
+
+        Assert.Equal(1, storedOrders(name));
+    }
+
     [Fact]
     public async Task RequiresNew_suspends_ambient_and_creates_independent_transaction()
     {

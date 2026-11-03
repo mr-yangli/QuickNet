@@ -3,86 +3,74 @@ using QuickSql.Providers;
 
 namespace QuickSql.Core.Schema;
 
-/// <summary>一张表这一趟<em>打算</em>对库做的改动（§9.5 的列级同步）。这一格是纯函数产物：契约与库里
-/// 读回的读数进，动作清单出，不连库、不发 DDL、不认 provider——只有"这一型在我这儿算不算同一型"那一问
-/// 交回 <see cref="ISchemaReader.ColumnShapeMatches"/>，因为那一问只有本家答得起。
-///
-/// <para>把它与执行分开是因为这一格必须能被离线<em>穷举</em>：真库上"改一颗标度"只发生一次，而
-/// "库里多一列、主键少一列、同名索引换了两列"这些形状在测试库里可以随手摆出来。
-/// 幂等裁判（第二趟零动作）量的也是这一格的归一，不是 DDL 文本。</para></summary>
-/// <remarks><b>拒则在计划里就落地，不留给执行层判断</b>（不删列、不改主键与自增那一族；删索引那一档
-/// 要调用方显式开，见 <see cref="Build"/> 的 <c>dropIndexes</c>）：执行层拿到的清单因此<em>不含任何会丢
-/// 数据的那一句</em>，而 <see cref="Refused"/> 是给人点名的那几格。</remarks>
+/// <summary>一张表这一趟打算对库做的改动（列级同步）。纯函数产物：契约与库里读回的读数进、动作清单出，
+/// 不连库、不发 DDL、不认 provider——只有"这一型在我这儿算不算同一型"那一问交回
+/// ISchemaReader.ColumnShapeMatches，因为那一问只有本家答得起。把它与执行分开是因为这一格必须能被离线穷举：
+/// 真库上"改一颗标度"只发生一次，而"库里多一列、主键少一列、同名索引换了两列"在测试库里可以随手摆出来；
+/// 幂等裁判（第二趟零动作）量的也是这一格的归一，不是 DDL 文本。拒则在计划里就落地、不留给执行层判断
+/// （不删列、不改主键与自增那一族；删索引要调用方显式开 dropIndexes），执行层拿到的清单因此不含任何
+/// 会丢数据的那一句，Refused 是给人点名的那几格。</summary>
 public sealed record StructurePlan(TableInfo Table)
 {
-    /// <summary>库里没有、这一趟要 <c>ADD</c> 的列，顺序 = 契约列序。</summary>
+    /// <summary>库里没有、这一趟要 ADD 的列，顺序 = 契约列序。</summary>
     public IReadOnlyList<ColumnContract> AddColumns { get; init; } = [];
 
-    /// <summary>库里已经有、形状或可空性对不上的列，要 <c>ALTER COLUMN</c>。
-    /// 主键列与"值归库给"的那几列不会出现在这一格（它们进 <see cref="Refused"/>）。</summary>
+    /// <summary>库里已经有、形状或可空性对不上的列，要 ALTER COLUMN。主键列与"值归库给"的那几列
+    /// 不会出现在这一格（它们进 Refused）。</summary>
     public IReadOnlyList<ColumnContract> AlterColumns { get; init; } = [];
 
-    /// <summary>要发（或重发）列备注的那些列：<b>新增的、被改的、备注本身变了的那三类的并集</b>，
-    /// 顺序 = 契约列序。并集而不是三张清单，是因为 T-SQL 的 <c>ALTER COLUMN</c> 会连带删掉这一列的扩展属性：
-    /// 改完精度不顺手把备注发回去，下一趟读到的备注就是空的，而"备注同步"这件事会以静默丢备注的形态过掉
-    /// 幂等裁判那一句"第二趟零动作"——它确实零动作，因为要发的东西已经不在库里了。</summary>
+    /// <summary>要发（或重发）列备注的那些列：新增的、被改的、备注本身变了的三类的并集，顺序 = 契约列序。
+    /// 并集而不是三张清单，是因为 T-SQL 的 ALTER COLUMN 会连带删掉这一列的扩展属性：改完精度不顺手把
+    /// 备注发回去，下一趟读到的备注就是空的，而"备注同步"会以静默丢备注的形态过掉幂等裁判——
+    /// 它确实零动作，因为要发的东西已经不在库里了。</summary>
     public IReadOnlyList<ColumnContract> ColumnComments { get; init; } = [];
 
-    /// <summary><see cref="AlterColumns"/> 里那些"这一趟会把库里的可空列<em>收紧</em>成 <c>NOT NULL</c>"的列，
-    /// 顺序 = 契约列序。<b>它是子集而不是第三件事</b>：放宽方向（契约可空而库里 NOT NULL）与只改形状那几列
-    /// 都不在这里，它们那一句 <c>ALTER</c> 撞不出 <c>23502</c>。
-    /// <para>这一格单独列出来，是因为收紧那一档的判据缺一半：契约与目录两侧都说得出口径，而
-    /// <em>"这一列有没有存量 NULL"只有库答得起</em>。所以归一在这里判（离线可穷举），探量在
-    /// <see cref="SchemaSyncer"/> 那一格做（它手里有连接），两边共读这一份子集——判据不另立第二处。</para></summary>
+    /// <summary>AlterColumns 里那些"这一趟会把库里的可空列收紧成 NOT NULL"的列，顺序 = 契约列序。
+    /// 它是子集而不是第三件事：放宽方向与只改形状的那几列都不在这里，它们的 ALTER 撞不出 23502。
+    /// 单独列出来是因为收紧那一档的判据缺一半——"这一列有没有存量 NULL"只有库答得起，所以归一在这里判
+    /// （离线可穷举），探量在 SchemaSyncer 那格做（它手里有连接），两边共读这一份子集，判据不另立第二处。</summary>
     public IReadOnlyList<ColumnContract> NullabilityTightenings { get; init; } = [];
 
-    /// <summary>要否重发<em>表</em>备注。只在契约说过（<see cref="TableInfo.Comment"/> 非 null）
-    /// 而库里那份与它不同才为真：null 说的是"没写过备注"，不是"要求库里没有备注"。</summary>
+    /// <summary>要否重发表备注。只在契约说过（TableInfo.Comment 非 null）而库里那份与它不同才为真：
+    /// null 说的是"没写过备注"，不是"要求库里没有备注"。</summary>
     public bool EmitTableComment { get; init; }
 
-    /// <summary>契约上有、这张表上没有的索引，要 <c>CREATE INDEX</c>。
-    /// "有没有"看的是<em>列的序列</em>而不是索引名（人给索引换过名而列没换，不该再建一条）。</summary>
+    /// <summary>契约上有、这张表上没有的索引，要 CREATE INDEX。"有没有"看的是列的序列而不是索引名
+    /// （人给索引换过名而列没换，不该再建一条）。</summary>
     public IReadOnlyList<IndexContract> CreateIndexes { get; init; } = [];
 
-    /// <summary>库里有、契约上没有、而<em>这一趟要 DROP</em> 的那几条，交回的是库里读回来的那颗
-    /// （名字与列序列都是目录的原文，不是契约的）。<b>这一格只在调用方显式开了"允许删索引"那一档时
-    /// 才可能非空</b>：默认关，因为删一条正在被人用的索引会当场拖慢查询，而契约里没有它可能只是
-    /// "这一册实体没覆盖那张表的全部查询"。唯一约束不进这一格（<c>DROP INDEX</c> 删不动它），
-    /// 它进 <see cref="Refused"/>。</summary>
+    /// <summary>库里有、契约上没有、而这一趟要 DROP 的那几条，交回的是库里读回来的那颗
+    /// （名字与列序列都是目录的原文）。只在调用方显式开了"允许删索引"那一档时才可能非空：
+    /// 默认关，删一条正在被人用的索引会当场拖慢查询，而契约里没有它可能只是"这一册实体没覆盖那张表的
+    /// 全部查询"。唯一约束不进这一格（DROP INDEX 删不动它），它进 Refused。</summary>
     public IReadOnlyList<SchemaIndex> DropIndexes { get; init; } = [];
 
-    /// <summary>这一家<em>读不出</em>所以这一趟判不了的那些档，按档汇成一行一行。
-    /// <b>它与 <see cref="Refused"/> 是两件事</b>：拒是"读得出、判得出、而这一趟故意不做"，
-    /// 判不了是"连判据都没有"。并成一格会让"换一家库"与"被规则挡住了"在报告里长同一个样。</summary>
+    /// <summary>这一家读不出所以这一趟判不了的那些档，按档汇成一行一行。它与 Refused 是两件事：
+    /// 拒是"读得出、判得出、而这一趟故意不做"，判不了是"连判据都没有"；并成一格会让"换一家库"
+    /// 与"被规则挡住了"在报告里长同一个样。</summary>
     public IReadOnlyList<string> NotJudged { get; init; } = [];
 
-    /// <summary>读得出而<em>不执行</em>的那些格，逐条指名并给出路（§9.5 的"要人工"清单）。</summary>
+    /// <summary>读得出而不执行的那些格，逐条指名并给出路（"要人工"清单）。</summary>
     public IReadOnlyList<string> Refused { get; init; } = [];
 
-    /// <summary>这张表这一趟一个字节都不发。注意 <see cref="NotJudged"/> 与 <see cref="Refused"/>
-    /// <em>不算动作</em>：它们是给人看的两串名字，不发 SQL。</summary>
+    /// <summary>这张表这一趟一个字节都不发。注意 NotJudged 与 Refused 不算动作：它们是给人看的两串名字，不发 SQL。</summary>
     public bool IsEmpty
         => AddColumns.Count == 0 && AlterColumns.Count == 0 && ColumnComments.Count == 0
            && !EmitTableComment && CreateIndexes.Count == 0 && DropIndexes.Count == 0;
 }
 
-/// <summary>契约 ↔ 库里读数 的比对（§9.5 的列级 diff 那一把尺）。
-///
-/// <para><b>比的是归一后的结构事实，不是类型文本</b>：发射侧的类型名一律大写而目录视图一律小写，
-/// <c>DATETIME2(3)</c> 发出去而目录回一颗 <c>datetime2</c> 加一个标度，手工建的表上 <c>DECIMAL</c> 读回
-/// <c>numeric</c>——三处都是同一型而文本不同，逐字符比文本的尺子第一天就假红。所以这一格只问两件事：
-/// 可空性（一颗布尔，家与家同义，Core 自己比，且比的是 <see cref="ColumnContract.NullableInStore"/>
-/// 而不是 <see cref="ColumnContract.IsNullable"/>）与形状（只有本家知道怎么折，交回
-/// <see cref="ISchemaReader.ColumnShapeMatches"/>）。</para>
-///
-/// <para><b>名字怎么配</b>：走这一家的 <see cref="IdentifierPolicy"/>——不敏感的家用忽略大小写的比较器，
-/// 敏感的家用逐字符，折大写的家先把两侧一起折上去再比。判据与发射层共用同一颗字段，所以
-/// "建出来的那一列"与"读回来的那一列"不可能配上两个名字。</para></summary>
+/// <summary>契约 ↔ 库里读数 的比对（列级 diff 那一把尺）。比的是归一后的结构事实、不是类型文本：
+/// 发射侧的类型名一律大写而目录视图一律小写，DATETIME2(3) 发出去目录回 datetime2 加标度，
+/// 手工建的表上 DECIMAL 读回 numeric——同一型而文本不同，逐字符比文本的尺子第一天就假红。
+/// 所以这一格只问两件事：可空性（Core 自己比，且比的是 NullableInStore 而不是 IsNullable）与形状
+/// （只有本家知道怎么折，交回 ISchemaReader.ColumnShapeMatches）。名字怎么配走这一家的 IdentifierPolicy：
+/// 不敏感的家用忽略大小写的比较器，敏感的家用逐字符，折大写的家先把两侧一起折上去再比；
+/// 判据与发射层共用同一颗字段，"建出来的那一列"与"读回来的那一列"不可能配上两个名字。</summary>
 public static class StructureDiff
 {
-    /// <param name="dropIndexes">库里多出的那条索引要不要 <c>DROP</c>。<b>默认 false</b>：那一档由调用方
-    /// 显式开（<c>SchemaSyncDropIndexes</c>），关掉时库里多出的那一条只进"要人工"清单。它不是"更严格的 diff"，
-    /// 是风险档不同——补一列不丢数据，删一条索引会当场拖慢正在跑的查询。</param>
+    /// <summary>比对并产出计划。dropIndexes 默认 false：库里多出的索引要不要 DROP 由调用方显式开
+    /// （SchemaSyncDropIndexes），关掉时那条只进"要人工"清单——它不是"更严格的 diff"，是风险档不同：
+    /// 补一列不丢数据，删一条索引会当场拖慢正在跑的查询。</summary>
     public static StructurePlan Build(
         EntityContract contract,
         SchemaTable actual,
@@ -199,10 +187,10 @@ public static class StructureDiff
         };
     }
 
-    /// <summary>缺列那一档：能加的就加，加不了的点名。<b>三种拒都在这里判</b>，因为三种都是
+    /// <summary>缺列那一档：能加的就加，加不了的点名。三种拒都在这里判，因为三种都是
     /// "发出去要么撞库要么留下半套状态"：主键列要重建约束；自增列 T-SQL 压根不允许加到已有表上；
-    /// NOT NULL 而库里已有行没有值可填——而契约里没有默认值那一格（§10.3 的字段清单是闭集），
-    /// Core 变不出一句 <c>DEFAULT</c>。</summary>
+    /// NOT NULL 而库里已有行没有值可填——除非契约配了默认值，
+    /// ADD COLUMN … DEFAULT … NOT NULL 让库自己把存量行填上。</summary>
     static void AddOrRefuse(
         ColumnContract expected,
         List<ColumnContract> adds,
@@ -222,10 +210,13 @@ public static class StructureDiff
         }
 
         // 值归库给的那一型（rowversion）在这里例外：库里已有的行由库自己填上值，NOT NULL 撞不出错。
-        if (!expected.NullableInStore && !expected.ValueFromStore)
+        // NOT NULL 且没配默认值照旧拒；配了默认值就走 ADD —— DefaultValue 的值域门禁在契约收尾那一格
+        // （G1 ∶ G2 共用），能走到这里的默认值一定是常量字面量档。
+        if (!expected.NullableInStore && !expected.ValueFromStore && expected.DefaultValue is null)
         {
-            refused.Add($"列 {expected.ColumnName} 在库里没有，而契约要它 NOT NULL：库里已有的行没有值可填，" +
-                        "而契约没有默认值那一格（出路：先按可空建、回填那一列，再把 NOT NULL 交给人）");
+            refused.Add($"列 {expected.ColumnName} 在库里没有，而契约要它 NOT NULL：库里已有的行没有值可填。" +
+                        "出路两选一：给这一列配默认值（Fluent HasDefaultValue / [DefaultValue]，发 ADD COLUMN … DEFAULT … NOT NULL），" +
+                        "或先按可空建、回填那一列，再把 NOT NULL 交给人");
             return;
         }
 
@@ -235,7 +226,7 @@ public static class StructureDiff
             comments.Add(expected);
     }
 
-    /// <summary>主键只判、只报，<em>永远不改</em>：那一档要连外键与索引一起重建。
+    /// <summary>主键只判、只报，永远不改：那一档要连外键与索引一起重建。
     /// 读不出主键列的那些家在这一格交回"判不了"而不是"没问题"——两侧都没读过主键就没人能声称它们一致。</summary>
     static void ComparePrimaryKey(
         EntityContract contract,
@@ -259,12 +250,11 @@ public static class StructureDiff
         refused.Add($"主键不一致：契约 ({declared}) / 库里 ({read})。改主键要重建约束与引用它的每一张表，这一趟不做（要人工）");
     }
 
-    /// <summary>索引那一档：缺省只补建、<em>不 DROP、不改名</em>；开了 <paramref name="dropIndexes"/>
-    /// 才把库里多出的那一条进删除清单。契约里没有那条索引可能只是"这一册实体没覆盖到那张表的所有查询"，
-    /// 而删掉一条正在被人用的索引会当场拖慢查询，所以那一档要调用方显式开。
-    /// <b>唯一约束即使开了那一档也不删</b>：它不是索引，<c>DROP INDEX</c> 删不动约束，发出去只会以报错收尾，
-    /// 拆它要走 <c>ALTER TABLE … DROP CONSTRAINT</c>，与改主键同一处境，所以它进 <see cref="Refused"/>
-    /// 并指名它是约束。同列序列换名算同一条（人改的多半是名字不是形状）。</summary>
+    /// <summary>索引那一档：缺省只补建、不 DROP、不改名；开了 dropIndexes 才把库里多出的那一条进删除清单。
+    /// 契约里没有那条索引可能只是"这一册实体没覆盖到那张表的所有查询"，而删掉一条正在被人用的索引会
+    /// 当场拖慢查询，所以那一档要调用方显式开。唯一约束即使开了那一档也不删：它不是索引，DROP INDEX
+    /// 删不动约束，发出去只会以报错收尾，拆它要走 ALTER TABLE … DROP CONSTRAINT，与改主键同一处境，
+    /// 所以它进 Refused 并指名它是约束。同列序列换名算同一条（人改的多半是名字不是形状）。</summary>
     static void CompareIndexes(
         EntityContract contract,
         SchemaTable actual,
@@ -286,8 +276,8 @@ public static class StructureDiff
 
         foreach (var index in read)
         {
-            // 匹配键带唯一性（v0.39 修的那格）：只比列序列的话，契约里的非唯一索引会与库里
-            // 同列序的唯一索引判成"已存在"，唯一性差异静默放过（反向同理）。
+            // 匹配键带唯一性：只比列序列的话，契约里的非唯一索引会与库里同列序的唯一索引判成"已存在"，
+            // 唯一性差异静默放过（反向同理）。
             readByKey[IndexKey(names.Join(index.Columns), index.IsUnique)] = index;
             readByName[names.Key(index.Name)] = index;
         }
@@ -315,7 +305,7 @@ public static class StructureDiff
 
             if (readByName.TryGetValue(wanted.Name, out var clash))
             {
-                // 撞名的那一条在这里已经点过名，<b>不能再算一次"库里多出一条索引"</b>：同一件事报两遍，
+                // 撞名的那一条在这里已经点过名，不能再算一次"库里多出一条索引"：同一件事报两遍，
                 // 看报告的人会以为要人工处理两格，而库里只有那一颗同名索引。
                 matched.Add(names.Key(clash.Name));
                 refused.Add($"索引 {wanted.Name} 在库里已经指向别的列序列：既不改它也不建撞名的那一条（要人工）");
@@ -345,16 +335,15 @@ public static class StructureDiff
         }
     }
 
-    /// <summary>索引匹配键：列序列 + 唯一性。唯一性进键是 v0.39 修的那格 ——
-    /// 同列序的唯一/非唯一两条索引不是同一个约束形状。</summary>
+    /// <summary>索引匹配键：列序列 + 唯一性。唯一性进键——同列序的唯一/非唯一两条索引不是同一个约束形状。</summary>
     static string IndexKey(string columns, bool unique) => unique ? "u:" + columns : "n:" + columns;
 
-    /// <summary>契约侧的唯一性读法：IndexKind.Unique 即唯一；唯一约束（Unique 约束档）在
-    /// <see cref="SchemaIndex.IsConstraint"/> 那一侧记账，不进这里。</summary>
+    /// <summary>契约侧的唯一性读法：IndexKind.Unique 即唯一；唯一约束在 SchemaIndex.IsConstraint
+    /// 那一侧记账，不进这里。</summary>
     static bool Unique(IndexContract index) => index.Kind == IndexKind.Unique;
 }
 
-/// <summary>名字在这家库里的配法（§9.2 的大小写那一格在 diff 侧的读数）。</summary>
+/// <summary>名字在这家库里的配法（大小写那一格在 diff 侧的读数）。</summary>
 readonly struct Names(IdentifierPolicy policy)
 {
     public StringComparer Comparer => policy.CaseSensitive ? StringComparer.Ordinal : StringComparer.OrdinalIgnoreCase;

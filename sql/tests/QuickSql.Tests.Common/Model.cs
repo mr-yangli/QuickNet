@@ -424,3 +424,31 @@ public class ArchiveNote
     [QuickColumn(Length = 128)]
     public string? Body { get; set; }
 }
+
+/// <summary>默认值那一格的靶实体（2026-11-01）：string/bool/int/decimal 四档各一列，
+/// 归 <c>DefaultValueTests</c> 的契约与 DDL 断言、<c>MetadataEquivalenceTests</c> 的 G1 ∶ G2 对拍共用。
+/// 全部列都给默认值之外再留一列不配的（<c>Bare</c>），钉住"没配就是 null"那一半。</summary>
+[Table("QuickSqlDefaultsRow")]
+public class DefaultsRow
+{
+    public int Id { get; set; }
+
+    [System.ComponentModel.DefaultValue("新行")]
+    [QuickColumn(Length = 16)]
+    public string? Label { get; set; }
+
+    [System.ComponentModel.DefaultValue(true)]
+    public bool Active { get; set; }
+
+    [System.ComponentModel.DefaultValue(7)]
+    public int Reserved { get; set; }
+
+    [System.ComponentModel.DefaultValue(0.5)]
+    public double Ratio { get; set; }
+
+    /// <summary>decimal 默认值的 Fluent 半边靶子（特性实参收不下 decimal）。本册不配默认值，
+    /// 只在 <c>DefaultValueTests</c> 的 Fluent 那颗里被赋值。</summary>
+    public decimal Amount { get; set; }
+
+    public string? Bare { get; set; }
+}

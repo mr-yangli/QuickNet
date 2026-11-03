@@ -1,6 +1,6 @@
 namespace QuickSql.Metadata;
 
-/// <summary>一条连接在这座集群里扮的角色。<b>写侧只有 <see cref="Primary"/> 一条路</b>：
+/// <summary>一条连接在这座集群里扮的角色。写侧只有 Primary 一条路：
 /// 从库上的写在任何一家都是"要么报错要么静默丢失"，本家不给它一个能表达出来的形状。</summary>
 public enum ConnectionRole
 {
@@ -8,7 +8,7 @@ public enum ConnectionRole
     Replica,
 }
 
-/// <summary>链式侧对角色的显式表态。<see cref="Auto"/> 才是交给 <see cref="DataSourceRouting"/> 的那一档。</summary>
+/// <summary>链式侧对角色的显式表态。Auto 才是交给 DataSourceRouting 的那一档。</summary>
 public enum ChainChoice
 {
     Auto,
@@ -16,8 +16,8 @@ public enum ChainChoice
     Replica,
 }
 
-/// <summary>这条语句在库里干的是哪一档。路由只认这一颗与链式表态，不认操作名字符串 ——
-/// <c>ExecutionTag.Operation</c> 是给钩子与日志读的（<c>"load-ref"</c>、<c>"concurrency-read"</c> 那一族），
+/// <summary>这条语句在库里干的是哪一档。路由只认这一颗与链式表态，不认操作名字符串——
+/// ExecutionTag.Operation 是给钩子与日志读的（"load-ref"、"concurrency-read" 那一族），
 /// 拿它当路由判据等于把公开文本格式变成正确性依赖。</summary>
 public enum RouteIntent
 {
@@ -25,20 +25,20 @@ public enum RouteIntent
     Write,
 }
 
-/// <summary>落在主档上的原因。每一档都要能被离线用例逐字断言 —— 读写分离最难验收的部分正是
+/// <summary>落在主档上的原因。每一档都要能被离线用例逐字断言——读写分离最难验收的部分正是
 /// "这句话到底走了哪条连接、为什么"，而路由读数比翻库便宜得多。</summary>
 public enum RouteReason
 {
     /// <summary>写语句，主库，没有第二档。</summary>
     WritePrimary,
 
-    /// <summary>链上点了 <c>FromPrimary()</c>。</summary>
+    /// <summary>链上点了 FromPrimary()。</summary>
     ChainPrimary,
 
-    /// <summary>链上点了 <c>FromReplica()</c>，而这座集群配了从库。</summary>
+    /// <summary>链上点了 FromReplica()，而这座集群配了从库。</summary>
     ChainReplica,
 
-    /// <summary>事务里的读。<b>不换连接</b>：换一条连接去读就不是这个事务里的读，
+    /// <summary>事务里的读。不换连接：换一条连接去读就不是这个事务里的读，
     /// 未提交的自己看不见、别人看不见的自己看见了，都是。</summary>
     InsideTransaction,
 
@@ -53,8 +53,8 @@ public enum RouteReason
     ReadReplica,
 }
 
-/// <summary>实体属于哪一座集群的声明，活在 <see cref="TableInfo.Source"/> 这一格里。
-/// <b>只有名字、没有连接串</b>：连接串归 <c>QuickSqlOrmOptions</c>，实体只点名它要哪一座。
+/// <summary>实体属于哪一座集群的声明，活在 TableInfo.Source 这一格里。
+/// 只有名字、没有连接串：连接串归 QuickSqlOrmOptions，实体只点名它要哪一座。
 /// 这条分工是"真库连接串永不进版本库"那一条在类型层的样子。</summary>
 public sealed record DataSourceFacts(string Name);
 
@@ -64,19 +64,19 @@ public readonly record struct DataSourceRoute(string Cluster, ConnectionRole Rol
     public bool IsPrimary => Role == ConnectionRole.Primary;
 }
 
-/// <summary>集群名与角色的换算。<b>全仓库只有一份实现</b>：读侧、写侧、装载通道、事务与 DDL 都从这里取，
-/// 与 <see cref="SplitRouting"/> 同一条理由 —— "同一句读在两个地方算出两个角色"这种偏差没有能发生的形状。</summary>
+/// <summary>集群名与角色的换算。全仓库只有一份实现：读侧、写侧、装载通道、事务与 DDL 都从这里取，
+/// 与 SplitRouting 同一条理由——"同一句读在两个地方算出两个角色"这种偏差没有能发生的形状。</summary>
 public static class DataSourceRouting
 {
-    /// <summary>没声明集群的实体所属的那一座，也是 <c>QuickSqlOrmOptions.ConnectionString</c> 那一条串所属的那一座。</summary>
+    /// <summary>没声明集群的实体所属的那一座，也是 QuickSqlOrmOptions.ConnectionString 那一条串所属的那一座。</summary>
     public const string DefaultCluster = "main";
 
-    /// <summary>一张表属于哪座集群。<b>缺省即 <see cref="DefaultCluster"/></b>，所以今天全部实体都在 main 上，
-    /// 而 main 就是那条唯一的连接串 —— 不声明的调用方行为一字不变。</summary>
+    /// <summary>一张表属于哪座集群。缺省即 DefaultCluster，所以今天全部实体都在 main 上，
+    /// 而 main 就是那条唯一的连接串——不声明的调用方行为一字不变。</summary>
     public static string ClusterOf(TableInfo table) => table.Source?.Name ?? DefaultCluster;
 
-    /// <summary>校验一个集群名：不许空、不许只有空白。<see cref="DefaultCluster"/> 不许被实体再声明一遍
-    /// （那一格由 <c>QuickSqlOrm</c> 的启动判据管：它比的是"在册的具名集群"，而这里是"用户写了什么"）。</summary>
+    /// <summary>校验一个集群名：不许空、不许只有空白。DefaultCluster 不许被实体再声明一遍
+    /// （那一格由 QuickSqlOrm 的启动判据管：它比的是"在册的具名集群"，而这里是"用户写了什么"）。</summary>
     public static string ValidateName(string name, string entityName)
     {
         if (string.IsNullOrWhiteSpace(name))
@@ -85,9 +85,9 @@ public static class DataSourceRouting
         return name.Trim();
     }
 
-    /// <summary>一次路由的判定。<b>顺序就是裁决</b>：写 ⇒ 主库；链上点名主库 ⇒ 主库；链上点名从库 ⇒
+    /// <summary>一次路由的判定。顺序就是裁决：写即主库；链上点名主库即主库；链上点名从库则
     /// 事务里当场拒（那句读根本不该换连接）、没配从库也当场拒（"你要从库而这座集群没有"不该静默落主库，
-    /// 那正是"看起来能用"那一类）、否则从库；剩下自动档按"事务内 → 本流写过 → 没配从库 → 从库"逐档落。</summary>
+    /// 那正是"看起来能用"那一类）、否则从库；剩下自动档按"事务内、本流写过、没配从库、从库"逐档落。</summary>
     public static DataSourceRoute Resolve(string cluster, RouteIntent intent, ChainChoice choice, bool inTransaction, bool writtenInFlow, int replicaCount)
     {
         ArgumentNullException.ThrowIfNull(cluster);
@@ -120,9 +120,8 @@ public static class DataSourceRouting
             : new DataSourceRoute(cluster, ConnectionRole.Replica, RouteReason.ReadReplica);
     }
 
-    /// <summary>从库的选取：按配上的顺序轮询。<b>没有权重、没有延迟探测</b>：那两件事都要 SPI 槽位，
-    /// 而 <c>IDbProvider</c> 那十一颗子 SPI 里没有一格承接库侧延迟（§14 那格点的就是这类空档），
-    /// 所以本家不假装会挑"最不老的那一台"。</summary>
+    /// <summary>从库的选取：按配上的顺序轮询。没有权重、没有延迟探测：那两件事都要 SPI 槽位，
+    /// 而 IDbProvider 的子 SPI 里没有一格承接库侧延迟，所以本家不假装会挑"最不老的那一台"。</summary>
     public static int ReplicaOrdinal(int counter, int replicaCount)
     {
         if (replicaCount <= 0)

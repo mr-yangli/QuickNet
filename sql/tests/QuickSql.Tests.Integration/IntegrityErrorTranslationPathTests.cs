@@ -193,4 +193,93 @@ public sealed class IntegrityErrorTranslationPathTests
 
         Database.Execute($"DELETE FROM {Quote("QuickSqlIntegrityTranslatePathId")} WHERE {Quote(nameof(TranslateIdentityRow.Board))} = @board", ("@board", board));
     }
+
+    // ── Columns 回查（§16.22 ② 取向 (a)，2026-11-01 落地） ─────────────────
+
+    /// <summary>约束名回契约查唯一索引的列集合：驱动交回约束名（今天只有 PG 系，名字活在
+    /// <c>Data["ConstraintName"]</c> 里）、名字与契约上的唯一索引对得上 —— 列集合就跟着走。
+    /// 断言不写死列名与索引名：取的是契约本身那一份（<c>IndexContract.ColumnNames</c> 与名字），
+    /// 命中的判据是"异常上那一份 == 契约上那一份"。</summary>
+    [Fact]
+    public async Task Columns_are_resolved_from_the_contract_when_the_driver_names_the_constraint()
+    {
+        AssumeClassified();
+
+        Assert.SkipUnless(Database.Family == Database.Target.PostgreSql,
+            "约束名今天只有 PG 系交回（Data[\"ConstraintName\"]）；SQL Server/MySQL 的号在结构化字段之外、" +
+            "SQLite 连名字都不给——那三家的 Columns 走下一颗反向用例。");
+
+        var orm = await RebuildStore(ct);
+
+        var board = "quicksql-columns-" + Guid.NewGuid().ToString("N")[..8];
+
+        await orm.Insert(new TranslateRow { Id = Guid.NewGuid(), Board = board, LineNo = 5 }).ExecuteAffrowsAsync(ct);
+
+        var unique = orm.Schemas.Contract<TranslateRow>().Indexes.Single(i => i.Kind == IndexKind.Unique);
+
+        var raised = Assert.Throws<UniqueConstraintException>(
+            () => orm.Insert(new TranslateRow { Id = Guid.NewGuid(), Board = board, LineNo = 5 })
+                .ExecuteAffrowsAsync(ct).GetAwaiter().GetResult());
+
+        Assert.Equal(unique.Name, raised.ConstraintName);
+        Assert.Equal(unique.ColumnNames, raised.Columns);
+
+        Database.Execute($"DELETE FROM {Table} WHERE {Quote(nameof(TranslateRow.Board))} = @board", ("@board", board));
+    }
+
+    /// <summary>反向第一格：驱动交不出约束名的家（SQL Server/MySQL 的号在结构化字段之外、
+    /// SQLite 连名字都不给），<see cref="DbUpdateException.Columns"/> 恒 <c>null</c> ——
+    /// 没有名字就没有回查的钥匙，宁可提示粗一点也不猜。</summary>
+    [Fact]
+    public async Task Columns_stay_null_when_the_driver_gives_no_constraint_name()
+    {
+        AssumeClassified();
+
+        Assert.SkipWhen(Database.Family == Database.Target.PostgreSql,
+            "PG 系交回约束名，命中那一半由上一颗用例判，这一颗在 PG 上没有意义。");
+
+        var orm = await RebuildStore(ct);
+
+        var board = "quicksql-noname-" + Guid.NewGuid().ToString("N")[..8];
+
+        await orm.Insert(new TranslateRow { Id = Guid.NewGuid(), Board = board, LineNo = 6 }).ExecuteAffrowsAsync(ct);
+
+        var raised = Assert.Throws<UniqueConstraintException>(
+            () => orm.Insert(new TranslateRow { Id = Guid.NewGuid(), Board = board, LineNo = 6 })
+                .ExecuteAffrowsAsync(ct).GetAwaiter().GetResult());
+
+        Assert.Null(raised.ConstraintName);
+        Assert.Null(raised.Columns);
+
+        Database.Execute($"DELETE FROM {Table} WHERE {Quote(nameof(TranslateRow.Board))} = @board", ("@board", board));
+    }
+
+    /// <summary>反向第二格：约束名有了、但契约里没有这只对象（手工 DDL 自起名的唯一索引）——
+    /// 查不到给 <c>null</c>，<b>既不抛也不误报</b>：失败方向安全（提示变粗），
+    /// 不把半句人话当列名摆上 UI。</summary>
+    [Fact]
+    public async Task A_constraint_outside_the_contract_leaves_columns_null()
+    {
+        AssumeClassified();
+
+        Assert.SkipUnless(Database.Family == Database.Target.PostgreSql,
+            "要在真实现场拿到约束名，今天只有 PG 系一档。");
+
+        var orm = await RebuildStore(ct);
+
+        Database.Execute($"CREATE UNIQUE INDEX {Quote("ux_out_of_band")} ON {Table} ({Quote(nameof(TranslateRow.Board))})");
+
+        var board = "quicksql-oob-" + Guid.NewGuid().ToString("N")[..8];
+
+        await orm.Insert(new TranslateRow { Id = Guid.NewGuid(), Board = board, LineNo = 1 }).ExecuteAffrowsAsync(ct);
+
+        var raised = Assert.Throws<UniqueConstraintException>(
+            () => orm.Insert(new TranslateRow { Id = Guid.NewGuid(), Board = board, LineNo = 2 })
+                .ExecuteAffrowsAsync(ct).GetAwaiter().GetResult());
+
+        // 撞的是契约外那只对象：名字逐字是它自己的（手工 DDL 起的那颗），契约里没有这一格可对，
+        // 名字交得回来、列查不出 —— 两格各答各的。
+        Assert.Equal("ux_out_of_band", raised.ConstraintName);
+        Assert.Null(raised.Columns);
+    }
 }

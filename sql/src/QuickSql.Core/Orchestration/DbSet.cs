@@ -11,52 +11,50 @@ using QuickSql.Tracking;
 
 namespace QuickSql;
 
-/// <summary>某一类实体在<em>一个会话里</em>的入口（§8.1：<c>DbSet&lt;T&gt; : ISet&lt;T&gt;</c>（本仓库里那个契约叫
-/// <c>ITrackedSet&lt;T&gt;</c>，改名的理由写在它自己的注释上），而 <c>ITrackedSet&lt;T&gt; : IQuery&lt;T&gt;</c>）。
-///
-/// <b>链式全部可用，<c>from … in</c> 不可用</b>（§16.16：跟踪集合也不是 <c>IQueryable</c>）—— 本类不新增任何
-/// 查询算子，它只是把 <see cref="QuickSqlQuery{T}"/> 那一条链和会话的跟踪器接在一起。
-/// 于是 §8.1 那三行示例的形状是直接的推论而不是巧合：<c>db.Orders.Where(...)</c> 得到 <c>IQuery&lt;Order&gt;</c>
-/// （<b>仍然跟踪</b>，因为派生出来的那一份引擎还带着会话），而 <c>.AsNoTracking()</c> 之后得到的是同一个模型
-/// 的无跟踪视图 —— §8.3 那句「只差一个标记位」从 v0.16 起是真的：那个标记位在引擎上，不在模型里。
-///
-/// <b>它不是缓存</b>：每次 <c>Set&lt;T&gt;()</c> 得到同一个对象（同一份身份映射，见 <see cref="DbContext.Set{T}"/>），
-/// 但链式算子每次产出新值（§5.11），两者不矛盾。</summary>
+/// <summary>某一类实体在一个会话里的入口。链式全部可用，from…in 不可用（跟踪集合不是 IQueryable）——
+/// 本类不新增任何查询算子，只把 QuickSqlQuery 那条链和会话的跟踪器接在一起：db.Orders.Where(...) 得到的
+/// IQuery〈Order〉仍然跟踪（派生出来的引擎还带着会话），AsNoTracking() 之后才是同一个模型的无跟踪视图
+/// ——标记位在引擎上，不在模型里。它不是缓存：每次 Set〈T〉() 得到同一个对象（同一份身份映射），
+/// 但链式算子每次产出新值，两者不矛盾。</summary>
 public sealed class DbSet<T> : QuickSqlQuery<T>, ITrackedSet<T> where T : class
 {
-    /// <summary>本类型的档。<b>构造时就先建好</b>，因为物化路径按 <see cref="Type"/> 查档，
-    /// 而查不到档意味着这一行没人跟 —— 那是"看起来跟了其实没跟"，本仓库不接受这种降级（§12.2）。</summary>
+    /// <summary>本类型的档。构造时就先建好：物化路径按 Type 查档，查不到档意味着这一行没人跟——
+    /// 那是"看起来跟了其实没跟"，本仓库不接受这种降级。</summary>
     readonly EntityTracker<T> _tracker;
 
-    /// <summary>会话那一份调度器。<b>本型的档不够用</b>：补载（<c>Load</c>）要把<em>子型</em>的实体缝进父的导航，
-    /// 而"这一行在会话里是哪一只"要按子型那一档问。留会话、不留一堆档，是因为档按 <see cref="Type"/> 查就好。</summary>
+    /// <summary>会话那一份调度器。本型的档不够用：补载（Load）要把子型的实体缝进父的导航，
+    /// "这一行在会话里是哪一只"要按子型那一档问。留会话、不留一堆档，是因为档按 Type 查就好。</summary>
     readonly ChangeTracker _session;
 
     LocalView<T>? _local;
 
-    /// <remarks>这两个标注是从 <see cref="QuickSqlOrm.RootEngine"/> 传下来的入口税（§5.10），
-    /// 不是本类自己反射：<b>下面那几个写侧成员一个都没有</b>，那正是 §14「G1 路径下写侧 0 反射」的形状。</remarks>
+    /// <summary>这两个标注是从 RootEngine 传下来的入口税，不是本类自己反射：写侧成员一个都没有。</summary>
     [RequiresUnreferencedCode("根模型要按 Type 向注册表取实体契约（G2）。")]
     [RequiresDynamicCode("G2 注册表编译读写委托。")]
     internal DbSet(DbContext context)
-        : base(context.Orm.RootEngine(typeof(T), context.Tracker, context.Gate))
+        : base(context.Orm.RootEngine(typeof(T), context.Tracker, context.Gate, context.ModelSchemas))
     {
         _tracker = context.Tracker.For<T>();
         _session = context.Tracker;
+        // 会话级模型覆写：Load/ThenInclude 那几条按子型现取契约的路改问同一份，
+        // 否则主查询按覆写模型、补载按组装根模型——半句人话两种模型，比全错更难查。
+        _contextSchemas = context.ModelSchemas;
     }
 
-    /// <summary>会话里已跟踪实例的内存视图（§8.1）。<b>只反映本会话见过的实体</b>，不等于库里有什么；
-    /// 每次枚举取当时那一份，所以枚举中途 <c>Remove</c> 不炸，但也看不到自己刚删的那一步
-    /// （被标删的实例留在视图里直到 <c>SaveChanges</c> 真把那句 <c>DELETE</c> 发出去）。</summary>
+    readonly Schema.IEntitySchemaRegistry? _contextSchemas;
+
+    /// <summary>补载那条路用的注册表：覆写在场用覆写，缺席用组装根的。</summary>
+    Schema.IEntitySchemaRegistry SchemasForLoad => _contextSchemas ?? Engine.Orm.Schemas;
+
+    /// <summary>会话里已跟踪实例的内存视图。只反映本会话见过的实体，不等于库里有什么；
+    /// 每次枚举取当时那一份，枚举中途 Remove 不炸，但也看不到自己刚删的那一步
+    /// （被标删的实例留在视图里直到 SaveChanges 真把那句 DELETE 发出去）。</summary>
     public LocalView<T> Local => _local ??= new LocalView<T>(_tracker.SnapshotEntities, _tracker.Find);
 
-    /// <summary>给已跟踪实例补载导航属性（§8.1）。对当前会话里每一颗 <typeparamref name="T"/> 实体，
-    /// 发一条 SQL 把 <paramref name="navigation"/> 指向的那一批子实体拿回来，再按 FK↔PK 缝到父实体的导航属性上。
-    /// 引用导航（<c>o =&gt; o.Customer</c>）与集合导航（<c>c =&gt; c.Orders</c>）都走这一颗口，
-    /// 分岔判据是导航属性的 CLR 型是不是 <see cref="IEnumerable{T}"/>。
-    ///
-    /// <para><b>为什么不静默返回 <c>this</c></b>：从前那一版抛"未实现"就是因为"调了 Load 就以为导航有值"
-    /// 是最难查的一种假象。现在它真发 SQL 了，返回 <c>this</c> 让链式继续是安全的。</para></summary>
+    /// <summary>给已跟踪实例补载导航属性。对当前会话里每一颗 T 实体，发一条 SQL 把 navigation 指向的那一批
+    /// 子实体拿回来，再按 FK↔PK 缝到父实体的导航属性上。引用导航与集合导航都走这一颗口，
+    /// 分岔判据是导航属性的 CLR 型是不是 IEnumerable。不静默返回 this 而真发 SQL：
+    /// "调了 Load 就以为导航有值"是最难查的假象。</summary>
     [RequiresUnreferencedCode("Load 按运行期 Type 反射读取 FK/PK 值与设置导航属性。")]
     [RequiresDynamicCode("Load 按运行期 Type 反射读取 FK/PK 值与设置导航属性。")]
     public ITrackedSet<T> Load<TProp>(Expression<Func<T, TProp>> navigation)
@@ -66,7 +64,7 @@ public sealed class DbSet<T> : QuickSqlQuery<T>, ITrackedSet<T> where T : class
     [RequiresDynamicCode("Load 按运行期 Type 反射读取 FK/PK 值与设置导航属性。")]
     async Task<ITrackedSet<T>> LoadAsync<TProp>(Expression<Func<T, TProp>> navigation, CancellationToken ct)
     {
-        // 补载不经七个执行口（它直接走 QueryInBatchesAsync），所以在这里自己进闸 ——
+        // 补载不经七个执行口（它直接走 QueryInBatchesAsync），所以在这里自己进闸——
         // Load 跑到一半时同一会话上别的操作进场照样被拒。
         Engine.Gate?.Enter();
 
@@ -107,7 +105,7 @@ public sealed class DbSet<T> : QuickSqlQuery<T>, ITrackedSet<T> where T : class
         return this;
     }
 
-    /// <summary>引用导航补载（如 <c>Load(o =&gt; o.Customer)</c>）：父端有 FK 列指向目标 PK。
+    /// <summary>引用导航补载（如 Load(o => o.Customer)）：父端有 FK 列指向目标 PK。
     /// 收集所有父实体的 FK 值 → 查目标表 WHERE PK IN (...) → 按 PK 索引 → 缝回父实体。</summary>
     [RequiresUnreferencedCode("Load 按运行期 Type 反射读取 FK/PK 值与设置导航属性。")]
     [RequiresDynamicCode("Load 按运行期 Type 反射读取 FK/PK 值与设置导航属性。")]
@@ -116,8 +114,8 @@ public sealed class DbSet<T> : QuickSqlQuery<T>, ITrackedSet<T> where T : class
         string memberName, Type targetType, CancellationToken ct)
     {
         var relationship = FindRelationship(parentContract, memberName);
-        var targetContract = Engine.Orm.Schemas.Contract(targetType);
-        var targetRead = Engine.Orm.Schemas.ReadDelegate(targetType);
+        var targetContract = SchemasForLoad.Contract(targetType);
+        var targetRead = SchemasForLoad.ReadDelegate(targetType);
         var targetPkColumns = targetContract.PrimaryKey;
 
         var parentFkGetters = BuildKeyGettersByColumnName(parentContract.ClrType, parentContract, relationship.ColumnNames);
@@ -146,7 +144,7 @@ public sealed class DbSet<T> : QuickSqlQuery<T>, ITrackedSet<T> where T : class
 
         var targetTable = Engine.Orm.NewTableRef(targetType, 0);
 
-        // IN 的值按参数预算分块发射（QueryEngine.QueryInBatchesAsync）：父端 FK 集超过预算
+        // IN 的值按参数预算分块发射（QueryInBatchesAsync）：父端 FK 集超过预算
         //（SQL Server 2100 / Oracle IN 列表 1000）时是多条子 SELECT，不是整条在驱动侧失败。
         var children = await Engine.QueryInBatchesAsync(
             [.. fkValues], targetPkColumns, targetTable, targetContract,
@@ -157,8 +155,7 @@ public sealed class DbSet<T> : QuickSqlQuery<T>, ITrackedSet<T> where T : class
 
         var pkGetters = BuildKeyGetters(targetType, targetPkColumns);
 
-        // 缝回父实体那一格：原先是每配到一颗子行就按运行期类型找一次属性、再反射写一次值
-        // （DbSet 的 T 就是父型，那颗 Type 从头到尾没变过），现在建一次委托、每行只调用。
+        // 缝回父实体那一格：建一次委托、每行只调用，不逐行反射找属性写值。
         var setNavigation = MemberAccessors.Setter(
             parentContract.ClrType, memberName,
             $"实体 {parentContract.ClrType.Name} 上没有名为 {memberName} 的引用导航属性，无法把补载的实体缝回父实体。",
@@ -172,8 +169,8 @@ public sealed class DbSet<T> : QuickSqlQuery<T>, ITrackedSet<T> where T : class
 
             if (parentByFk.TryGetValue(pkKey, out var matchedParents))
             {
-                // 缝会话里的那一只（§8.2）：这一行可能早就在跟踪档里（先查过它、或它刚被别处补载过），
-                // 而按刚物化那只缝会让同一行在会话里有两只实例。
+                // 缝会话里的那一只：这一行可能早就在跟踪档里（先查过它、或它刚被别处补载过），
+                // 按刚物化那只缝会让同一行在会话里有两只实例。
                 var stitched = _session.CanonicalOf(child, targetType) ?? child;
 
                 foreach (var parent in matchedParents)
@@ -182,7 +179,7 @@ public sealed class DbSet<T> : QuickSqlQuery<T>, ITrackedSet<T> where T : class
         }
     }
 
-    /// <summary>集合导航补载（如 <c>Load(c =&gt; c.Orders)</c>）：子端有 FK 列指向父端 PK。
+    /// <summary>集合导航补载（如 Load(c => c.Orders)）：子端有 FK 列指向父端 PK。
     /// 收集所有父实体的 PK 值 → 查子表 WHERE FK IN (...) → 按 FK 分组 → 缝回父实体的集合属性。</summary>
     [RequiresUnreferencedCode("Load 按运行期 Type 反射读取 FK/PK 值与设置导航属性。")]
     [RequiresDynamicCode("Load 按运行期 Type 反射读取 FK/PK 值与设置导航属性。")]
@@ -190,8 +187,8 @@ public sealed class DbSet<T> : QuickSqlQuery<T>, ITrackedSet<T> where T : class
         IReadOnlyList<T> parents, EntityContract parentContract,
         string memberName, Type childType, CancellationToken ct)
     {
-        var childContract = Engine.Orm.Schemas.Contract(childType);
-        var childRead = Engine.Orm.Schemas.ReadDelegate(childType);
+        var childContract = SchemasForLoad.Contract(childType);
+        var childRead = SchemasForLoad.ReadDelegate(childType);
         var fkColumnNames = DiscoverFkColumns(parentContract, childContract, memberName);
 
         var parentPkGetters = BuildKeyGetters(parentContract.ClrType, parentContract.PrimaryKey);
@@ -218,7 +215,7 @@ public sealed class DbSet<T> : QuickSqlQuery<T>, ITrackedSet<T> where T : class
         for (var i = 0; i < fkColumns.Length; i++)
             fkColumns[i] = childContract.ByColumn[fkColumnNames[i]];
 
-        // IN 的值按参数预算分块发射（QueryEngine.QueryInBatchesAsync）：父端 PK 集超过预算
+        // IN 的值按参数预算分块发射（QueryInBatchesAsync）：父端 PK 集超过预算
         //（SQL Server 2100 / Oracle IN 列表 1000）时是多条子 SELECT，不是整条在驱动侧失败。
         var children = await Engine.QueryInBatchesAsync(
             [.. pkValues], fkColumns, childTable, childContract,
@@ -248,28 +245,27 @@ public sealed class DbSet<T> : QuickSqlQuery<T>, ITrackedSet<T> where T : class
         }
 
         // 缝回集合导航：建一次四把委托（读、写、追加、造表），每行只调用。
-        // 原先这三处反射分散在每只父实体上 —— 找属性、按子行实际类型造 List<>、再反射写值。
         var nav = MemberAccessors.BindCollection(
             parentContract.ClrType, memberName, childType,
             $"实体 {parentContract.ClrType.Name} 上没有名为 {memberName} 的集合导航属性，无法把补载的子实体缝回父实体。");
 
-        // 枚举的是<em>父</em>而不是分组结果：一只没有子行的父同样要拿到一句"我捞过，这里没有人"。
-        // 只缝有人的那几只会让空串留下一颗 null，而 null 在级联删除那一档是"还没捞"（裁决①），
-        // 于是按消息给的出路 Load 一次之后仍然删不下去 —— 那句出路就成了死路。
+        // 枚举的是父而不是分组结果：没有子行的父同样要拿到"我捞过，这里没有人"的声明。
+        // 只缝有人的那几只会让空串留下一颗 null，而 null 在级联删除那一档是"还没捞"，
+        // Load 一次之后仍然删不下去。
         foreach (var (pkKey, parent) in parentByPk)
         {
             var collection = nav.NewCollection();
 
             if (grouped.TryGetValue(pkKey, out var childList))
                 foreach (var child in childList)
-                    // 同引用导航那一档：串里挂的是会话里的那一只，不是刚物化那一只（§8.2 同一行同一实例）。
-                    // 挂了双胞胎的后果要到级联删除才看得见：那一颗撞的是"同键两只实例在会话里没有定义"。
+                    // 串里挂的是会话里的那一只，不是刚物化那一只（同一行同一实例）。
+                    // 挂了双胞胎的后果要到级联删除才看得见：撞的是"同键两只实例在会话里没有定义"。
                     nav.Add(collection, _session.CanonicalOf(child, childType) ?? child);
 
             nav.Setter(parent, collection);
 
-            // 缝完就记基线：从这一刻起"这一串里有谁"是一句<em>捞过</em>的声明，
-            // 之后从里面摘掉一只，会话才判得出要删的是那一行（裁决③，见 Node.Baselines）。
+            // 缝完就记基线：从这一刻起"这一串里有谁"是一句捞过的声明，
+            // 之后从里面摘掉一只，会话才判得出要删的是那一行（见 Node.Baselines）。
             _tracker.RememberCollections((T) parent);
         }
     }
@@ -312,9 +308,8 @@ public sealed class DbSet<T> : QuickSqlQuery<T>, ITrackedSet<T> where T : class
         return null;
     }
 
-    /// <summary>补载/缝合那一条路的外键发现。<b>三档与级联落键那三档同名同序</b>
-    /// （跟踪器侧的 <c>ResolveCascadeForeignKey</c>）：同一根边在两条路径上不许有两个答案，
-    /// 否则「级联插得进去、Load 捞不上来」就成了裁决①那条出路自己走不通的死路。</summary>
+    /// <summary>补载/缝合那一条路的外键发现。三档与级联落键那三档同名同序（跟踪器侧的 ResolveCascadeForeignKey）：
+    /// 同一根边在两条路径上不许有两个答案，否则「级联插得进去、Load 捞不上来」就成了死路。</summary>
     static IReadOnlyList<string> DiscoverFkColumns(
         EntityContract parentContract, EntityContract childContract, string memberName)
     {
@@ -453,9 +448,9 @@ public sealed class DbSet<T> : QuickSqlQuery<T>, ITrackedSet<T> where T : class
         }
     }
 
-    // ── 写侧（§8.2 状态机的入口） ──────────────────────────────────
+    // ── 写侧 ──────────────────────────────────
 
-    /// <summary>标为新增。与 <see cref="DbContext.Add{T}"/> 是同一条路，只是 <c>T</c> 已经在这只对象上。</summary>
+    /// <summary>标为新增。与 DbContext.Add 是同一条路，只是 T 已经在这只对象上。</summary>
     public T Add(T entity)
     {
         _tracker.Add(entity);
@@ -477,7 +472,7 @@ public sealed class DbSet<T> : QuickSqlQuery<T>, ITrackedSet<T> where T : class
         return entity;
     }
 
-    /// <summary>纳入会话且每列都算脏（§8.3 那两行 <c>Attach</c> + <c>Entry(...).State = Modified</c> 的合成形态）。</summary>
+    /// <summary>纳入会话且每列都算脏（Attach + Entry(...).State = Modified 的合成形态）。</summary>
     public T Update(T entity)
     {
         _tracker.Update(entity);
@@ -485,8 +480,8 @@ public sealed class DbSet<T> : QuickSqlQuery<T>, ITrackedSet<T> where T : class
         return entity;
     }
 
-    /// <summary>标为删除。<b>此刻还没有发 <c>DELETE</c></b>，所以它仍在 <see cref="Local"/> 里；
-    /// 而 <c>SaveChanges</c> 一抛就整个回滚（§6 (1)），那一行会原样回到库里。</summary>
+    /// <summary>标为删除。此刻还没有发 DELETE，所以它仍在 Local 里；
+    /// 而 SaveChanges 一抛就整个回滚，那一行会原样回到库里。</summary>
     public T Remove(T entity)
     {
         _tracker.Remove(entity);
@@ -500,11 +495,11 @@ public sealed class DbSet<T> : QuickSqlQuery<T>, ITrackedSet<T> where T : class
             _tracker.Remove(entity);
     }
 
-    /// <summary>本会话中这一行的状态与逐列入口（§8.2）。<b>不在会话里的实例在这里抛</b>：
-    /// 取一个入口顺手把实体纳入会话，是一种没人说过的写入意图。泛型那一档才有收 lambda 的 <c>Property</c>。</summary>
+    /// <summary>本会话中这一行的状态与逐列入口。不在会话里的实例在这里抛：
+    /// 取一个入口顺手把实体纳入会话，是一种没人说过的写入意图。泛型那一档才有收 lambda 的 Property。</summary>
     public EntityEntry<T> Entry(T entity) => _tracker.Entry(entity);
 
-    // ── Find / Refresh（§8.3） ──────────────────────────────────────
+    // ── Find / Refresh ──────────────────────────────────────
 
     public T? Find(params object?[] primaryKeyValues)
         => FindAsync(default, primaryKeyValues).GetAwaiter().GetResult();
@@ -533,7 +528,7 @@ public sealed class DbSet<T> : QuickSqlQuery<T>, ITrackedSet<T> where T : class
     {
         ArgumentNullException.ThrowIfNull(entity);
 
-        var schema = Engine.Orm.Schemas.Schema<T>();
+        var schema = SchemasForLoad.Schema<T>();
         var keys = Engine.Model.Root.Contract!.PrimaryKey;
         var pkValues = new object?[keys.Length];
 

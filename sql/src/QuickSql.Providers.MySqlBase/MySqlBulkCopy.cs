@@ -8,49 +8,11 @@ using QuickSql.Providers;
 
 namespace QuickSql.Providers.MySqlBase;
 
-/// <summary>§12.1 的 L1「批量装载通道」在 MySQL 血统那一家的落地：<c>MySqlBulkCopy</c>
-/// （驱动把它包成 <c>LOAD DATA LOCAL INFILE</c> 的流式上传）。
-///
-/// <para><b>【2026-10-07 改判 —— 原文照抄在前，改判在后】</b>本类上一版抬头写的是"<b>成员形状不是猜的</b>：
-/// 构造子 <c>(MySqlConnection)</c>、<c>ColumnMappings.Add(MySqlBulkCopyColumnMapping)</c>、
-/// <c>new MySqlBulkCopyColumnMapping(int, string)</c>、<c>WriteToServerAsync(DataTable)</c> 那几颗，全部在
-/// 对照量具（m1∶m2 两趟，MySqlConnector 2.6.2，MySQL 8.4.8）里以强类型写法跑通过"。那句话把<em>强类型
-/// 调用面</em>当成了<em>反射面</em>，而两处不是一式。四颗读数（同一支驱动的运行时反射面）：
-/// ① <c>MySqlBulkCopy</c> 只有<em>一颗</em>公开构造子 <c>(MySqlConnection, MySqlTransaction? = null)</c> ——
-/// 量具里 <c>new MySqlBulkCopy(conn)</c> 能编译是因为第二位可省，而 <c>GetConstructors()</c> 交回的是两位的
-/// 完整签名，于是按"一位参数"点形状的 <c>ConnectionScopedCtor</c> 在这一家永远点空，整家静默退 L3；
-/// ② <c>MySqlBulkCopyColumnMapping</c> 只有 <c>(int, string, string? expression = null)</c>，而
-/// <c>Activator.CreateInstance(type, 两个实参)</c> 的绑定器<em>不认默认值</em>，当场 <c>MissingMethodException</c>；
-/// ③ <c>WriteToServerAsync(DataTable, CancellationToken)</c> 交回的是 <c>ValueTask&lt;MySqlBulkCopyResult&gt;</c>
-/// 而不是 <c>Task</c>，那句 <c>(Task)</c> 硬转会红在强转上；④ 这一族的装载类<em>没有任何 Dispose 面</em>
-/// （零接口、无 <c>Dispose</c>/<c>DisposeAsync</c>），而旧写法收尾时硬 cast 成 <c>IDisposable</c>。
-/// <b>旧句里"量具跑通过"那部分仍然成立</b>——它证的是强类型那条路；这一档要的是反射那条路，
-/// 而两处形状的差只有把通道真接上去才看得见（本笔的活库跑就是那一次接上）。</para>
-///
-/// <para><b>按序号映射源列、按名字映射目标列</b>：那颗映射构造子是 <c>(int sourceOrdinal, string destinationColumn)</c>
-/// 加一位本仓库永远交 <see langword="null"/> 的表达式位，与 T-SQL 那一家「源名 ↔ 目标名」的写法不同——
-/// 这不是疏漏而是那一族的形状：源是我们自己按 <see cref="BulkCopyRequest.Columns"/> 顺序建的
-/// <see cref="DataTable"/>（序号对齐在这里由构造保证），而目标列名才是跨表序漂移真正要防的那一格。
-/// <c>DestinationTableName</c> 的语义与 T-SQL 那条同：填不带库名的表名，限定交给连接所在的库——
-/// 分表时 <c>BulkCopyRequest.DestinationTable</c> 已由 <c>ISqlDialect.EmitTableName</c> 换算到片，
-/// 两边仍是同一张表（§9.2 那句在这里的第四个读者）。</para>
-///
-/// <para><b>连接串那道闸门在这里点名，而不是让装载在半路炸</b>：<c>LOAD DATA LOCAL</c> 要
-/// <c>AllowLoadLocalInfile=true</c> 放行，缺它时驱动在执行当场抛 NotSupportedException【实测·对照量具
-/// 补这颗参数前的第一趟，两条批量路径同红】。<see cref="UnavailableBecauseOf"/> 把那句话提到选层之前：
-/// Auto 因此落在 L3，而不是替调用方付一次半途而废的往返。<b>落在 L3 不等于留降级痕</b>：Auto 没承诺过
-/// 任何一层，缺这颗参数时它交回 Method=MultiValue、Degraded=false，而这句话原样进 <c>BulkReport.Reason</c>
-/// 【实测·真库 8.4.8 那一台原始串，集成册 <c>BulkPathTests.The_local_infile_gate_…</c>】—— 那句话因此是
-/// Auto 那条路上唯一的可见面，写成"没有通道"会把人支到 provider 那一侧，而该查的是那一串配置。
-/// 服务端那颗 <c>local_infile</c>
-/// 开关（8.4.8 实测为 ON）不在客户端可见面里，判不了就不装判——那条红线由写当场抛驱动自己的话接住。</para>
-///
-/// <para><b>事务那一格今天有了入参面</b>：旧句写的是"装载类的构造子只收连接，不像 T-SQL 那一家给一颗外部
-/// 事务参数，所以 <c>BulkConnection.Transaction</c> 在 L1 上交不出去"——那一读同样来自强类型面
-/// （<c>new MySqlBulkCopy(conn)</c> 那一形看不见第二位）。改判段第①颗读数里那颗两位构造子的第二位
-/// 正是 <c>MySqlTransaction</c>，所以这一格今天<em>交得出去</em>；交进去之后也带得动——活事务里写进去的四行
-/// 随回滚一并没有【实测·真库 8.4.8，集成册 <c>BulkPathTests.The_copy_channel_rides_the_transaction_and_rolls_back_with_it</c>：
-/// 提交那一半读得到、回滚那一半读不到，两半都是同一颗通道】。这一格因此不再是未实测的边界。
+/// <summary>批量装载通道：MySqlBulkCopy（驱动包成 LOAD DATA LOCAL INFILE 的流式上传）。
+/// 按序号映射源列、按名字映射目标列：源是我们按列序自建的 DataTable（序号由构造保证），
+/// 目标列名才是跨表序漂移要防的那一格；DestinationTableName 填不带库名的表名，限定交给连接所在的库。
+/// 成员形状按反射面点死（构造子两位、映射 ctor 第三位可省、返回 ValueTask、无 Dispose 面——
+/// 与强类型调用面的四格形状差），缺任何一件整家退 L3，与"这一家没有通道"完全同形。</summary>
 sealed class MySqlBulkCopyChannel : IBulkCopyChannel
 {
     readonly ConstructorInfo _bulkCtor;
@@ -62,7 +24,7 @@ sealed class MySqlBulkCopyChannel : IBulkCopyChannel
     readonly MethodInfo _addMapping;
     readonly MethodInfo _write;
 
-    /// <summary>把 <c>ValueTask</c> 交回成 <c>Task</c> 的那一颗；驱动直接返 <c>Task</c> 时为 null（改判段第③颗）。</summary>
+    /// <summary>把 ValueTask 交回成 Task 的那一颗；驱动直接返 Task 时为 null。</summary>
     readonly MethodInfo? _asTask;
 
     MySqlBulkCopyChannel(ConstructorInfo bulkCtor, ConstructorInfo mappingCtor, PropertyInfo destinationTable,
@@ -82,9 +44,9 @@ sealed class MySqlBulkCopyChannel : IBulkCopyChannel
 
     public bool SupportsColumn(ColumnContract column) => NetType(column) is not null;
 
-    /// <summary>这条串过不去的那句话（形状与 T-SQL 那一家交回 <see langword="null"/> 相反——这一家真实欠一颗参数）。
-    /// 键名认两颗：<c>AllowLoadLocalInfile</c>（MySqlConnector 正主）与 <c>UseLocalInfile</c>（Oracle 官方驱动的旧名），
-    /// 值认驱动文档的那四种布尔写法（true/1/yes/on，不区分大小写）。句子只报缺哪颗参数，不回显串本身。</summary>
+    /// <summary>这条串过不去的那句话。键名认两颗：AllowLoadLocalInfile（MySqlConnector 正主）与
+    /// UseLocalInfile（Oracle 官方驱动的旧名），值认 true/1/yes/on 四种布尔写法（不区分大小写）。
+    /// 只报缺哪颗参数，不回显串本身。</summary>
     public string? UnavailableBecauseOf(string connectionString)
     {
         var builder = new DbConnectionStringBuilder { ConnectionString = connectionString };
@@ -115,7 +77,7 @@ sealed class MySqlBulkCopyChannel : IBulkCopyChannel
     public async Task<int> WriteAsync(BulkConnection target, BulkCopyRequest request, CancellationToken ct)
     {
         // 反射调用不认 C# 可省参数的默认值：实参数组要铺满签名。多出来那一位是外部事务，
-        // BulkConnection.Transaction 为 null 时交 null 恰好就是"没有外部事务"那一格。
+        // 交 null 就是"没有外部事务"那一格。
         var arguments = new object?[_bulkCtor.GetParameters().Length];
 
         arguments[0] = target.Connection;
@@ -131,7 +93,7 @@ sealed class MySqlBulkCopyChannel : IBulkCopyChannel
 
         for (var column = 0; column < request.Columns.Count; column++)
         {
-            // 映射类的第三位是驱动给自己那档"由表达式算列值"留的；本仓库永远交值而不是交表达式 ⇒ null。
+            // 映射类的第三位是"由表达式算列值"档；本仓库永远交值 ⇒ null。
             var cells = new object?[_mappingCtor.GetParameters().Length];
 
             cells[0] = column;
@@ -142,21 +104,18 @@ sealed class MySqlBulkCopyChannel : IBulkCopyChannel
 
         var outcome = _write.Invoke(bulk, [Table(request), ct])!;
 
-        // ValueTask 只能在生成它的那一帧上等，而这里恰好就是那一帧；AsTask() 交出的那条 Task 与
-        // T-SQL 那一家的直返 Task 走同一个 await 形状（驱动哪天改回返 Task，这一句自己走 null 分支）。
+        // ValueTask 只能在生成它的那一帧上等，而这里恰好就是那一帧；AsTask() 交出的 Task 与直返 Task 同一个 await 形状。
         await (outcome as Task ?? (Task) _asTask!.Invoke(outcome, null)!);
 
         // RowsCopied 是这一族唯一的"进了几行"，给不出数的形状在 TryResolve 那里已经整家退掉了。
         return checked((int) Convert.ToInt64(_rowsCopied.GetValue(bulk), CultureInfo.InvariantCulture));
 
-        // 这里没有收尾的 finally：这一族的装载类没有 Dispose 面（改判段第④颗读数），
-        // 而连接与事务的生命周期在内核那一条 using 上（AdoExecutor），不在通道手里。
+        // 这里没有收尾的 finally：这一族的装载类没有 Dispose 面，连接与事务的生命周期在内核那条 using 上。
     }
 
-    /// <summary>这一列在装载通道里的 CLR 形状——白名单与取型是同一次判断，判法与理由同
-    /// <c>SqlServerBulkCopy.NetType</c> 的抬头（缺席的 <c>char</c>/<c>DateOnly</c>/<c>TimeOnly</c>/无符号/
-    /// <c>object</c> 五类一颗都不新增：那五颗的缺席与驱动无关，是 <see cref="DataTable"/> 类型面的形状）。
-    /// 枚举按底层整数判、可空剥壳，同一把尺。</summary>
+    /// <summary>这一列在装载通道里的 CLR 形状——白名单与取型同一次判断，判法与 SqlServerBulkCopy.NetType 同一把尺：
+    /// 缺席的 char/DateOnly/TimeOnly/无符号/object 五类一颗不新增（缺席与驱动无关，是 DataTable 类型面的形状）；
+    /// 枚举按底层整数判、可空剥壳。</summary>
     [return: DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicProperties)]
     static Type? NetType(ColumnContract column) => Flatten(column.ClrType) switch
     {
@@ -197,11 +156,9 @@ sealed class MySqlBulkCopyChannel : IBulkCopyChannel
         return table;
     }
 
-    /// <summary>把这一家的装载类<em>整套</em>验一遍，缺任何一件交回 <see langword="null"/>（阶梯自然从 L3 起，
-    /// 与"这一家没有通道"同形）。<b>两颗构造子按反射面点死，而不是按 C# 的调用面</b>：必填那几位的类型
-    /// 要对，多出来的一位必须是可省参数（<c>IsOptional</c>）——写死"只收连接的一位"在这一家永远点空，
-    /// 而那个失败形状与"这一家根本没有装载类"完全同形（抬头改判段第①颗）。按形状而不是写死类型名，
-    /// 与 T-SQL 那家 <c>ConnectionScopedCtor</c> 同一手法：通道永远来自工厂所在的那一家。</summary>
+    /// <summary>整套验一遍，缺任何一件交回 null（阶梯从 L3 起，与"这一家没有通道"同形）。
+    /// 两颗构造子按反射面点死而不是按 C# 调用面：必填位类型要对，多出来的一位必须是可省参数（IsOptional）——
+    /// 写死"只收连接的一位"在这一家永远点空，而那个失败形状与"根本没有装载类"完全同形。</summary>
     [RequiresUnreferencedCode("按类型名在驱动程序集里找装载类与它的成员（TryResolve 本体），被裁剪的驱动会交回 null。")]
     [RequiresDynamicCode("反射调用装载类需要运行时生成代码。")]
     internal static MySqlBulkCopyChannel? TryResolve(Assembly driver)
@@ -224,8 +181,8 @@ sealed class MySqlBulkCopyChannel : IBulkCopyChannel
             || mappings is null || rowsCopied is null || write is null)
             return null;
 
-        // 那颗带取消的出口在这一族交回的是 ValueTask 而不是 Task：要么直接可等，要么给得出 AsTask()。
-        // 两者都给不出就整家退 L3——"等不到回包"比"少一次收尾"严重得多，因为进了几行从此没有证人。
+        // 那颗带取消的出口交回 ValueTask 而不是 Task：要么直接可等，要么给得出 AsTask()，
+        // 两者都给不出整家退 L3——"等不到回包"比"少一次收尾"严重（进了几行从此没有证人）。
         MethodInfo? asTask = null;
 
         if (write.ReturnType != typeof(Task))
@@ -236,13 +193,12 @@ sealed class MySqlBulkCopyChannel : IBulkCopyChannel
                 return null;
         }
 
-        // 那颗 Add 收的是映射对象本身（ColumnMappings 是 List<映射类>），不是 T-SQL 那一家收两个字符串的写法。
+        // Add 收的是映射对象本身（ColumnMappings 是 List<映射类>），不是 T-SQL 收两个字符串的写法。
         var add = mappings.PropertyType.GetMethod("Add", [mapping]);
 
         return add is null ? null : new MySqlBulkCopyChannel(ctor, mappingCtor, destinationTable, timeout, mappings, rowsCopied, add, write, asTask);
 
-        // 「自家连接 + 可选的外部事务」。第一位收具体类型对我们只会更严：只有本家的真连接进得去，
-        // 而那正是"通道跟着工厂走"要保证的那件事。第二位存在时必须可省（调用面交 null），且类型为事务的子类。
+        // 「自家连接 + 可选的外部事务」：第一位收连接子类（通道跟着工厂走），第二位存在时必须可省且是事务子类。
         static ConstructorInfo? ConnectionScopedCtor(Type bulkType)
         {
             foreach (var candidate in bulkType.GetConstructors())

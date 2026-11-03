@@ -6,8 +6,8 @@ using Microsoft.CodeAnalysis.CSharp;
 
 namespace QuickSql.Generators;
 
-/// <summary>把 <see cref="EntityModel"/> 排成 C# 文本。这里不做任何判定——判定在
-/// <see cref="EntityFactsBuilder"/>，收尾在运行期的 <c>EntityContractFactory</c>。</summary>
+/// <summary>把 EntityModel 排成 C# 文本。这里不做任何判定——判定在
+/// EntityFactsBuilder，收尾在运行期的 EntityContractFactory。</summary>
 static class EntityFactsWriter
 {
     const string Metadata = "global::QuickSql.Metadata.";
@@ -93,9 +93,8 @@ static class EntityFactsWriter
          .AppendLine("    " + type + " FromRow(" + Reader + " reader, " + Plan + " plan)")
          .AppendLine("    {");
 
-        // 序号是"起点 + 列位"这一个加法（票上只有起点与档位，§16.21），先各拷一颗局部：下面每一列都要用一次，
-        // 而 plan.Offset + i 那种写法每格多一次属性取用。整表没有一列有臂时不写 ops 那颗局部，
-        // 免得生成的文件里留一个没人读的局部。
+        // 序号是"起点 + 列位"这一个加法（票上只有起点与档位），先各拷一颗局部：下面每一列都要用一次。
+        // 整表没有一列有臂时不写 ops 那颗局部，免得生成的文件里留一个没人读的局部。
         b.AppendLine("        var from = plan.Offset;");
 
         if (m.Columns.Any(c => c.DirectArm is not null))
@@ -166,20 +165,18 @@ static class EntityFactsWriter
 
     static void RenderFacts(StringBuilder b, EntityModel m)
     {
-        // 分表这一格的第三颗参数在有声明时必须写出来，没有声明时写 null —— 两侧（G1 生成的契约、
-        // G2 反射的契约）拿到的形状才完全一样，§13.11 的逐字段相等才有得比。
+        // 分表这一格的第三颗参数在有声明时必须写出来，没有声明时写 null——
+        // 两侧（G1 生成的契约、G2 反射的契约）拿到的形状才完全一样，逐字段相等才有得比。
         var split = m.Split is { } declared
             ? ", new " + Metadata + "SplitFacts(" + declared.Kind + ", " + Lit(declared.Member) + ", " + declared.Buckets + ")"
             : ", null";
 
         // 集群归属同一做法：没声明写 null，声明了就把那一个名字原样抄成第四颗参数。
-        // 反射侧交的是 <c>new DataSourceFacts(source.Cluster)</c>，两侧到 EntityContractFactory 之前形状一致。
         var source = m.Source is { } cluster
             ? ", new " + Metadata + "DataSourceFacts(" + Lit(cluster) + ")"
             : ", null";
 
-        // 表备注是第五颗：没写也要把 null 写出来，与前两颗同一纪律（G2 反射侧交的是缺省的那一颗，
-        // 两侧到 EntityContractFactory 之前形状一致，§13.11 的逐字段相等才比得到这一格）。
+        // 表备注是第五颗：没写也要把 null 写出来，与前两颗同一纪律（G2 反射侧交的是缺省的那一颗）。
         var comment = m.TableComment is { } note ? ", " + Lit(note) : ", null";
 
         b.AppendLine("/// <summary>编译期算好的实体事实。provider 那一半（storage defaults、自增约定、索引与外键的列名换算）")
@@ -205,7 +202,6 @@ static class EntityFactsWriter
              .AppendLine("                IsNullable = " + Bool(column.IsNullable) + ",")
              .AppendLine("                NullableNote = " + Lit(column.NullableNote) + ",")
              // "非空这句话说过没有"（缺省 true）：可空上下文之外那一格落 false，只摘必填尺子、不改列的形状。
-             // 与反射侧的 NullabilityDeclared 同形，§13.11 的逐字段对拍比的是这一格。
              .AppendLine("                NullabilityDeclared = " + Bool(column.NullabilityDeclared) + ",")
              .AppendLine("                IsPrimary = " + Bool(column.IsPrimary) + ",")
              .AppendLine("                DeclaredIdentity = " + Bool(column.DeclaredIdentity) + ",")
@@ -213,6 +209,7 @@ static class EntityFactsWriter
              .AppendLine("                Scale = " + Num(column.Scale) + ",")
              .AppendLine("                StoreTypeName = " + Lit(column.StoreType) + ",")
              .AppendLine("                Comment = " + Lit(column.Comment) + ",")
+             .AppendLine("                DefaultValue = " + DefaultLiteral(column.DefaultValue) + ",")
              .AppendLine("                IsConcurrencyToken = " + Bool(column.IsConcurrencyToken) + ",")
              .AppendLine("                AppSetsValue = " + Bool(column.AppSetsValue) + ",")
              .AppendLine("                ConcurrencyNote = " + Lit(column.ConcurrencyNote) + ",")
@@ -225,8 +222,7 @@ static class EntityFactsWriter
         foreach (var index in m.Indexes)
             b.AppendLine("            new " + Metadata + "IndexFacts(null, [" + string.Join(", ", index.Members.Select(Lit)) + "], " + Bool(index.Unique) + ", " + Bool(index.Clustered) + ", " + Bool(index.Descending) + "),");
 
-        // 跳过索引声明单独立一格：与 IndexFacts 并排，进同一收尾器时它是另一份清单
-        //（IndexContract 与 SkipIndexContract 不换算，EntityContract 上也是两个槽）。
+        // 跳过索引声明单独立一格：与 IndexFacts 并排，进同一收尾器时它是另一份清单（两个槽，不换算）。
         b.AppendLine("        ],")
          .AppendLine("        [");
 
@@ -245,8 +241,7 @@ static class EntityFactsWriter
                 "Seed = " + Num(skip.Seed),
             };
 
-            // 缺省格不写：缺省写 null 与"压根没抄"是两个形状，反射侧交的是缺省值，
-            // 两侧到 EntityContractFactory 之前形状一致（§13.11 的逐字段相等才比得到）。
+            // 缺省格不写：缺省写 null 与"压根没抄"是两个形状，反射侧交的是缺省值。
             if (skip.Member is { } member)
                 parts.Insert(0, "MemberName = " + Lit(member));
 
@@ -265,9 +260,9 @@ static class EntityFactsWriter
         b.AppendLine("        ],")
          .AppendLine("        [");
 
-        // 只抄声明：to-one 那一档的成员名 → 列名换算在运行期的 EntityContractFactory，与索引同一份；
-        // 集合那一档连换算都不做（名字属于子端那张表），但级联要的两把委托在这里当场写成 lambda ——
-        // 生成器手里有编译期类型，闭包转换与 MakeGenericType 都不必出现在运行期（§12.7 A 的"写侧 0 反射"）。
+        // 只抄声明：to-one 那一档的成员名 → 列名换算在运行期，与索引同一份；
+        // 集合那一档连换算都不做（名字属于子端那张表），但级联要的两把委托在这里当场写成 lambda——
+        // 生成器手里有编译期类型，闭包转换与 MakeGenericType 都不必出现在运行期。
         foreach (var relationship in m.Relationships)
         {
             b.AppendLine("            new " + Metadata + "RelationshipFacts")
@@ -296,7 +291,7 @@ static class EntityFactsWriter
     }
 
     /// <summary>整个程序集共用的取数口。展开成一串引用相等比较而不是字典：
-    /// §12.8 的「G1 路径 0 字典查找」要的正是这个形状，实体再多也该先量过再换。</summary>
+    /// 「G1 路径 0 字典查找」要的正是这个形状，实体再多也该先量过再换。</summary>
     public static string RenderLookup(IReadOnlyList<EntityModel> models)
     {
         var b = new StringBuilder();
@@ -332,6 +327,20 @@ static class EntityFactsWriter
     }
 
     static string Lit(string? value) => value is null ? "null" : SymbolDisplay.FormatLiteral(value, quote: true);
+
+    /// <summary>默认值的 C# 字面量。带后缀的那几型（decimal/float/double/ulong）把后缀写死，
+    /// 否则生成的代码在整数字面上类型悄悄漂移（12.5 是 double 不是 decimal）。</summary>
+    static string DefaultLiteral(object? value) => value switch
+    {
+        null => "null",
+        string text => SymbolDisplay.FormatLiteral(text, quote: true),
+        bool flag => flag ? "true" : "false",
+        decimal d => d.ToString(System.Globalization.CultureInfo.InvariantCulture) + "m",
+        float f => f.ToString(System.Globalization.CultureInfo.InvariantCulture) + "f",
+        double v => v.ToString(System.Globalization.CultureInfo.InvariantCulture) + "d",
+        ulong u => u.ToString(System.Globalization.CultureInfo.InvariantCulture) + "UL",
+        _ => value.ToString() ?? "null",
+    };
 
     static string Num(int? value) => value?.ToString() ?? "null";
 

@@ -120,6 +120,32 @@ public sealed class IncludeManyChainTests
         Assert.Equal(open, guarded);
     }
 
+    /// <summary>与 <c>AsSplitQuery()</c> 的互斥（2026-11-01 起当场拒，此前是<b>静默丢集合</b>）：
+    /// 执行分派按拆查先赢（<c>Rows</c> 的第一格），<c>IncludeManys</c> 在场就是无声蒸发 ——
+    /// "少了几只"在返回的结果里看不出形状，那正是本仓库最不肯做的形状。
+    /// 两条接链顺序（先集合后拆查 ∶ 先拆查后集合）各自在接上链的那一刻响：先集合的那一向拦在
+    /// <c>SplitQuery()</c>，先拆查的那一向拦在 <c>IncludeMany</c> 入口，凑成双向护栏；
+    /// 执行期 <c>Rows</c> 还有第三道兜底，正常链到不了那里。</summary>
+    [Fact]
+    public void Split_query_after_a_collection_navigation_is_refused()
+    {
+        var failure = Checks.Raised<QuickSqlException>(
+            () => orm().Select<Rack>().IncludeMany(r => r.Slots!).AsSplitQuery());
+
+        Checks.Has("AsSplitQuery() 与 IncludeMany", failure.Message);
+        Checks.Has("单独成句", failure.Message);
+    }
+
+    [Fact]
+    public void A_collection_navigation_after_split_query_is_refused()
+    {
+        var failure = Checks.Raised<QuickSqlException>(
+            () => orm().Select<Rack>().AsSplitQuery().IncludeMany(r => r.Slots!));
+
+        Checks.Has("AsSplitQuery() 与 IncludeMany", failure.Message);
+        Checks.Has("单独成句", failure.Message);
+    }
+
     /// <summary>不碰连接的真身读数：写入口受保护而集合位预置成活串时，<see cref="MemberAccessors.BindCollection"/>
     /// 不再炸在写口上，<c>Attach</c> 往 getter 当场交回的那只集合里追加 —— 这条路全程不需要 set。
     /// 真库那一半（同一根边从库里缝回来）在 <c>GuardedCollectionPathTests</c>。</summary>

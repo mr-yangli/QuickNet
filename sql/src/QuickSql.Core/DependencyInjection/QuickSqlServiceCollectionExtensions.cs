@@ -11,11 +11,9 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace QuickSql;
 
-/// <summary>EF Core 风格的注册入口。<b>默认 Scoped</b>：与 <c>AddDbContext</c> 同一条判据 ——
-/// 虽然 <see cref="QuickSqlOrm"/> 不持有连接（连接按语句从池取），但 <see cref="Query.Filters.FilterRegistry"/>
-/// 是每实例一份，Scoped 下每个请求可以独立注册租户过滤而不影响其他请求。
-/// 重对象（<see cref="IEntitySchemaRegistry"/>、<see cref="IDbProvider"/>）走 Singleton，
-/// 与 EF Core 把 <c>IModel</c> 缓存在单例里同一条路。</summary>
+/// <summary>注册入口的配置块。默认 Scoped：QuickSqlOrm 不持有连接（连接按语句从池取），
+/// 但 FilterRegistry 是每实例一份，Scoped 下每个请求可以独立注册租户过滤而不影响其他请求；
+/// 重对象（IEntitySchemaRegistry、IDbProvider）走 Singleton，编译产物缓存一次、全进程共用。</summary>
 public sealed class QuickSqlOrmBuilder
 {
     internal DbKind Kind { get; set; }
@@ -23,47 +21,45 @@ public sealed class QuickSqlOrmBuilder
     internal Func<IServiceProvider, string>? ConnectionStringFactory { get; set; }
     internal DbProviderFactory? DriverFactory { get; set; }
 
-    /// <summary>缺省集群 <c>main</c> 的从库清单（§16.4② 的读写分离那一档），按给出的顺序轮询。
-    /// 空清单 = 这座库不分读写，读与写落在 <see cref="ConnectionString"/> 那一条串上，
-    /// 也就是这一格落地之前的行为。</summary>
+    /// <summary>缺省集群 main 的从库清单（读写分离那一档），按给出的顺序轮询。空清单 = 这座库不分读写，
+    /// 读与写落在 ConnectionString 那一条串上，也就是这一格落地之前的行为。</summary>
     public IReadOnlyList<string> Replicas { get; set; } = [];
 
-    /// <summary><c>main</c> 之外的具名集群（分库那一档）。实体用 <c>[DataSource("名字")]</c> 点名自己住哪一座。
-    /// <b>这里的串都是启动期常量</b>：按请求解析的那颗工厂只管 <c>main</c> 的主库串（多租户每库一串），
+    /// <summary>main 之外的具名集群（分库那一档）。实体用 [DataSource("名字")] 点名自己住哪一座。
+    /// 这里的串都是启动期常量：按请求解析的那颗工厂只管 main 的主库串（多租户每库一串），
     /// 要让一座集群按请求换串，请为那一座另建一颗 orm，而不是在这一格里塞工厂。</summary>
     public IReadOnlyList<ClusterConfig> Clusters { get; set; } = [];
 
-    /// <summary>Fluent 模型配置（§10.2 优先级 1）。null 表示只用 DataAnnotations 与约定。</summary>
+    /// <summary>Fluent 模型配置（优先级最高的那一层）。null 表示只用 DataAnnotations 与约定。</summary>
     public ModelConfiguration? Model { get; set; }
 
     /// <summary>语句超时秒数。默认 30。</summary>
     public int CommandTimeoutSeconds { get; set; } = 30;
 
-    /// <summary>§9.4：无 ORDER BY 的分页查询怎么办。默认 <see cref="PagingOrderingPolicy.Throw"/>。</summary>
+    /// <summary>无 ORDER BY 的分页查询怎么办。默认 Throw。</summary>
     public PagingOrderingPolicy PagingOrdering { get; set; } = PagingOrderingPolicy.Throw;
 
-    /// <summary>§9.5：结构同步策略。默认 <see cref="SchemaSyncPolicy.Disabled"/>。</summary>
+    /// <summary>结构同步策略。默认 Disabled。</summary>
     public SchemaSyncPolicy SchemaSync { get; set; } = SchemaSyncPolicy.Disabled;
 
-    /// <summary>§9.5：非 Development 环境下强制执行结构同步的开关。</summary>
+    /// <summary>非 Development 环境下强制执行结构同步的开关。</summary>
     public bool ForceSchemaSync { get; set; }
 
-    /// <summary>§9.5：已经在的表要不要逐列比形状（补列、改长度与标度、改可空、重发备注、补索引）。
+    /// <summary>已经在的表要不要逐列比形状（补列、改长度与标度、改可空、重发备注、补索引）。
     /// 默认 true；关掉即退到"只有缺表才建"那一档。</summary>
     public bool SchemaSyncColumns { get; set; } = true;
 
-    /// <summary>§9.5：库里多出来的那条索引要不要 <c>DROP</c>。默认 false（opt-in）——它与上面那颗
-    /// 不是一个风险档：补一列不丢数据，删一条正在被用的索引会当场拖慢查询。唯一约束即便开了也不碰。</summary>
+    /// <summary>库里多出来的那条索引要不要 DROP。默认 false（opt-in）——它与列级同步不是一个风险档：
+    /// 补一列不丢数据，删一条正在被用的索引会当场拖慢查询。唯一约束即便开了也不碰。</summary>
     public bool SchemaSyncDropIndexes { get; set; }
 
-    /// <summary>每只 Scoped 实例建好之后要跑的装配（按请求装的过滤器、审计与日志钩子、行为注册）。</summary>
-    /// <remarks><b>为什么要有这一颗</b>：<see cref="QuickSqlOrm.Filters"/>、<see cref="QuickSqlOrm.Aop"/> 与
-    /// <see cref="QuickSqlOrm.Behaviors"/> 三处都是每实例一份，而"当前登录者是哪一家企业""这一条语句的审计值从哪个用户来"
-    /// 恰恰是按请求的事实，所以它们只能在实例建好之后装 —— 在那之前没有实例可装，而
-    /// <see cref="QuickSqlOrmOptions"/> 那一格只收得到启动期常量。<b>每个请求跑一次，参数就是那一只
-    /// 刚建好的实例</b>（第二个参数给的是本请求的 scope，可以从里面取当前用户那一类宿主服务）。
-    /// 注册序即执行序。<b>它是幂等的场地由调用方负责</b>：这一格不做去重，同一段装配挂两次就跑两次，
-    /// 而 <c>Behaviors</c> 上同一把键注册两次是当场抛 —— 那是刻意的，装配写重了要在启动后第一跳就响。</remarks>
+    /// <summary>每只 Scoped 实例建好之后要跑的装配（按请求装的过滤器、审计与日志钩子、行为注册）。
+    /// 为什么要有这一颗：Filters、Aop 与 Behaviors 三处都是每实例一份，而"当前登录者是哪一家企业"
+    /// "这一条语句的审计值从哪个用户来"恰恰是按请求的事实，只能在实例建好之后装——在那之前没有实例可装，
+    /// QuickSqlOrmOptions 那一格只收得到启动期常量。每个请求跑一次，参数就是那一只刚建好的实例
+    /// （第二个参数是本请求的 scope，可以从里面取当前用户那一类宿主服务）。注册序即执行序；
+    /// 它是幂等的场地由调用方负责：这一格不做去重，同一段装配挂两次就跑两次，而 Behaviors 上同一把键
+    /// 注册两次是当场抛——那是刻意的，装配写重了要在启动后第一跳就响。</summary>
     public List<Action<IServiceProvider, QuickSqlOrm>> AfterBuild { get; set; } = [];
 
     internal QuickSqlOrmOptions BuildOptions(IDbProvider provider, string connectionString) => new()
@@ -85,9 +81,8 @@ public sealed class QuickSqlOrmBuilder
 /// <summary>DI 注册入口。</summary>
 public static class QuickSqlServiceCollectionExtensions
 {
-    /// <summary>EF Core 风格的注册口。<b>默认 Scoped</b>，与 <c>AddDbContext</c> 同一条判据。
-    /// 重对象（<see cref="IEntitySchemaRegistry"/>、<see cref="IDbProvider"/>）走 Singleton。
-    /// 驱动工厂由 <see cref="DriverRegistry"/> 按 内建表 <c>BuiltinDrivers</c> 现场解析。</summary>
+    /// <summary>静态连接串的注册口。默认 Scoped；重对象（IEntitySchemaRegistry、IDbProvider）走 Singleton。
+    /// 驱动工厂由 DriverRegistry 按 BuiltinDrivers 内建表现场解析。</summary>
     [RequiresUnreferencedCode("QuickSqlOrm 的 G2 兜底构造器按 Type 反射解析实体与注解。")]
     [RequiresDynamicCode("QuickSqlOrm 的 G2 兜底构造器编译读写委托。")]
     public static IServiceCollection AddQuickSqlOrm(
@@ -102,9 +97,8 @@ public static class QuickSqlServiceCollectionExtensions
         return RegisterCore(services, builder);
     }
 
-    /// <summary>连接串按请求解析的注册口（多租户每库一串）。<paramref name="connectionStringFactory"/>
-    /// 在每个 Scoped 解析时执行一次，可以从 <c>IServiceProvider</c> 取当前租户上下文决定走哪条串。
-    /// 与 EF Core 的 <c>AddDbContext&lt;T&gt;(Action&lt;IServiceProvider, DbContextOptionsBuilder&gt;)</c> 同一姿态。</summary>
+    /// <summary>连接串按请求解析的注册口（多租户每库一串）。connectionStringFactory 在每个 Scoped 解析时
+    /// 执行一次，可以从 IServiceProvider 取当前租户上下文决定走哪条串。</summary>
     [RequiresUnreferencedCode("QuickSqlOrm 的 G2 兜底构造器按 Type 反射解析实体与注解。")]
     [RequiresDynamicCode("QuickSqlOrm 的 G2 兜底构造器编译读写委托。")]
     public static IServiceCollection AddQuickSqlOrm(

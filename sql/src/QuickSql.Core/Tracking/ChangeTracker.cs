@@ -4,66 +4,57 @@ using System.Collections.Concurrent;
 
 namespace QuickSql.Tracking;
 
-/// <summary>会话的跟踪器（§8.2 的 <c>db.ChangeTracker</c>），也就是 <see cref="EntityTracker{T}"/> 按实体类型
-/// 切开之后的那层调度。
-///
-/// <b>这一层里没有一处 <c>MakeGenericMethod</c></b>：泛型参数 <c>T</c> 全部由编译期已知的调用点带进来
-/// （<c>db.Set&lt;T&gt;()</c>、<c>db.Add&lt;T&gt;()</c>、<c>SaveChangesAsync</c> 里 <c>Rows&lt;TResult&gt;</c> 的那一次），
-/// 运行期只按 <see cref="Type"/> 查一张表 —— §1.2 原则 3 那条「加载可以反射，调用不行」的分界线画在这里。
-///
-/// <b>非线程安全，且 2026-10-30 起有人替它守门</b>：一个会话同一时刻只归一个执行流（§7 生命周期表里
-/// 那句「<c>DbContext</c> 才需要 Scoped」的实现含义）。身份映射与 <c>_byRef</c> 都没有加锁——跨线程共用
-/// 一个会话会得到「同一行两只实例」甚至随机 NRE；<see cref="Orchestration.SessionGate"/>（EF Core 的
-/// <c>ConcurrencyDetector</c> 同一条语义）把"同时两个操作"当场拒掉，本类的<em>档登记</em>
-/// （<see cref="_byType"/>/_orderView）按构造并发安全，逐实体的账则由那颗闸单一在飞保证独占。</summary>
-sealed class ChangeTracker(QuickSqlOrm orm) : DbChangeTracker
+/// <summary>会话的跟踪器（db.ChangeTracker），也就是 EntityTracker 按实体类型切开之后的那层调度。
+/// 这一层里没有一处 MakeGenericMethod：泛型参数 T 全部由编译期已知的调用点带进来，运行期只按 Type 查一张表
+/// ——「加载可以反射，调用不行」的分界线画在这里。非线程安全，由 SessionGate 守门：一个会话同一时刻只归
+/// 一个执行流，身份映射与 _byRef 都没有加锁；档登记（_byType/_orderView）按构造并发安全，
+/// 逐实体的账由那颗闸单一在飞保证独占。</summary>
+sealed class ChangeTracker(QuickSqlOrm orm, Schema.IEntitySchemaRegistry? schemas = null) : DbChangeTracker
 {
-    /// <summary>按<b>调用点上的静态类型</b>（<c>Set&lt;T&gt;()</c> 的那个 <c>T</c>）分档。
-    /// 键不是 <c>GetType()</c>：一只派生实例经 <c>Set&lt;Base&gt;()</c> 进会话时，它写出去的是基类那张表的列，
-    /// 而 <see cref="Entries"/> 也得在同一条档里看得见它 —— 两边用同一个键才自洽。
-    /// <b><see cref="ConcurrentDictionary"/> 是 2026-10-30 换的</b>：档的<em>登记</em>要能与一只已在飞的
-    /// 操作并发（共享会话的两条分支同时首次 <c>Set&lt;T&gt;()</c>，MySQL 真库上被
-    /// <c>ThreadConcurrencyPathTests</c> 当场抓到裸 <c>Dictionary</c> 的并发首写炸"exclusive access"），
-    /// 与 <see cref="Orchestration.SessionGate"/> 的分工是——<b>登记这一格按构造并发安全</b>（含
-    /// <see cref="_orderView"/> 那半边），<b>逐实体的账</b>（身份映射、快照、脏掩码）仍然一锁不锁、
+    /// <summary>会话级模型覆写（DbContext.OnModelCreating）给的注册表，null = 没覆写。
+    /// For 造 EntityTracker 时递下去，跟踪侧的契约与读写委托改问这一份。</summary>
+    internal Schema.IEntitySchemaRegistry? Schemas => schemas;
+
+    /// <summary>按调用点上的静态类型（Set〈T〉() 的那个 T）分档。键不是 GetType()：派生实例经 Set〈Base〉()
+    /// 进会话时写出去的是基类那张表的列，Entries 也得在同一条档里看得见它，两边用同一个键才自洽。
+    /// 用 ConcurrentDictionary：档的登记要能与一只已在飞的操作并发（两条分支同时首次 Set），
+    /// 与 SessionGate 的分工是——登记这一格按构造并发安全（含 _orderView），逐实体的账仍然一锁不锁、
     /// 由会话闸单一在飞保证独占。</summary>
     readonly ConcurrentDictionary<Type, ITypeTracker> _byType = new();
 
-    /// <summary>类型的<em>首次出现序</em>的<b>建造名单</b>：只在 <see cref="_registryGate"/> 里追加，
-    /// 追加完重铸 <see cref="_orderView"/>。枚举一律走视图，不摸这份名单。</summary>
+    /// <summary>类型的首次出现序的建造名单：只在 _registryGate 里追加，追加完重铸 _orderView。
+    /// 枚举一律走视图，不摸这份名单。</summary>
     readonly List<ITypeTracker> _order = [];
 
-    /// <summary><see cref="_order"/> 的只读投影视图：登记侧在锁里重铸，读侧（侦测、报告、保存序）
-    /// 不加锁枚举这一份不可变数组 —— 迭代中途来了新档，旧视图照样自洽，下一轮自然看见。</summary>
+    /// <summary>_order 的只读投影视图：登记侧在锁里重铸，读侧（侦测、报告、保存序）不加锁枚举这一份
+    /// 不可变数组——迭代中途来了新档，旧视图照样自洽，下一轮自然看见。</summary>
     volatile ITypeTracker[] _orderView = [];
 
-    /// <summary>档登记那道锁。只护 <see cref="_order"/>/_orderView/_hasCollections 这三格建造账，
-    /// 不护任何逐实体的账 —— 那些归会话闸。</summary>
+    /// <summary>档登记那道锁。只护 _order/_orderView/_hasCollections 这三格建造账，
+    /// 不护任何逐实体的账——那些归会话闸。</summary>
     readonly object _registryGate = new();
 
-    /// <summary>级联欠着的外键（<see cref="CascadeLink"/>）。<b>懒建</b>：绝大多数会话一次级联都没有，
-    /// 而这一串的生命周期只到<em>子那一档的 Insert 语句建出来</em>为止 —— 用完即摘，不留跨保存的账。
-    /// 保存中途抛了它会有残留，那是安全的：下一次保存把同一批值再落一遍，落的是同一颗键。</summary>
+    /// <summary>级联欠着的外键（CascadeLink）。懒建：绝大多数会话一次级联都没有；这一串的生命周期只到
+    /// 子那一档的 Insert 语句建出来为止——用完即摘，不留跨保存的账。保存中途抛了它会有残留，那是安全的：
+    /// 下一次保存把同一批值再落一遍，落的是同一颗键。</summary>
     List<CascadeLink>? _links;
 
     /// <summary>集合边 → 子端列下标的解算结果，按（父型、子型、导航名）缓存一次。
-    /// 契约是冻结的，所以这份缓存与类型档表同寿命；<see cref="Clear"/> 不清它（清的是数据不是判据）。</summary>
+    /// 契约是冻结的，所以这份缓存与类型档表同寿命；Clear 不清它（清的是数据不是判据）。</summary>
     Dictionary<(Type Parent, Type Child, string Member), int[]>? _cascadeKeys;
 
-    /// <summary>这一会话里<em>建过</em>任何一条带集合边的档。<b>摘行那一次遍历的闸门</b>：
-    /// 只跟踪标量实体的会话每轮侦测不该为"有没有人从集合里被摘掉"多走一遍档表。
-    /// 它只朝"要扫"的方向偏（建过档就不撤，与 <see cref="Clear"/> 留档同一条理由）—— 偏保守多扫一次空表，
-    /// 偏乐观就是漏删。</summary>
+    /// <summary>这一会话里建过任何一条带集合边的档。摘行那一次遍历的闸门：只跟踪标量实体的会话每轮侦测
+    /// 不该为"有没有人从集合里被摘掉"多走一遍档表。它只朝"要扫"的方向偏（建过档就不撤）——
+    /// 偏保守多扫一次空表，偏乐观就是漏删。</summary>
     bool _hasCollections;
 
-    /// <summary>三档的执行序（§8.2：先插、再改、最后删）。<b>档内的类型序另算</b>：见
-    /// <see cref="OrderedByDependency"/>，那里才是「先插被依赖的、再删依赖方」。</summary>
+    /// <summary>三档的执行序（先插、再改、最后删）。档内的类型序另算：见 OrderedByDependency，
+    /// 那里才是「先插被依赖的、再删依赖方」。</summary>
     static readonly WriteOperation[] Phases = [WriteOperation.Insert, WriteOperation.Update, WriteOperation.Delete];
 
-    /// <summary>§8.2 的那个开关。<b>关掉的只有「物化之前那一次」和 <see cref="HasChanges"/> 里的那一次</b>，
-    /// 而 <c>SaveChanges</c> 那一步（<see cref="WritesAreDue"/>）不看这个开关、恒先侦测再写：
-    /// 跳过这一步会让 <c>SaveChanges</c> 漏掉没被任何显式赋值覆盖的改动，
-    /// 而「漏写」查不出来。</summary>
+    /// <summary>自动侦测开关。关掉的只有「物化之前那一次」和 HasChanges 里的那一次，
+    /// 而 SaveChanges 那一步（WritesAreDue）不看这个开关、恒先侦测再写：跳过这一步会让 SaveChanges
+    /// 漏掉没被任何显式赋值覆盖的改动，而「漏写」查不出来。</summary>
     internal bool AutoDetectChangesEnabled { get; set; } = true;
 
     public override int Count
@@ -79,10 +70,10 @@ sealed class ChangeTracker(QuickSqlOrm orm) : DbChangeTracker
         }
     }
 
-    /// <remarks><b>它不是只读的</b>：开着自动侦测时它会先比一轮。不这么做的话，「改了值、还没轮到侦测」
-    /// 这一段里 <c>HasChanges</c> 会报 <c>false</c>，而调用方拿这个 <c>false</c> 去跳过 <c>SaveChanges</c>
-    /// 就是丢数据 —— 报错方向上偏保守（多一次无用的 <c>UPDATE</c>）可以接受，偏乐观不行。
-    /// 代价随会话里的实例数线性，所以它是一句诊断用的话，不是热路径上每次都问一遍的开关。</remarks>
+    /// <summary>它不是只读的：开着自动侦测时它会先比一轮。不这么做的话，「改了值、还没轮到侦测」
+    /// 这一段里 HasChanges 会报 false，调用方拿这个 false 去跳过 SaveChanges 就是丢数据
+    /// ——偏保守（多一次无用的 UPDATE）可以接受，偏乐观不行。代价随会话里的实例数线性，
+    /// 是一句诊断用的话，不是热路径开关。</summary>
     public override bool HasChanges
     {
         get
@@ -97,21 +88,20 @@ sealed class ChangeTracker(QuickSqlOrm orm) : DbChangeTracker
     public override IEnumerable<EntityEntry> Entries()
     {
         foreach (var tracker in _orderView)
-            // 这一处留拷贝是故意的：Entries() 是调用方手里的诊断视图，而"在枚举里改会话"（一边看一边 Remove）
+            // 这一处留拷贝是故意的：Entries() 是调用方手里的诊断视图，"在枚举里改会话"（一边看一边 Remove）
             // 是公开口能承诺的形状；内核那六处遍历走 TrackedNodes，不付这一份。
             foreach (var node in tracker.TrackedNodes.ToArray())
                 yield return tracker.EntryOf(node);
     }
 
-    /// <remarks>返回的是「本次改了状态的实例数」（各类型相加），<c>0</c> 就是这一轮没有任何东西变过 ——
-    /// §8.2 的哈希短路（没碰过的行不进列比较）还没接线，所以今天这一轮是全员逐列比，
-    /// 那一格代价记在 §12.8 的 <c>ChangeTrackerDetect10k</c>（该门禁项本段未实现，理由写在 §14）。</remarks>
+    /// <summary>返回的是「本次改了状态的实例数」（各类型相加），0 就是这一轮没有任何东西变过。
+    /// 今天是全员逐列比（哈希短路"没碰过的行不进列比较"还没接线），代价随会话规模线性。</summary>
     public override int DetectChanges()
     {
         var changed = 0;
 
         // 摘行先判、逐列比较在后：摘掉的那只此刻多半还是 Unmodified，先比列就会给它发一句 UPDATE
-        // 再发一句 DELETE —— 同一行两个方向相反的语句。逐列比较自己跳过 Added/Deleted。
+        // 再发一句 DELETE——同一行两个方向相反的语句。逐列比较自己跳过 Added/Deleted。
         if (_hasCollections)
             changed += DiffDetachedChildren();
 
@@ -121,8 +111,8 @@ sealed class ChangeTracker(QuickSqlOrm orm) : DbChangeTracker
         return changed;
     }
 
-    /// <summary>清的是数据，留的是档：类型注册表留着，会话上那些已经发出去的 <c>DbSet&lt;T&gt;</c> 与查询引擎
-    /// 才不会再撞上「档不存在」。之后 <c>Set&lt;T&gt;()</c> 拿到的还是同一份空跟踪器。</summary>
+    /// <summary>清的是数据，留的是档：类型注册表留着，会话上那些已经发出去的 DbSet 与查询引擎
+    /// 才不会再撞上「档不存在」。之后 Set〈T〉() 拿到的还是同一份空跟踪器。</summary>
     public override void Clear()
     {
         foreach (var tracker in _orderView)
@@ -132,26 +122,24 @@ sealed class ChangeTracker(QuickSqlOrm orm) : DbChangeTracker
         _links?.Clear();
     }
 
-    /// <summary>取（或建）某一个实体类型的那一份跟踪器。<b>只有泛型调用点用它</b>，
-    /// 因为 <see cref="EntityTracker{T}"/> 的构造要 <c>orm.Schemas.Schema&lt;T&gt;()</c> 与
-    /// <c>InsertEngine&lt;T&gt;</c>，这些是编译期参数而不是运行期能补的东西。</summary>
+    /// <summary>取（或建）某一个实体类型的那一份跟踪器。只有泛型调用点用它：
+    /// EntityTracker 的构造要 Schema〈T〉() 与 InsertEngine〈T〉，这些是编译期参数而不是运行期能补的东西。</summary>
     internal EntityTracker<T> For<T>() where T : class
     {
         // 登记在锁里：_byType 读侧虽是并发字典，但 _order 的追加与视图重铸必须与登记一一对应，
         // 两次并发首登记只许留一份档（双建会让同一类型两条档、保存序与报告各算一遍）。
-        // 竞态下的双建多半成对，但 _order 不撒谎这一格不由运气担保。
         lock (_registryGate)
         {
             if (_byType.TryGetValue(typeof(T), out var known))
                 return (EntityTracker<T>) known;
 
-            var tracker = new EntityTracker<T>(orm, this);
+            var tracker = new EntityTracker<T>(orm, this, schemas);
             _byType[typeof(T)] = tracker;
             _order.Add(tracker);
             _orderView = [.. _order];
 
             // 摘行那一次遍历的闸门：会话里出现过一条集合边才可能有人被摘掉。
-            // 它只朝"要扫"的方向偏（建过档就不撤），因为档本身也不撤 —— Clear() 留档。
+            // 它只朝"要扫"的方向偏（建过档就不撤），因为档本身也不撤——Clear() 留档。
             if (tracker.Contract.Collections.Count > 0)
                 _hasCollections = true;
 
@@ -160,8 +148,8 @@ sealed class ChangeTracker(QuickSqlOrm orm) : DbChangeTracker
     }
 
     /// <summary>级联：顺这一张实体的集合边把子实体带进会话（插入档）或标成删除（删除档）。
-    /// <b>闸门只看契约上有没有集合边</b>，所以没有导航的实体一次分配都不付。
-    /// 每一次调用新建一份 <see cref="CascadeWalker"/>：递归时内层不能踩外层的游标（理由写在那一格的注释上）。</summary>
+    /// 闸门只看契约上有没有集合边，没有导航的实体一次分配都不付。每一次调用新建一份 CascadeWalker：
+    /// 递归时内层不能踩外层的游标。</summary>
     internal void Cascade(ITypeTracker parent, object entity, CascadeMode mode)
     {
         if (parent.Contract.Collections.Count == 0)
@@ -172,35 +160,19 @@ sealed class ChangeTracker(QuickSqlOrm orm) : DbChangeTracker
 
     internal void AddCascadeLink(CascadeLink link) => (_links ??= []).Add(link);
 
-    /// <summary>摘行的侦测（裁决③：<c>order.Items.Remove(x)</c> 之后 <c>SaveChanges</c> 要把 <c>x</c>
-    /// 那一行删掉 —— owned 语义，不 SET NULL、也不留着不管）。
-    ///
-    /// <para><b>判据只有一处来源</b>：<see cref="Node.Baselines"/> 里上一次看见的那一串，比此刻集合位里
-    /// 那一串（比的是<em>引用</em>：会话认的是实例，不是字段相等的两只）。某一格基线是 <c>null</c> 就<em>不判</em> ——
-    /// 那是"这一串我从来没见过"，与"见过、而它是空的"（一只空列表）严格不同。这一颗分岔就是裁决①在侦测档的镜像：
-    /// 看不见就不判（不替没看见的东西编一份缺席的账），判得着才动手。两边都判成"删"会把没 Load 的明细整串删光，
-    /// 两边都不判就是这一格要合的那个漏。</para>
-    ///
-    /// <para><b>动手的是级联那一颗老接缝</b>：把被摘掉的那几只送进子端那一档 <c>Remove</c>，于是"摘掉一只"
-    /// 与"整串被标删"走的是同一条路（连带它自己手里的子串、同一套捞不到就响的判据、同一份删除档排序），
-    /// 差别只在送进去的是<em>基线里有而现读没有</em>的那几只。静态型仍由契约上那把委托带 ——
-    /// 本类手里只有 <see cref="Type"/>，破了这一条就是 §12.7「写侧 0 反射」那格的红。</para>
-    ///
-    /// <para><b>为什么分两趟</b>：中途响（改父那一格）不能留下一份已经改到一半的基线，否则同一只会话
-    /// 重试保存时，第一次响掉的那几只就不在基线里了 —— 响第二次变成"没改动"，那是最难读的一种形状。</para>
-    ///
-    /// <para><b>到位是同一趟里的镜像</b>（裁决③补齐的另一半）：那一串里有、基线里没有、会话还没跟过的，
-    /// 送进子端<em>插入</em>档（<see cref="CascadeWalker.Arrive"/>），外键由级联链接在父写出去之后补 ——
-    /// "摘掉一只删一行，新到一只插一行"，两半合起来才是「明细换了没换」这一问的完整答案。
-    /// 已经在会话里的不算到位（第三道筛），库加载/别的路径带进来的成员不受这一趟影响。</para>
-    ///
-    /// <para><b>代价</b>：每个带着"捞过的集合"的父一次读 + 一个引用哈希集，只在会话真出现过集合边时付。
-    /// 与逐列比较同一量级，不是新添一个数量级。</para></summary>
+    /// <summary>摘行的侦测（裁决③：order.Items.Remove(x) 之后 SaveChanges 要把 x 那一行删掉——owned 语义）。
+    /// 判据只有一处来源：Node.Baselines 里上一次看见的那一串，比此刻集合位里那一串（比的是引用，会话认实例）。
+    /// 某一格基线是 null 就不判——那是"这一串我从来没见过"，与"见过、而它是空的"严格不同：
+    /// 看不见就不判（不替没看见的东西编一份缺席的账），判得着才动手。动手的是级联那颗老接缝：
+    /// 把被摘掉的那几只送进子端那一档 Remove，"摘掉一只"与"整串被标删"走同一条路。为什么分两趟：
+    /// 中途响（改父那一格）不能留下一份改到一半的基线，否则重试保存时响第二次变成"没改动"。
+    /// 到位是同一趟里的镜像：那一串里有、基线里没有、会话还没跟过的，送进子端插入档，
+    /// 外键由级联链接在父写出去之后补——两半合起来才是「明细换了没换」的完整答案。</summary>
     int DiffDetachedChildren()
     {
         List<Detached>? due = null;
 
-        // 这一趟只<em>判</em>，不动 _order（动手在 due 那一趟），所以直接枚举档表。
+        // 这一趟只判，不动 _order（动手在 due 那一趟），所以直接枚举档表。
         foreach (var tracker in _orderView)
         {
             if (tracker.Contract.Collections.Count == 0)
@@ -222,8 +194,8 @@ sealed class ChangeTracker(QuickSqlOrm orm) : DbChangeTracker
 
                     var live = CascadeWalker.LiveMembers(edges[slot], node.Entity);
 
-                    // 整串被换成 null = 那句"我看过这一串"收回去了。不猜它是"全删了"还是"我不知道"：
-                    // 前者是拿 null 当空用，而裁决①刚把那一格关掉。基线跟着收回去，下一轮重新捞才算。
+                    // 整串被换成 null = 那句"我看过这一串"收回去了。不猜它是"全删了"还是"我不知道"
+                    // （前者是拿 null 当空用）。基线跟着收回去，下一轮重新捞才算。
                     if (live is null)
                     {
                         baselines[slot] = null;
@@ -291,10 +263,9 @@ sealed class ChangeTracker(QuickSqlOrm orm) : DbChangeTracker
         return victims;
     }
 
-    /// <summary>到位的那一半（裁决③的镜像）：此刻那一串里有、基线里没有、且<em>会话还没跟过</em>的那几只。
-    /// 与 <see cref="Missing"/> 同一把参考尺（会话认的是实例）。「还没跟过」是第三道筛：
-    /// 已经在会话里的实例（别的路径 Add/Attach/物化进来的）不重复送——那一档要么本来就要写、
-    /// 要么是库里已有的行，把它们再 Add 一遍等于替调用方改主意。</summary>
+    /// <summary>到位的那一半（裁决③的镜像）：此刻那一串里有、基线里没有、且会话还没跟过的那几只。
+    /// 与 Missing 同一把参考尺（会话认的是实例）。「还没跟过」是第三道筛：已经在会话里的实例
+    /// （别的路径 Add/Attach/物化进来的）不重复送——把它们再 Add 一遍等于替调用方改主意。</summary>
     List<object>? Arrived(List<object> baseline, List<object> live)
     {
         List<object>? arrivals = null;
@@ -311,9 +282,8 @@ sealed class ChangeTracker(QuickSqlOrm orm) : DbChangeTracker
         return arrivals;
     }
 
-    /// <summary>此刻还被人捏在集合位里的那些子实体 → 捏着它的那根边。<b>判的是引用，不是键</b>：
-    /// 改父的现场是"同一只实例从甲那一串挪到乙那一串"，而那颗临时键在甲乙手里可以是同一个值。
-    /// 基线为 null 的那一格不算（没见过的串不替别人担保什么）。</summary>
+    /// <summary>此刻还被人捏在集合位里的那些子实体 → 捏着它的那根边。判的是引用，不是键：
+    /// 改父的现场是"同一只实例从甲那一串挪到乙那一串"，而那颗临时键在甲乙手里可以是同一个值。</summary>
     Dictionary<object, (Type Parent, string Member)> HeldByOtherParents()
     {
         var held = new Dictionary<object, (Type, string)>(ReferenceEqualityComparer.Instance);
@@ -354,7 +324,7 @@ sealed class ChangeTracker(QuickSqlOrm orm) : DbChangeTracker
                "要么先 SaveChanges 把这一串删干净，再往另一只父的那一串里插新的一只。");
 
     /// <summary>摘行/到位侦测中途的一份现场：哪一档、哪只父、哪一根边（连同它在契约里的槽位）、此刻那一串、
-    /// 被摘掉的那几只、新到的那几只。存在的唯一理由是把"判"与"动手"分成两趟（理由写在 <see cref="DiffDetachedChildren"/> 的注释上）。
+    /// 被摘掉的那几只、新到的那几只。存在的唯一理由是把"判"与"动手"分成两趟。
     /// 任一半都可以是 null（只摘不加、只加不摘都是常态）。</summary>
     sealed class Detached(ITypeTracker tracker, Node node, int slot, CollectionEdgeContract edge, List<object> live, List<object>? victims, List<object>? arrivals)
     {
@@ -368,8 +338,8 @@ sealed class ChangeTracker(QuickSqlOrm orm) : DbChangeTracker
     }
 
     /// <summary>父实体写出去之后、子那一档建语句之前，把父此刻的键落进子行的外键列。
-    /// <b>落不动就拒</b>：键还是空的或还是临时值（父本轮没写出去、或已经离开会话）时，
-    /// 写出去就是一个库里不存在的键 —— 级联留下的孤儿行比一句报错难查太多。</summary>
+    /// 落不动就拒：键还是空的或还是临时值（父本轮没写出去、或已经离开会话）时，
+    /// 写出去就是一个库里不存在的键——级联留下的孤儿行比一句报错难查太多。</summary>
     void ApplyCascadeLinks(ITypeTracker tracker)
     {
         if (_links is null || _links.Count == 0)
@@ -382,9 +352,9 @@ sealed class ChangeTracker(QuickSqlOrm orm) : DbChangeTracker
             if (!ReferenceEquals(link.Child, tracker))
                 continue;
 
-            // 那只子行已经不欠这一句 INSERT 了：它被摘出会话（摘行那一档）或被显式 Detach 了。
+            // 那只子行已经不欠这一句 INSERT 了：它被摘出会话或被显式 Detach 了。
             // 账留着不会写错东西（发出去的是子那一档的语句，而它已经不在档里），
-            // 但父的键落不进时会先响一句"键还没值"，那句响的是一个已经不存在的行 —— 假案。
+            // 但父的键落不进时会先响一句"键还没值"，那句响的是一个已经不存在的行——假案。
             if (link.Child.StateOf(link.ChildEntity) != EntityState.Added)
             {
                 _links.RemoveAt(i);
@@ -409,8 +379,8 @@ sealed class ChangeTracker(QuickSqlOrm orm) : DbChangeTracker
         }
     }
 
-    /// <summary>「这颗键还不能拿去向库里指认一行」的判据。<b>只认这三颗</b>：<c>null</c>、负整数（临时主键 Tp）、
-    /// <c>Guid.Empty</c>。别的都是调用方自己填的值，那一格由库里那条外键约束判，不由会话替他猜。</summary>
+    /// <summary>「这颗键还不能拿去向库里指认一行」的判据。只认这几颗：null、负整数（临时主键）、Guid.Empty。
+    /// 别的都是调用方自己填的值，那一格由库里那条外键约束判，不由会话替他猜。</summary>
     static bool IsUnsetKey(object? value) => value switch
     {
         null => true,
@@ -420,9 +390,8 @@ sealed class ChangeTracker(QuickSqlOrm orm) : DbChangeTracker
         _ => false,
     };
 
-    /// <summary>集合边的那一串外键成员名<em>在子端那张表上</em>，所以要两份契约才算得出来 ——
-    /// 这就是它不进 <see cref="EntityContractFactory"/> 收尾的原因（那里只有一份）。
-    /// 三档按优先级试，<b>推不出就响</b>（裁决④）：静默不级联等于把明细留在库里挂着一根空外键，
+    /// <summary>集合边的那一串外键成员名在子端那张表上，所以要两份契约才算得出来（不进契约工厂收尾的原因）。
+    /// 三档按优先级试，推不出就响（裁决④）：静默不级联等于把明细留在库里挂着一根空外键，
     /// 那种行只有对账时才现形。</summary>
     internal int[] CascadeForeignKeyOrdinals(EntityContract parent, EntityContract child, CollectionEdgeContract edge)
     {
@@ -459,7 +428,7 @@ sealed class ChangeTracker(QuickSqlOrm orm) : DbChangeTracker
         if (edge.DeclaredForeignKeyMembers.Count > 0)
             return Ordinals(child, edge.DeclaredForeignKeyMembers, keys, edge, "第二档：集合导航上点名的外键成员");
 
-        // 第三档：约定 —— 与查询侧反推外键那三档同名同序（DbSet 的 DiscoverFkColumns）。两处必须一把尺子，
+        // 第三档：约定——与查询侧反推外键那三档同名同序（DbSet 的 DiscoverFkColumns）。两处必须一把尺子，
         // 否则 Include 缝得上、级联落不进键，同一根边在两条路径上得到两个答案。
         var name = parent.ClrType.Name;
 
@@ -501,9 +470,9 @@ sealed class ChangeTracker(QuickSqlOrm orm) : DbChangeTracker
             "要么打 [NoCascade] 自己 Add 明细（裁决④：推不出就响，不静默不级联）。");
     }
 
-    /// <summary>成员名 → 子端的列下标，顺带钉一条基数：<b>外键列数必须等于父主键列数</b>，
-    /// 否则一句 <c>INSERT</c> 的参数对不上键（复合主键配单列外键是能建的表，级联不替它猜哪个键进哪一列）。
-    /// 认不出名字同样在这里响：契约解析已经判过点名的成员必须是已映射列，走到这里还认不出是内核的账没对上。</summary>
+    /// <summary>成员名 → 子端的列下标，顺带钉一条基数：外键列数必须等于父主键列数，
+    /// 否则一句 INSERT 的参数对不上键（复合主键配单列外键是能建的表，级联不替它猜哪个键进哪一列）。
+    /// 认不出名字同样在这里响：契约解析已判过点名的成员必须是已映射列，走到这里还认不出是内核的账没对上。</summary>
     static int[] Ordinals(EntityContract child, IReadOnlyList<string> members, ColumnContract[] keys,
         CollectionEdgeContract edge, string tier)
     {
@@ -527,14 +496,14 @@ sealed class ChangeTracker(QuickSqlOrm orm) : DbChangeTracker
         return ordinals;
     }
 
-    /// <summary>物化路径的身份映射入口（§8.2「同一上下文内重复读取返回同一实例」）。
-    /// <paramref name="entityType"/> 是<em>静态</em>类型：<c>GetType()</c> 在这里会把「按基类纳入会话的派生实例」
-    /// 错分到另一档去，而那种实例根本不可能被 <c>For&lt;Derived&gt;()</c> 建过档。</summary>
+    /// <summary>物化路径的身份映射入口（同一上下文内重复读取返回同一实例）。
+    /// entityType 是静态类型：GetType() 在这里会把「按基类纳入会话的派生实例」错分到另一档去，
+    /// 而那种实例根本不可能被 For〈Derived〉() 建过档。</summary>
     internal object TrackEntity(object entity, Type entityType)
         => Tracker(entityType).Track(entity);
 
-    /// <summary>整批登记。<b>就地写回列表元素</b>：去重之后「会话里的那一只」可能与物化出来的那一只不是同一只，
-    /// 而调用方拿到的必须是会话认的那一只 —— 否则下一句 <c>db.Entry(拿到的那个)</c> 会说它不在会话里。</summary>
+    /// <summary>整批登记。就地写回列表元素：去重之后「会话里的那一只」可能与物化出来的那一只不是同一只，
+    /// 调用方拿到的必须是会话认的那一只——否则下一句 db.Entry(拿到的那个) 会说它不在会话里。</summary>
     internal void TrackAll<T>(List<T> rows, Type entityType)
     {
         var tracker = Tracker(entityType);
@@ -550,24 +519,18 @@ sealed class ChangeTracker(QuickSqlOrm orm) : DbChangeTracker
         }
     }
 
-    /// <summary>补载路径的身份映射问句（§8.2「同一上下文内重复读取返回同一只」）：这一行在会话里已经是哪一只。
-    ///
-    /// <para><b>它与 <see cref="TrackAll"/> 的分别是职权，不只是一个方法的差别</b>：TrackAll 顺带登记，
-    /// 而登记一个从没建过档的子型会撞 <see cref="Tracker"/> 那句"不变量被破"—— 那一格由接链处补上了
-    /// （<c>IncludeMany</c> 把「按编译期子型建档」的那把委托交给节点，见
-    /// <see cref="QuickSql.Query.Model.IncludeManyNode.ChildTrackerFactory"/>），
-    /// 于是走到 <see cref="TrackAll"/> 时子型那一档已经在场。补载这一步只该问"会话里有没有这一行"，
-    /// 有就把那一只递回去 —— <b>没有档就是没在跟，原样递回去才是这句话的真话</b>，既不新建档也不响亮地拒（那是 §12.2 的另一档事）。</para>
-    ///
-    /// <para>参数同 <see cref="TrackEntity"/> 是<em>静态</em>类型：按 <c>GetType()</c> 问会把派生实例问到
-    /// 另一颗从没建过的键上，从而把同键两只实例留在会话里 —— 那正是本句要挡住的事故。</para></summary>
+    /// <summary>补载路径的身份映射问句：这一行在会话里已经是哪一只。它与 TrackAll 的分别是职权，
+    /// 不只是一个方法的差别：TrackAll 顺带登记，而登记一个从没建过档的子型会撞"不变量被破"
+    /// ——那格由接链处补上了（IncludeMany 把"按编译期子型建档"的委托交给节点）。补载这一步只该问
+    /// "会话里有没有这一行"，有就把那一只递回去——没有档就是没在跟，原样递回去才是这句话的真话。
+    /// 参数同 TrackEntity 是静态类型：按 GetType() 问会把派生实例问到另一颗从没建过的键上，
+    /// 把同键两只实例留在会话里。</summary>
     internal object? CanonicalOf(object entity, Type entityType)
         => _byType.TryGetValue(entityType, out var tracker) ? tracker.Canonical(entity) : null;
 
-    /// <summary>会话里有没有<em>任何</em>一档欠着临时主键（§8.2 的 <c>Tp</c>）。
-    /// 这是那条改写路径的闸门：一轮保存通常一颗临时键都没有，而判"有没有"只扫几个类型档，
-    /// 不必把每行的每个外键列都读一遍。<b>问的是全会话而不是本档</b>：发号在主端那一档，
-    /// 拿着那颗值的是依赖方那一档，两边不是同一份账。</summary>
+    /// <summary>会话里有没有任何一档欠着临时主键。这是那条改写路径的闸门：一轮保存通常一颗临时键都没有，
+    /// 判"有没有"只扫几个类型档，不必把每行的每个外键列都读一遍。问的是全会话而不是本档：
+    /// 发号在主端那一档，拿着那颗值的是依赖方那一档，两边不是同一份账。</summary>
     internal bool HasPendingTemps
     {
         get
@@ -580,8 +543,8 @@ sealed class ChangeTracker(QuickSqlOrm orm) : DbChangeTracker
         }
     }
 
-    /// <summary>按<em>边的目标类型</em>把临时键的问题送到主端那一档。<b>目标档不存在就是"不是临时键"</b>：
-    /// 号只在 <c>Add</c> 时发，而 <c>Add</c> 必然先把档建好，所以没有档就没有号，不需要为它造一个空档。</summary>
+    /// <summary>按边的目标类型把临时键的问题送到主端那一档。目标档不存在就是"不是临时键"：
+    /// 号只在 Add 时发，而 Add 必然先把档建好，所以没有档就没有号，不需要为它造一个空档。</summary>
     internal TempProbe ProbeTemp(Type targetType, object? value, out object? real)
     {
         if (!_byType.TryGetValue(targetType, out var tracker))
@@ -594,10 +557,9 @@ sealed class ChangeTracker(QuickSqlOrm orm) : DbChangeTracker
         return tracker.ProbeTemp(value, out real);
     }
 
-    /// <summary>一次 <c>SaveChanges</c> 的问句：<b>先侦测一遍，再问有没有一行欠着语句</b>。
-    /// 与 <see cref="HasChanges"/> 的分别是它<em>不看开关</em> —— <c>SaveChanges</c> 恒定先比一轮，
-    /// 关掉自动侦测不该把没被显式赋值覆盖的改动漏掉（那是丢数据，不是省一次比较）。
-    /// 判据本身仍是逐行的 <c>WillWrite</c>，粘性位只用来跳过整档扫描。</summary>
+    /// <summary>一次 SaveChanges 的问句：先侦测一遍，再问有没有一行欠着语句。与 HasChanges 的分别是
+    /// 它不看开关——SaveChanges 恒定先比一轮，关掉自动侦测不该把没被显式赋值覆盖的改动漏掉。
+    /// 判据本身仍是逐行的 WillWrite，粘性位只用来跳过整档扫描。</summary>
     internal bool WritesAreDue()
     {
         DetectChanges();
@@ -620,33 +582,27 @@ sealed class ChangeTracker(QuickSqlOrm orm) : DbChangeTracker
         return false;
     }
 
-    /// <summary>一次 <c>SaveChanges</c> 的写入：三档 → 结算。<b>前置条件是调用方刚跑过
-    /// <see cref="WritesAreDue"/></b>（那里就是"侦测 → 再决定要不要开事务"这一步）：
-    /// 这里不再比一遍，否则每次保存都要把全会话的字段读两遍，而两遍之间不可能有人插进来改状态 ——
-    /// 本类比 <see cref="Entries"/> 那几处快照的余地都没有，非线程安全写在类注释上。</summary>
+    /// <summary>一次 SaveChanges 的写入：三档 → 结算。前置条件是调用方刚跑过 WritesAreDue
+    /// （那里就是"侦测 → 再决定要不要开事务"这一步）：这里不再比一遍，否则每次保存都要把全会话的字段读两遍
+    /// ——本类比 Entries 那几处快照的余地都没有，非线程安全写在类注释上。</summary>
     internal async Task<SaveChangesReport> FlushDueAsync(CancellationToken ct)
     {
         var traces = new List<HookTrace>();
         var operations = new List<SaveChangesOp>();
 
         // 快照一份档列表：写的时候要是最开始那几档，中途不接纳新登记的类型。
-        // 排序只动档内的类型先后，三档的先后（§8.2 那句"先插再改最后删"）只在下面那一格提前。
+        // 排序只动档内的类型先后，三档的先后（先插再改最后删）只在下面那一格提前。
         var trackers = OrderedByDependency(_orderView);
 
-        // 「同一张表这一轮既插又删」把那一段删除提前（触发条件见 <see cref="ITypeTracker.HasInsertsAndDeletes"/>）。
-        //
-        // <b>为什么三档的先后在这里要让一步</b>：删掉的那一行腾开的是一个<em>业务</em>唯一键
-        // （明细的行号、顺序位、单内的编码 —— 库里那条唯一索引管的就是它），而插进来的那一行要占的正是同一个位置。
-        // 先插就撞在还赖在表里的那一行上：<c>23505 duplicate key</c>，撞它的还是<em>本轮自己就要删掉</em>的那一行 ——
+        // 「同一张表这一轮既插又删」把那一段删除提前（触发条件见 ITypeTracker.HasInsertsAndDeletes）。
+        // 为什么三档的先后要让一步：删掉的那一行腾开的是一个业务唯一键（明细的行号、顺序位、编码），
+        // 而插进来的那一行要占的正是同一个位置——先插就撞在还赖在表里的那一行上，
         // 会话按三档排出来的一串语句，库里逐条看都对，串起来是错的。
-        //
-        // <b>提前的是整档删除，不是某一张表的删除</b>，这一格的区别就是外键约束报不报错：
-        // 只把甲表的删除摘出来提前，就会把「被依赖的那一行最后删」那条不变量拆散（甲是乙的主端时，
-        // 乙的删除还留在原来那一趟里，甲先没了 → 一句删不掉的甲）。所以这里把删除那一整趟原样搬到触发点，
-        // 逆序枚举、同一个 WritePhaseAsync、同一批节点，一条语句的形状与先后都没改，
-        // 改的只有它落在插入档的哪一侧。插入档内部（被依赖的在前）照旧，所以主端已经回填的键不会被这趟删除拿走。
-        //
-        // 没被触发的那一轮（这张表只插不删、或只删不插）走的还是 §8.2 那一串，一字未动。</summary>
+        // 提前的是整档删除，不是某一张表的删除：只把甲表的删除摘出来提前会拆散
+        // 「被依赖的那一行最后删」那条不变量（甲是乙的主端时，甲先没了 → 一句删不掉的甲）。
+        // 逆序枚举、同一个 WritePhaseAsync、同一批节点，语句形状与先后都没改，改的只有落在插入档的哪一侧；
+        // 插入档内部（被依赖的在前）照旧，主端已回填的键不会被这趟删除拿走。
+        // 没被触发的那一轮（只插不删、或只删不插）走原来的三档序，一字未动。
         var deletesFlushed = false;
 
         async Task FlushDeletesAsync()
@@ -671,7 +627,7 @@ sealed class ChangeTracker(QuickSqlOrm orm) : DbChangeTracker
             for (var i = 0; i < trackers.Length; i++)
             {
                 // 删除走逆序：被依赖的那一行最后删，否则库里那条外键约束先把语句挡下来
-                // —— 而"外键约束报错"是这一格里最难读的一种失败形状（§8.2）。
+                // ——而"外键约束报错"是这一格里最难读的一种失败形状。
                 var tracker = trackers[phase == WriteOperation.Delete ? trackers.Length - 1 - i : i];
 
                 if (!tracker.MayHaveWrites)
@@ -685,7 +641,7 @@ sealed class ChangeTracker(QuickSqlOrm orm) : DbChangeTracker
                 }
 
                 // 级联欠的键要在这一档建语句之前落进子实体：WriteInsertsAsync 读的是实体现值，
-                // 而拓扑序已经把父那一档排在前面 await 完，此刻父的键要么已经有值、要么本轮没写（那一格拒）。
+                // 拓扑序已把父那一档排在前面 await 完，此刻父的键要么已经有值、要么本轮没写（那一格拒）。
                 if (phase == WriteOperation.Insert)
                     ApplyCascadeLinks(tracker);
 
@@ -701,19 +657,14 @@ sealed class ChangeTracker(QuickSqlOrm orm) : DbChangeTracker
         return new SaveChangesReport(operations, traces);
     }
 
-    /// <summary>这一批的关系边排不排得出先后 —— <b>只判、一条语句都不发</b>。<c>SaveChangesAsync</c>
-    /// 把它放在开事务之前：排不出顺序是元数据的事，而 <c>BeginTransaction</c> 会先一步去碰驱动，
-    /// 于是"连不上库"那句盖住了成因（离线场景更是永远测不到这一格）。</summary>
+    /// <summary>这一批的关系边排不排得出先后——只判、一条语句都不发。SaveChangesAsync 把它放在开事务之前：
+    /// 排不出顺序是元数据的事，而 BeginTransaction 会先一步去碰驱动，"连不上库"那句会盖住成因。</summary>
     internal void EnsureWriteOrderResolvable() => OrderedByDependency(_orderView);
 
-    /// <summary>分表实体与跟踪器互斥（§16.4 那一格的裁决）。<b>判据取"这一行此刻会不会被写出去"</b>，
-    /// 与 <see cref="AnyDue"/> 同一颗 <see cref="ITypeTracker.WillWrite"/>：只把分表实体<em>读</em>进会话
-    /// （Unattached/Unchanged）是无害的，那条路不发语句，没必要为此关掉整个会话的读侧身份映射。
-    ///
-    /// <para><b>为什么不是"实现一半"</b>：会话的账按主键记，而分表里"同键的两行"是能存在的两行
-    /// （<c>Id</c> 自增而表按月切时，两张片各自的 1 号互不相干），身份映射因此不成立 ——
-    /// 那不是补一条 WHERE 就能修的，要先定"跨片的一行由什么指认"。规格 §16.4 把这一格记为已裁，
-    /// 出路写在消息里（写侧那三条链按行的分片键值定表，本来就不需要会话）。</para></summary>
+    /// <summary>分表实体与跟踪器互斥。判据取"这一行此刻会不会被写出去"（与 AnyDue 同一颗 WillWrite）：
+    /// 只把分表实体读进会话是无害的，那条路不发语句。为什么不是"实现一半"：会话的账按主键记，
+    /// 而分表里"同键的两行"是能存在的两行（Id 自增而表按月切时，两张片各自的 1 号互不相干），
+    /// 身份映射不成立——那要先定"跨片的一行由什么指认"。出路：写侧三条链按行的分片键值定表，本来就不需要会话。</summary>
     internal void EnsureNoSplitWrites()
     {
         foreach (var tracker in _orderView)
@@ -730,19 +681,11 @@ sealed class ChangeTracker(QuickSqlOrm orm) : DbChangeTracker
         }
     }
 
-    /// <summary>这一批写要落的那座集群（§16.4 的分库那一档），<b>跨集群就整批拒</b>。
-    /// 判据与 <see cref="EnsureNoSplitWrites"/> 同一颗 <see cref="ITypeTracker.WillWrite"/>：只把另一座
-    /// 集群的实体<em>读</em>进会话不构成一批跨集群的写。
-    ///
-    /// <para><b>为什么是"整批拒"而不是"按集群拆成几场事务依次提交"</b>：后者看着是把同一件事做完了，
-    /// 实际改了 <c>SaveChanges</c> 那句"一批=一场事务"的承诺 —— 第二批失败时第一批已经进了库，而报告里
-    /// 只有一份 <c>Success=false</c>，调用方无从知道哪几行已经在库里。那种形状正是要避开的那一类
-    /// "看着像原子，其实不是"。要分库写就自己分次 <c>SaveChanges</c>（每次都在一座集群上、每次都提交得明明白白），
-    /// 或者按集群各开一条会话 —— 会话本来就是 Scoped 的。</para>
-    ///
-    /// <para>返回 <c>null</c> 说"这一批没有要写出去的行"，调用方按缺省集群开事务（那一批本来一条语句都不发，
-    /// <c>SaveChangesAsync</c> 在更前面就交了空报告）。名字不叫 <c>EnsureSingleClusterWrites</c>：它除了判
-    /// 还要<em>给出结论</em>，而那个结论是开事务那一格要的参数。</para></summary>
+    /// <summary>这一批写要落的那座集群（分库那一档），跨集群就整批拒。判据与 EnsureNoSplitWrites 同一颗
+    /// WillWrite：只把另一座集群的实体读进会话不构成一批跨集群的写。为什么是"整批拒"而不是"按集群拆成
+    /// 几场事务依次提交"：后者改了 SaveChanges「一批=一场事务」的承诺——第二批失败时第一批已经进了库，
+    /// 而报告里只有一份 Success=false，那种"看着像原子，其实不是"的形状正是要避开的。要分库写就自己分次
+    /// SaveChanges，或按集群各开一条会话。返回 null 说"这一批没有要写出去的行"，调用方按缺省集群开事务。</summary>
     internal string? WriteCluster()
     {
         string? cluster = null;
@@ -775,19 +718,13 @@ sealed class ChangeTracker(QuickSqlOrm orm) : DbChangeTracker
         return cluster;
     }
 
-    /// <summary>档内的类型序按外键依赖排：被依赖的（主端）在前。判据只有一个来源——契约上那条
-    /// <see cref="RelationshipContract"/> 边，也就是 §10.3 那句「三处只读契约，不许各自去读注解」。
-    ///
-    /// <para><b>排得出先后，接下来那一半才排得出引用</b>：主端键要等库给的那一种（子实体先 <c>Add</c>、
-    /// 父实体的键还空着）由 <c>Tp</c> 临时主键接住（§8.2，v0.21）—— 先按这里的顺序把主端写出去、
-    /// 真实键回填进实体，再在依赖方建语句之前把它手里那颗临时值换掉。所以这一格合上了"先后"，
-    /// 那一格合上"引用"，两句都要在才成立。</para>
-    ///
-    /// <para>没有任何关系边时原样返回（首次出现序），所以 v0.19 之前的行为一字未动；
-    /// 拓扑只在会话真出现了跨实体关系时才付这一点代价。</para></summary>
+    /// <summary>档内的类型序按外键依赖排：被依赖的（主端）在前。判据只有一个来源——契约上那条关系边
+    /// （三处只读契约，不许各自去读注解）。排得出先后，接下来那一半才排得出引用：主端键要等库给的那一种
+    /// 由临时主键接住——先按这里的顺序把主端写出去、真实键回填进实体，再在依赖方建语句之前换掉临时值。
+    /// 没有任何关系边时原样返回（首次出现序），拓扑只在会话真出现跨实体关系时才付代价。</summary>
     static ITypeTracker[] OrderedByDependency(ITypeTracker[] trackers)
     {
-        // 快路径：会话里没有任何关系边就不排（绝大多数会话只有几个类型，但这一步在每次保存上都要走）。
+        // 快路径：会话里没有任何关系边就不排（这一步在每次保存上都要走）。
         // 集合边也算一条：级联的先后正由它定。
         if (Array.TrueForAll(trackers, static t =>
                 t.Contract.Relationships.Count == 0 && t.Contract.Collections.Count == 0))
@@ -841,14 +778,11 @@ sealed class ChangeTracker(QuickSqlOrm orm) : DbChangeTracker
         }
     }
 
-    /// <summary>这一档依赖哪些<em>会话里在场的</em>类型。<b>自引用不算边</b>：同一张表内部的先后
-    /// 不是类型序能解决的（那一行得先插自己再补自己的上级，那是另一件事），留着只会把自己判成环。
-    ///
-    /// <para>两头的边都接：本档自己的 to-one 边（外键列在我这张表上 → 我依赖目标），
-    /// 以及<em>别人手里那根集合边指着我</em>（我是别人的明细 → 我依赖那个父）。后者正是级联的写序
-    /// ——<c>OrderItem</c> 往往没有回指 <c>Order</c> 的导航，那条依赖只存在于父端的集合边上。
-    /// 打了 <c>[NoCascade]</c> 的那一根不接：既然父不带子，父子两批的先后就不该由会话替用户定，
-    /// 接上去只会多出原本不存在的环。</para></summary>
+    /// <summary>这一档依赖哪些会话里在场的类型。自引用不算边：同一张表内部的先后不是类型序能解决的
+    /// （那一行得先插自己再补自己的上级，那是另一件事），留着只会把自己判成环。两头的边都接：
+    /// 本档自己的 to-one 边（外键列在我这张表上 → 我依赖目标），以及别人手里那根集合边指着我
+    /// （我是别人的明细——OrderItem 往往没有回指 Order 的导航，那条依赖只存在于父端的集合边上）。
+    /// 打了 [NoCascade] 的那一根不接：父不带子，父子两批的先后不该由会话替用户定，接上去只会多出原本不存在的环。</summary>
     static List<Type> EdgesOf(ITypeTracker tracker, ITypeTracker[] trackers, Dictionary<Type, int> inSession)
     {
         var edges = new List<Type>();
@@ -896,10 +830,9 @@ sealed class ChangeTracker(QuickSqlOrm orm) : DbChangeTracker
                "要么把环拆开（其中一端改成可空外键、由第二次保存补上），要么让环上至少一条边的主端本轮不欠语句。";
     }
 
-    /// <summary>这只实例<em>实际</em>在哪一档（按引用问，不按调用点推断的泛型参数）。
-    /// 只服务于一条更准的拒绝话：<c>DbContext.Entry&lt;T&gt;(entity)</c> 的 <c>T</c> 是从实参推出来的，
-    /// 传一只派生实例就推出一个从没建过档的类型，于是那句"先 Set&lt;派生&gt;().Attach"会把人指向
-    /// 一条<em>根本不该存在</em>的档（继承映射没接线，§8.2）—— 而实例其实好好地待在基类那一档里。</summary>
+    /// <summary>这只实例实际在哪一档（按引用问，不按调用点推断的泛型参数）。只服务于一条更准的拒绝话：
+    /// DbContext.Entry〈T〉(entity) 的 T 是从实参推出来的，传一只派生实例就推出一个从没建过档的类型，
+    /// "先 Set〈派生〉().Attach"会把人指向一条根本不该存在的档——而实例其实好好地待在基类那一档里。</summary>
     internal ITypeTracker? OwnerOf(object entity)
     {
         foreach (var tracker in _orderView)
@@ -912,8 +845,8 @@ sealed class ChangeTracker(QuickSqlOrm orm) : DbChangeTracker
     ITypeTracker Tracker(Type entityType)
         => _byType.TryGetValue(entityType, out var tracker)
             ? tracker
-            // 不可达：引擎手里那份 ChangeTracker 只可能来自 Set<T>()，而它先把档建好。
-            // 走到这里说明上面那条不变量破了，这是内核缺陷，不是用户写错 —— 消息要按这个口径写。
+            // 不可达：引擎手里那份 ChangeTracker 只可能来自 Set〈T〉()，而它先把档建好。
+            // 走到这里说明不变量破了，是内核缺陷不是用户写错——消息按这个口径写。
             : throw new QuickSqlException($"{entityType.Name} 在会话里没有跟踪档：物化路径被挂上了一个没有对应档位的跟踪器，" +
                 "这是内核的不变量被破（Set<T>() 应当先建档再交给引擎），不是调用方写错。请带这个查询的 Explain() 报缺陷。");
 }

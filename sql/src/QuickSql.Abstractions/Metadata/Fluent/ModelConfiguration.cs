@@ -1,7 +1,7 @@
 namespace QuickSql.Metadata.Fluent;
 
 /// <summary>同层冲突的记录器：同一个事实被写两次就在配置期抛，不等启动解析
-/// ——§13.11 要求断言的是异常，不是"取后写的那条"。实体级与成员级共用这一条尺子。</summary>
+/// ——启动期要求断言的是异常，不是"取后写的那条"。实体级与成员级共用这一条尺子。</summary>
 sealed class FactBag(string owner)
 {
     HashSet<string>? _facts;
@@ -15,7 +15,7 @@ sealed class FactBag(string owner)
     }
 }
 
-/// <summary>Fluent 配置（§10.2 优先级 1）。只作为解析期的输入，解析完就冻结进 <c>EntityContract</c>，
+/// <summary>Fluent 配置（优先级最高的来源层）。只作为解析期的输入，解析完就冻结进 EntityContract，
 /// 三个消费点（DDL / 绑定 / 校验）不再回读这里。</summary>
 public sealed class FluentMember
 {
@@ -45,11 +45,11 @@ public sealed class FluentMember
 
     public bool? IsIgnored { get; private set; }
 
-    /// <summary>并发列（§8.2 的乐观锁，只比较不书写）。与 <c>[ConcurrencyToken]</c> 同一格，优先级链上 Fluent 在上。</summary>
+    /// <summary>并发列（乐观锁，只比较不书写）。与 ConcurrencyToken 特性同一格，优先级链上 Fluent 在上。</summary>
     public bool? IsConcurrencyToken { get; private set; }
 
-    /// <summary>应用给值那一族（<c>[ConcurrencyToken(AppSetsValue = true)]</c> 的 Fluent 等价物）：
-    /// 新值由应用在保存前生成，库拿快照比 WHERE、把现值写进 SET。要先用 <see cref="PropertyBuilder.IsConcurrencyToken"/>
+    /// <summary>应用给值那一族（ConcurrencyToken(AppSetsValue = true) 的 Fluent 等价物）：
+    /// 新值由应用在保存前生成，库拿快照比 WHERE、把现值写进 SET。要先用 PropertyBuilder.IsConcurrencyToken
     /// 或特性把这一列声明成并发列，这一格才被采信。</summary>
     public bool? AppSetsValue { get; private set; }
 
@@ -57,9 +57,14 @@ public sealed class FluentMember
 
     public string? Comment { get; private set; }
 
+    /// <summary>列默认值（与 PropertyBuilder.HasDefaultValue 同一格的读取侧）。
+    /// 值域门禁不在这一格跑——它在 EntityContractFactory 收尾那一份（G1 与 G2 共用），这里只存。</summary>
+    public object? DefaultValue { get; private set; }
+
     internal bool IsEmpty => ColumnName is null && MaxLength is null && Precision is null && Scale is null
                              && Required is null && IsKey is null && IsIdentity is null && IsIgnored is null
-                             && IsConcurrencyToken is null && AppSetsValue is null && StoreTypeName is null && Comment is null;
+                             && IsConcurrencyToken is null && AppSetsValue is null && StoreTypeName is null && Comment is null
+                             && DefaultValue is null;
 
     public sealed class PropertyBuilder(FluentMember member)
     {
@@ -99,6 +104,18 @@ public sealed class FluentMember
             return this;
         }
 
+        /// <summary>列默认值（CodeFirst 建表与补列时发 DEFAULT）。只收常量字面量档
+        /// （string、bool、整型、浮点、decimal）且要与列型精确同型（可空列剥掉 Nullable 比对）；
+        /// DateTime（把建表时刻冻进 DDL）、byte[]（无字面量形）、枚举（字面量形各家不同）、
+        /// 自增/主键列都在 EntityContractFactory 收尾那一格被拒——那里两侧共用一份门禁。
+        /// 不支持配 null：可空的列用不着默认，非空的列配 null 是自相矛盾。</summary>
+        public PropertyBuilder HasDefaultValue(object value)
+        {
+            member._facts.Record(nameof(HasDefaultValue), value);
+            member.DefaultValue = value;
+            return this;
+        }
+
         public PropertyBuilder IsRequired(bool required = true)
         {
             member._facts.Record(nameof(IsRequired), required);
@@ -127,7 +144,7 @@ public sealed class FluentMember
             return this;
         }
 
-        /// <summary>声明成并发列（<c>[ConcurrencyToken]</c> 的 Fluent 等价物，优先级更高）。</summary>
+        /// <summary>声明成并发列（ConcurrencyToken 特性的 Fluent 等价物，优先级更高）。</summary>
         public PropertyBuilder IsConcurrencyToken(bool isConcurrencyToken = true)
         {
             member._facts.Record(nameof(IsConcurrencyToken), isConcurrencyToken);
@@ -135,10 +152,8 @@ public sealed class FluentMember
             return this;
         }
 
-        /// <summary>
-        /// 把并发列声明成应用给值那一族（<c>[ConcurrencyToken(AppSetsValue = true)]</c> 的等价物）：
-        /// 新值由应用生成，列进 SET 与 INSERT 列清单，WHERE 仍比快照。
-        /// </summary>
+        /// <summary>把并发列声明成应用给值那一族（ConcurrencyToken(AppSetsValue = true) 的等价物）：
+        /// 新值由应用生成，列进 SET 与 INSERT 列清单，WHERE 仍比快照。</summary>
         public PropertyBuilder AppSetsValue(bool appSetsValue = true)
         {
             member._facts.Record(nameof(AppSetsValue), appSetsValue);
@@ -196,10 +211,10 @@ public sealed class FluentEntity
     }
 }
 
-/// <summary>Fluent 侧的索引声明：成员名 + 唯一性。<c>Name</c> 可空，留空由约定生成。</summary>
+/// <summary>Fluent 侧的索引声明：成员名 + 唯一性。Name 可空，留空由约定生成。</summary>
 public sealed record FluentIndex(string? Name, IReadOnlyList<string> MemberNames, bool Unique, bool Descending = false);
 
-/// <summary>一个 <c>OrmOptions</c> 里的全部 Fluent 配置。</summary>
+/// <summary>一个 OrmOptions 里的全部 Fluent 配置。</summary>
 public sealed class ModelConfiguration
 {
     readonly Dictionary<Type, FluentEntity> _entities = [];
@@ -213,6 +228,41 @@ public sealed class ModelConfiguration
     }
 
     public FluentEntity? Find(Type clrType) => _entities.GetValueOrDefault(clrType);
+
+    /// <summary>配置过的实体清单（预登记口）：
+    /// DbContext.OnModelCreating 用它把点过名的实体预登记进会话那份注册表——摸过之前
+    /// SchemaSyncer 看不见它们，而"配了模型却同步不到"是比漏配更难查的假象。
+    /// 顺序按首次点名的次序（字典枚举序），只读。</summary>
+    public IEnumerable<Type> KnownEntityTypes => _entities.Keys;
+}
+
+/// <summary>ModelConfiguration 的 EF 同形薄壳：DbContext.OnModelCreating 的形参类型。
+/// 它自己不存任何事实——配置落在 EntityBuilder 那一整套既有机制上（同层冲突仍由 FactBag 启动期抛），
+/// 这一格存在的理由只有"挂钩的签名要像 EF"那一半。
+/// 覆写即整份模型：派生类覆写 OnModelCreating 之后，这一只上下文走的是
+/// 这里配出的那一份，组装根上的 orm 级全局默认（QuickSqlOrmOptions.Model）不再参与——
+/// 与 EF 的同一条语义；要全局默认就别覆写。</summary>
+public sealed class ModelBuilder
+{
+    readonly ModelConfiguration _configuration = new();
+
+    /// <summary>配置一只实体（EF 同形）。同一实体多次 Entity() 是同一只 builder 的延续，
+    /// 不是覆盖——与 ModelConfiguration.Entity 同一口径。</summary>
+    public EntityBuilder<T> Entity<T>(Action<EntityBuilder<T>> configure) where T : class
+    {
+        ArgumentNullException.ThrowIfNull(configure);
+
+        var builder = _configuration.Entity<T>();
+
+        configure(builder);
+
+        return builder;
+    }
+
+    /// <summary>取回一只实体的 builder 而不立即配置（要连着多层写时用）。</summary>
+    public EntityBuilder<T> Entity<T>() where T : class => _configuration.Entity<T>();
+
+    internal ModelConfiguration Configuration => _configuration;
 }
 
 public sealed class EntityBuilder<T> where T : class

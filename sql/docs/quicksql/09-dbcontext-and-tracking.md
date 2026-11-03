@@ -24,6 +24,33 @@ Console.WriteLine($"{report.StatementCount} 句 / {report.AffectedRows} 行");
 
 DI 场景把 `AppDb` 注册成 Scoped 即可；`orm.CreateDbContext<AppDb>()` 存在（走 Activator，AOT 场景建议自己 `new`）。
 
+## 1.5 模型钩子：`OnModelCreating`（可选）
+
+派生类覆写它，用 `ModelBuilder` 配实体（EF 同形）——**覆写即整份模型**：这一只上下文走自己配出的那份 Fluent，组装根上的 `QuickSqlOrmOptions.Model`（orm 级全局默认）不再参与；不覆写的上下文零变化。
+
+```csharp
+public class AppDbContext(QuickSqlOrm orm) : QuickSql.DbContext(orm)
+{
+    public DbSet<Order> Orders => Set<Order>();
+
+    protected override void OnModelCreating(ModelBuilder mb)
+    {
+        mb.Entity<Order>(e =>
+        {
+            e.ToTable("Orders_Archive");                       // 表名改判
+            e.Property(o => o.CustomerName).HasColumnName("CustName");   // 列名改判
+            e.Property(o => o.Amount).HasDefaultValue(0m);     // 默认值（13 篇 §7）
+        });
+    }
+}
+```
+
+- **触发时机**：首次需要模型的那一刻（`Set<T>()`/`Add`/…，即跟踪器懒建那一格），不在构造里——基类构造里虚调派生成员是老坑，EF 为同一理由也懒触发。
+- **每派生类型恰跑一次**：配置按上下文类型缓存，同型的两只实例共享同一份模型。
+- **隔离**：两个上下文类型各配各的，互不串扰；`orm.Select<T>()`（组装根那份模型）逐字不变。
+- `mb.Entity<T>()` 点过名的实体会预登记进会话注册表（不摸过的那只也能按覆写模型解析）。
+- **已知边界**：`orm.SyncStructureAsync`（结构同步）走组装根那份注册表——覆写模型里新配的实体不在它的清单上，要同步就同时喂给 orm 级 `orm.Schemas.Contract<T>()`。
+
 ## 2. `DbSet<T>` 全部成员
 
 | 成员 | 说明 |

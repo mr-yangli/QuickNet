@@ -6,31 +6,21 @@ using QuickSql.Tracking;
 
 namespace QuickSql.Materialization;
 
-/// <summary>「加载可以反射、调用不行」（§12.7 C）在急切加载与跟踪路径上的兑现处。
-/// 取一个成员的当前值、给一个成员写值、往一个集合里追加一颗 —— 三件事都只在<b>建计划</b>那一次
-/// 按名字定位成员，之后每行拿到的是已编译委托：调用它是普通的方法调用，不是反射调度。
-/// 之所以单独立一支而不是就地各写一份表达式树：同一段体在五个地方各写过一遍
-/// （取键的两对、引用导航与集合导航各一处、Include 的导航设置器），
-/// 每一遍都只记得反射定位、忘了反射调用，于是每行每颗键留一次反射调度（归属见 §12.8 第 8 行那一格）。</summary>
-/// <remarks>标注打在类上：这一支的存在就是「运行期按名字找成员」这件事的边界，
-/// 与 <c>EntitySchemaRegistry</c> 同一取向（G1 生成的实现自带这些委托的等价物，不需要这里）。
-/// 编译一次的代价在首行或启动期，摊到每行是零；它换掉的反射调度按实测是每次数十纳秒的量级。
-/// 报错文本一律由调用方给：这一支不知道自己是在找主键属性还是在外键列对应的属性，
-/// 而「哪一列、哪个实体、为什么找不到」那句话只有调用方说得准。<b>唯一的例外是集合导航那一支里
-/// 「写入口不是公共的」两格</b>：调用方那句断言的是「成员不存在」，而这一臂里成员明明在场 —— 继续沿用
-/// 就成了谎话。写口的可见性、集合位当场空不空，这两件事只有定位成员的这一支知道，所以那两句由它现拼。</remarks>
+/// <summary>「加载可以反射、调用不行」在急切加载与跟踪路径上的兑现处。取一个成员的当前值、给一个成员写值、
+/// 往一个集合里追加一颗——三件事都只在建计划那一次按名字定位成员，之后每行拿到的是已编译委托，
+/// 调用是普通方法调用、不是反射调度。报错文本一律由调用方给：这一支不知道自己是在找主键属性还是在外键
+/// 列对应的属性，「哪一列、哪个实体、为什么找不到」只有调用方说得准；唯一的例外是集合导航那一支里
+/// 「写入口不是公共的」两格——调用方那句断言的是「成员不存在」而成员明明在场，写口可见性与集合位
+/// 空不空只有这一支知道，那两句由它现拼。</summary>
 [RequiresUnreferencedCode("按运行期类型与成员名定位属性并取它的读口与写口。")]
 [RequiresDynamicCode("把成员读写与集合追加编译成委托。")]
 public static class MemberAccessors
 {
     // ── 编译产物的进程级缓存 ─────────────────────────────────────────────
-    // 三张表的键都只有委托体真正依赖的那几项（声明类型、成员名、元素型），<b>不含调用方递进来的报错文本</b>：
-    // 文本只在"成员找不到/写口不可绑"那一次抛里用到，而那一抛发生在进缓存之前 —— 失败不落缓存，
-    // 成功落的那一份与哪个调用点先来无关。形状与 Materializer.DtoReaders 同一条纪律（§12.7 C 第一条），
-    // 修的也是同一件事的执行期那一半：Include / IncludeMany / 拆分加载 / DbSet.Load 四条路都在<b>每次执行</b>
-    // 调这里，没有缓存时每次执行各付一轮反射定位 + Expression.Compile（数十 µs 起）——
-    // 「加载可以反射、调用不行」里那些调用点根本不是启动期。契约构建那一次（ContractResolver）
-    // 从此与执行期共用同一份产物，编译只发生一次。
+    // 三张表的键都只有委托体真正依赖的那几项（声明类型、成员名、元素型），不含调用方递进来的报错文本：
+    // 文本只在"成员找不到/写口不可绑"那一次抛里用到，而那一抛发生在进缓存之前。Include / IncludeMany /
+    // 拆分加载 / DbSet.Load 四条路都在每次执行调这里，没有缓存时每次执行各付一轮反射定位 + Compile
+    // （数十 µs 起），契约构建那一次从此与执行期共用同一份产物。
 
     static readonly ConcurrentDictionary<(Type DeclaringType, string MemberName), Func<object, object>> Getters = new();
 
@@ -38,10 +28,9 @@ public static class MemberAccessors
 
     static readonly ConcurrentDictionary<(Type DeclaringType, string MemberName, Type ElementType), CollectionBindings> Collections = new();
 
-    /// <summary>读一颗公共实例属性的值，返回装箱后的 <c>object</c>（当字典键用）。
-    /// 属性挂在基类上时委托里转的是那个基类而不是派生型 —— 与「按名字找成员」的原写法同形。</summary>
-    /// <param name="missingMessage">属性不存在时的报错文本。</param>
-    /// <param name="noGetterMessage">属性存在但没有公共读口时的报错文本。</param>
+    /// <summary>读一颗公共实例属性的值，返回装箱后的 object（当字典键用）。属性挂在基类上时委托里转的是
+    /// 那个基类而不是派生型——与「按名字找成员」的原写法同形。missingMessage 是属性不存在时的报错文本，
+    /// noGetterMessage 是属性存在但没有公共读口时的报错文本。</summary>
     public static Func<object, object> Getter(Type declaringType, string memberName, string missingMessage, string? noGetterMessage = null)
     {
         var key = (DeclaringType: declaringType, MemberName: memberName);
@@ -72,11 +61,9 @@ public static class MemberAccessors
             .Compile();
     }
 
-    /// <summary>给一颗公共实例属性写值。写入前把 <c>object</c> 转成成员的声明类型，
-    /// 所以传错类型进来当场抛 <c>InvalidCastException</c> —— 与原先那句反射写入同一行为，
-    /// 差别只是那次「问成员是什么型」挪到了建计划时，不在每行问。</summary>
-    /// <param name="missingMessage">属性不存在时的报错文本。</param>
-    /// <param name="noSetterMessage">属性存在但没有公共写口时的报错文本。</param>
+    /// <summary>给一颗公共实例属性写值。写入前把 object 转成成员的声明类型，传错类型进来当场抛
+    /// InvalidCastException——差别只是「问成员是什么型」挪到了建计划时，不在每行问。
+    /// missingMessage 是属性不存在时的报错文本，noSetterMessage 是没有公共写口时的报错文本。</summary>
     public static Action<object, object?> Setter(Type declaringType, string memberName, string missingMessage, string? noSetterMessage = null)
     {
         var key = (DeclaringType: declaringType, MemberName: memberName);
@@ -106,12 +93,9 @@ public static class MemberAccessors
     }
 
     /// <summary>集合导航的级联入口：把「拿这只集合送进子端会话」那一次泛型调用编译成委托。
-    /// <b>这是 G2 兜底侧的形状</b> —— <c>MakeGenericMethod</c> 只在这里出现一次（建契约那一次，启动期），
-    /// 级联每行拿到的是已编译委托；G1 侧由生成器直接写 <c>sink.Enter(parent, parent.Items, "Items")</c>，
-    /// 运行期零反射（§12.7 A 的「写侧 0 反射」）。之所以把这一格交给 <c>ICascadeSink</c> 而不是返回
-    /// <c>IEnumerable&lt;object&gt;</c>：跟踪器是按类型分格的（<c>For&lt;TChild&gt;()</c>），
-    /// 那一格的类型只有在编译期或这一次泛型方法绑定里才拿得到。</summary>
-    /// <param name="missingMessage">属性不存在或没有公共读口时的报错文本。</param>
+    /// MakeGenericMethod 只在这里出现一次（建契约那一次，启动期），级联每行拿到的是已编译委托；
+    /// 交给 ICascadeSink 而不是返回 IEnumerable&lt;object&gt;，是因为跟踪器按类型分格（For&lt;TChild&gt;()），
+    /// 那一格的类型只有在这一次泛型方法绑定里才拿得到。missingMessage 是属性不存在或没有公共读口时的报错文本。</summary>
     public static Action<ICascadeSink, object> CascadeEnter(Type parentType, Type childType, string memberName, string missingMessage)
     {
         var read = (parentType.GetProperty(memberName)
@@ -136,17 +120,12 @@ public static class MemberAccessors
             .Compile();
     }
 
-    /// <summary>集合导航的一整套访问器：读集合位当前的值、写回一只新集合、往里追加一颗、
-    /// 以及按元素型建一只空集合。四件事共用同一次成员定位，所以一个节点只反射一次。
-    /// 元素型在建计划时就知道（它是导航属性那个 <c>T</c>），于是运行期不再按每颗子行的实际类型
-    /// 去找追加口 —— 原先找不到是静默不加，这里改成建计划时就抛：静默丢一颗子行不是可接受的失败形状。</summary>
-    ///
-    /// <para><b>写入口不是公共的那一岔（ABP/DDD 的标配形状）</b>：<c>public List&lt;TChild&gt; Certs { get; protected set; } = [];</c>
-    /// 是一根完全合法的集合导航，缺的只是让外人看得见的那半颗 set。旧形状在这里抛出的是「没有这根导航属性」——
-    /// 那句话两次不实：成员在场，集合导航也成立，真正的原因只是「写口不可绑」。如今按形状分岔：
-    /// 属性类型自己收得到追加口 ⇒ <b>往 getter 当场交回的那只集合里追加</b>，缝合那一条路根本不碰写口；
-    /// 两样都没有（没有公共写口、属性类型又收不了追加）⇒ 当场抛，文案说清缺的到底是哪一样形状。
-    /// <b>公共写口那一臂一字不易</b>：已经能工作的实体不为这一改换任何东西 —— 逐算子的分配基线也钉在那一臂上。</para>
+    /// <summary>集合导航的一整套访问器：读集合位当前的值、写回一只新集合、往里追加一颗、按元素型建一只空集合。
+    /// 四件事共用同一次成员定位，一个节点只反射一次；元素型在建计划时就知道，运行期不再按每颗子行的实际类型
+    /// 找追加口——原先找不到是静默不加，这里改成建计划时就抛：静默丢一颗子行不是可接受的失败形状。
+    /// 写入口不是公共的那一岔（protected set 是完全合法的集合导航形状）按形状分岔：属性类型自己收得到追加口
+    /// 就往 getter 交回的那只集合里追加，缝合那条路根本不碰写口；两样都没有就当场抛，文案说清缺的到底是
+    /// 哪一样形状。公共写口那一臂一字不易：已经能工作的实体不为这一改换任何东西。</summary>
     public static CollectionBindings BindCollection(Type declaringType, string memberName, Type elementType, string missingMessage)
     {
         var key = (DeclaringType: declaringType, MemberName: memberName, ElementType: elementType);
@@ -183,8 +162,8 @@ public static class MemberAccessors
         }
 
         // 没有公共写口。可追加的那一臂：Attach 往现成集合里追加，永远走不到写口这一格；写口委托唯一的活
-        // 是<em>真被调用到的那一次</em>把当场的原因说准 —— 集合位是 null 就报 null 那一格（缝不上去的
-        // 真实形状是「写口不可见 ∧ getter 交回空串」，两句都要点到），集合位有人就报「这一档要整只写回」
+        // 是真被调用到的那一次把当场的原因说准——集合位是 null 就报 null 那一格（缝不上去的真实形状是
+        // 「写口不可见 ∧ getter 交回空串」，两句都要点到），集合位有人就报「这一档要整只写回」
         // （补载那一条路的形状，就地追加够不着它）。两句话都不再谎称「成员不存在」。
         if (appendable)
         {
@@ -214,11 +193,11 @@ public static class MemberAccessors
     static Action<object, object?> NullWriteMouth(Func<object, object> getter, string nullSlotMessage, string replacementMessage)
         => (owner, _) => throw new QuickSqlException(getter(owner) is null ? nullSlotMessage : replacementMessage);
 
-    /// <summary>报错文本里替调用方把「该长成什么样」写出来 —— 这一形就是 ABP/DDD 实体的标准写法。</summary>
+    /// <summary>报错文本里替调用方把「该长成什么样」写出来。</summary>
     static string RequiredShape(Type elementType, string memberName)
         => $"public List<{elementType.Name}> {memberName} {{ get; protected set; }} = [];";
 
-    /// <summary><c>IReadOnlyList&lt;ShopCert&gt;</c> 这样的形状名：<c>Type.Name</c> 交回的是 <c>IReadOnlyList`1</c>，
+    /// <summary>IReadOnlyList&lt;ShopCert&gt; 这样的形状名：Type.Name 交回的是 IReadOnlyList`1，
     /// 报给人看之前把反引号那一截换成尖括号参数表。</summary>
     static string Readable(Type type)
     {
@@ -230,7 +209,7 @@ public static class MemberAccessors
         return $"{head}<{string.Join(", ", type.GetGenericArguments().Select(Readable))}>";
     }
 
-    /// <summary>往集合里追加一颗，集合与元素都从 <c>object</c> 进来；转成目标类型这一步由委托里的
+    /// <summary>往集合里追加一颗，集合与元素都从 object 进来；转成目标类型这一步由委托里的
     /// 一次显式转换承担，所以运行期没有方法查找。</summary>
     static Action<object, object> Adder(Type collectionType, Type elementType)
     {
@@ -247,7 +226,7 @@ public static class MemberAccessors
             .Compile();
     }
 
-    /// <summary>按类型建一只实例（用它的无参构造器），编译期就把 <c>Activator</c> 那次查找换成一次 new。</summary>
+    /// <summary>按类型建一只实例（用它的无参构造器），编译期就把 Activator 那次查找换成一次 new。</summary>
     static Func<object> New(Type type)
     {
         var ctor = ParameterlessConstructor(type)
@@ -259,18 +238,15 @@ public static class MemberAccessors
         return Expression.Lambda<Func<object>>(body).Compile();
     }
 
-    /// <summary>无参构造器：<b>装配用的那一颗，不问可见性</b>——公共查不到就退到内部/受保护/私有。
-    /// <para>为什么这一格可以不问：物化要的形状是「造得出一个空壳、字段初始化器已就位」，
-    /// 而 ABP/DDD 的实体恰恰是 <c>protected X()</c> + 有参创建构造器那一族——把可见性当门槛，
-    /// 得到的不是"更安全"，是整颗实体读写两侧一起拒（实测：INSERT 与 SELECT 响同一句话）。</para>
-    /// <para><b>带参的那一颗不在这一格</b>：构造器 DTO 与 record 走的是 <c>Materializer</c> 里
-    /// <c>ViaConstructor</c> 那一臂，仍只认公共构造器——参数表是给人对位的协议，
-    /// 把私有构造器当协议会在别人改内部实现时悄悄换掉装配形状，而那一族本来就该有公共构造器。</para>
-    /// <para>两条实测边界记在这里，免得有人拿错工具：<c>Activator.CreateInstance&lt;T&gt;()</c> 对非公共无参构造
-    /// <b>抛</b> <c>MissingMethodException</c>（它要的是 <c>new()</c> 那一档）；
-    /// <c>RuntimeHelpers.GetUninitializedObject</c> 能出实例但<b>不跑构造器也不跑字段初始化器</b>，
-    /// 于是 <c>Xxx { get; set; } = [];</c> 那一格留 null——正是集合导航最怕的形状。
-    /// <c>Expression.New(非公共 ctor).Compile()</c> 两样都对，所以走这一条。</para></summary>
+    /// <summary>无参构造器：装配用的那一颗，不问可见性——公共查不到就退到内部/受保护/私有。
+    /// 物化要的形状是「造得出一个空壳、字段初始化器已就位」，而 protected X() + 有参创建构造器是常见的
+    /// 实体写法，把可见性当门槛得到的不是"更安全"，是整颗实体读写两侧一起拒。带参的那一颗不在这格：
+    /// 构造器 DTO 与 record 走 Materializer 的 ViaConstructor 臂、仍只认公共构造器——参数表是协议，
+    /// 把私有构造器当协议会在别人改内部实现时悄悄换掉装配形状。两条边界免得拿错工具：
+    /// Activator.CreateInstance&lt;T&gt;() 对非公共无参构造抛 MissingMethodException（它要的是 new() 那一档）；
+    /// RuntimeHelpers.GetUninitializedObject 出实例但不跑构造器也不跑字段初始化器，
+    /// 「Xxx { get; set; } = []」那一格留 null——正是集合导航最怕的形状；
+    /// Expression.New(非公共 ctor).Compile() 两样都对，所以走这一条。</summary>
     public static ConstructorInfo? ParameterlessConstructor(Type type)
         => type.GetConstructor(Type.EmptyTypes)
            ?? type.GetConstructor(

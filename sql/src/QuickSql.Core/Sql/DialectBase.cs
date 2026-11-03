@@ -5,10 +5,9 @@ using QuickSql.Sql.Ast;
 
 namespace QuickSql.Sql;
 
-/// <summary>AST → 文本的共用步法（§3 第 4 层）。方言只覆写<b>真正分岔</b>的那几处：分页、
-/// <c>UPDATE/DELETE</c> 的目标写法、RETURNING 落点、类型名、标识符引号。
-/// 之所以住在 Core 而不是各 provider 里：金仓/openGauss/瀚高共享 <c>PostgreSqlBase</c>，
-/// 而 provider 之间禁止互引（§2），共用的东西只能往上一层。</summary>
+/// <summary>AST → 文本的共用步法。方言只覆写真正分岔的那几处：分页、UPDATE/DELETE 的目标写法、
+/// RETURNING 落点、类型名、标识符引号。之所以住在 Core 而不是各 provider 里：
+/// 金仓/openGauss/瀚高共享 PostgreSqlBase，而 provider 之间禁止互引，共用的东西只能往上一层。</summary>
 public abstract class DialectBase(IdentifierPolicy identifiers, IValueBinder values, IExpressionRules expressions) : ISqlDialect
 {
     /// <summary>报错时要能说出是哪一家，所以每个方言必须报出自己的库种。</summary>
@@ -17,7 +16,7 @@ public abstract class DialectBase(IdentifierPolicy identifiers, IValueBinder val
     public abstract char ParameterPrefix { get; }
 
     /// <summary>默认 false = 执行器照旧摘前缀：只有拿到"带前缀那一路有活库见证"的这一家才许翻成 true，
-    /// 判据与出处写在 <see cref="ISqlDialect.DriverAcceptsPrefixedParameterNames"/>。</summary>
+    /// 判据与出处写在 ISqlDialect.DriverAcceptsPrefixedParameterNames。</summary>
     public virtual bool DriverAcceptsPrefixedParameterNames => false;
 
     public virtual bool PrefixUnicodeLiterals => false;
@@ -28,30 +27,29 @@ public abstract class DialectBase(IdentifierPolicy identifiers, IValueBinder val
 
     public virtual bool PagingRequiresOrdering => false;
 
-    /// <summary>默认 true：两个已落地的方言族都有 <c>UPDATE … FROM</c>（T-SQL 与 PG 系各用自己的写法），
-    /// 所以 §12.5 的合并档对它们是同一份文本形状。取 false 的那一家必须在 <see cref="EmitJoinedSources"/>
-    /// 里<em>抛</em>而不是悄悄丢掉那些表源 —— 这一颗只是"要不要走合并那条路"的开关，不是错误豁免。</summary>
+    /// <summary>默认 true：两个已落地的方言族都有 UPDATE … FROM（T-SQL 与 PG 系各用自己的写法），
+    /// 合并档对它们是同一份文本形状。取 false 的那一家必须在 EmitJoinedSources 里抛而不是悄悄丢掉那些
+    /// 表源——这一颗只是"要不要走合并那条路"的开关，不是错误豁免。</summary>
     public virtual bool SupportsJoinedWrites => true;
 
-    /// <summary>默认 true：今天四家的驱动各自覆写了保存点三件套，而且各自在那一族的集成册里绿过一次
-    /// （判据与逐家出处写在 <see cref="ISqlDialect.SupportsDriverSavepoints"/>，四家的读数是同一批五场）。
-    /// <b>这一颗也不是错误豁免</b>：取 false 的那一家必须把下面三口一起覆写，只改开关会得到一处<em>更靠里</em>的抛。</summary>
+    /// <summary>默认 true：已落地的几家驱动各自覆写了保存点三件套（判据与逐家出处写在
+    /// ISqlDialect.SupportsDriverSavepoints）。这一颗也不是错误豁免：取 false 的那一家必须把下面三口
+    /// 一起覆写，只改开关会得到一处更靠里的抛。</summary>
     public virtual bool SupportsDriverSavepoints => true;
 
-    /// <summary>没有文本保存点的发射口：<see cref="ISqlDialect.SupportsDriverSavepoints"/> 取 true 的那一家
-    /// <b>永远走不到这里</b>（执行层在驱动对象上直接调 <c>DbTransaction.Save</c>）。
-    /// 走到这里说明有人把那颗开关翻成 false 而没有给出文本 —— 与 <see cref="EmitReturning"/>
-    /// 和 <see cref="EmitJoinedSources"/> 那两格同一条纪律：宁可抛，不要悄悄发一句它不认的文本出去，
+    /// <summary>没有文本保存点的发射口：SupportsDriverSavepoints 取 true 的那一家永远走不到这里
+    /// （执行层在驱动对象上直接调 DbTransaction.Save）。走到这里说明有人把那颗开关翻成 false 而没有给出
+    /// 文本——与 EmitReturning 和 EmitJoinedSources 那两格同一条纪律：宁可抛，不要悄悄发一句它不认的文本，
     /// 也不要悄悄什么都不发（后者会得到一只"能提交、能回滚、其实什么都没做"的保存点事务）。</summary>
     public virtual void EmitSavepoint(SqlWriter writer, string savepointName)
         => throw new QuickSqlException($"{Kind} 没有文本保存点的发射口，却被要求创建一只（SupportsDriverSavepoints 取 false 的方言必须覆写 EmitSavepoint，§4）");
 
-    /// <summary>同上一口，<b>必须成对覆写</b>：只覆写创建而不覆写回退，得到的是"内层回滚撤销了外层全部改动"
-    /// —— 那正是这一格要避免的那个语义，而它不会在任何一次绿测试里现形。</summary>
+    /// <summary>同上一口，必须成对覆写：只覆写创建而不覆写回退，得到的是"内层回滚撤销了外层全部改动"
+    /// ——那正是这一格要避免的那个语义，而它不会在任何一次绿测试里现形。</summary>
     public virtual void EmitRollbackToSavepoint(SqlWriter writer, string savepointName)
         => throw new QuickSqlException($"{Kind} 没有文本保存点的回退发射口，却被要求回退到 {savepointName}（SupportsDriverSavepoints 取 false 的方言必须覆写 EmitRollbackToSavepoint，§4）");
 
-    /// <summary>同前两口，第三件。缺它的话红点在<em>内层提交</em>那一句上，而不是在创建那一句上。</summary>
+    /// <summary>同前两口，第三件。缺它的话红点在内层提交那一句上，而不是在创建那一句上。</summary>
     public virtual void EmitReleaseSavepoint(SqlWriter writer, string savepointName)
         => throw new QuickSqlException($"{Kind} 没有文本保存点的释放发射口，却被要求释放 {savepointName}（SupportsDriverSavepoints 取 false 的方言必须覆写 EmitReleaseSavepoint，§4）");
 
@@ -66,9 +64,9 @@ public abstract class DialectBase(IdentifierPolicy identifiers, IValueBinder val
     public virtual void Emit(in SelectStatement select, SqlWriter writer)
     {
         // 分页有两种形状：在句尾加子句（T-SQL 的 OFFSET..FETCH、PG 系的 LIMIT/OFFSET），或者把整句
-        // <b>包进</b>两层 ROWNUM 过滤（Oracle 系，§9.4 那三套实现里的第三套）。第二种必须占一个槽位而不是
-        // 覆写 <see cref="EmitPaging"/>：要包就意味内层那一份不能再有分页尾巴，而 EmitPaging 恰好是在
-        // 尾巴那个位置上被调用的 —— 只给它的话，覆写方拿不到"不发尾巴"这件事。
+        // 包进两层 ROWNUM 过滤（Oracle 系）。第二种必须占一个槽位而不是覆写 EmitPaging：
+        // 要包就意味内层那一份不能再有分页尾巴，而 EmitPaging 恰好是在尾巴那个位置上被调用的——
+        // 只给它的话，覆写方拿不到"不发尾巴"这件事。
         if (PagingWrapsSelect && (select.Limit is not null || select.Offset is not null))
         {
             EmitWrappedPaging(select, writer);
@@ -80,9 +78,9 @@ public abstract class DialectBase(IdentifierPolicy identifiers, IValueBinder val
         EmitPaging(writer, select);
     }
 
-    /// <summary>SELECT 的本体：<c>SELECT … FROM … WHERE … GROUP BY … HAVING … ORDER BY</c>，
-    /// <b>不含分页</b>。它是"包装式分页"要套进内层的那一段，所以与 <see cref="Emit"/> 分开两口。
-    /// 句首那一段分页文本也挂在本方法上（<see cref="EmitPagingQualifier"/>）：本方法是"句首"唯一的出口。</summary>
+    /// <summary>SELECT 的本体：SELECT … FROM … WHERE … GROUP BY … HAVING … ORDER BY，不含分页。
+    /// 它是"包装式分页"要套进内层的那一段，所以与 Emit 分开两口。句首那一段分页文本也挂在本方法上
+    /// （EmitPagingQualifier）：本方法是"句首"唯一的出口。</summary>
     protected virtual void EmitSelectBody(in SelectStatement select, SqlWriter writer)
     {
         writer.Append("SELECT ");
@@ -124,32 +122,28 @@ public abstract class DialectBase(IdentifierPolicy identifiers, IValueBinder val
             EmitOrdering(select.OrderBy, writer);
     }
 
-    /// <summary>分页的第三种落点：<b>句首的限定词</b>（Informix 血统的 <c>SELECT FIRST n SKIP m</c>）。
-    /// §9.4 那句"三套实现"到这一家变四套，而前两套的槽位都接不住它 ——
-    /// <see cref="EmitPaging"/> 长在句尾，<see cref="PagingWrapsSelect"/> 那一档要的是把整句包住，
-    /// 限定词那一形两样都不是：它<em>在</em>本句里面、又<em>不</em>包任何一句。
-    /// 默认空实现 = 已落地的五家都没有这一档（<see cref="Emit"/> 的尾巴那一步照常走）。
-    /// <b>走这一支的方言必须把 <see cref="EmitPaging"/> 收成空体</b>，否则同一份分页在句首与句尾各发一遍 ——
-    /// 两口都在同一个类里，改一处的人一定看得到另一处，与 <c>OracleDialect</c> 那一对
-    /// （<see cref="PagingWrapsSelect"/> ∶ 空的 <c>EmitPaging</c>）同一种成对纪律。
-    /// 参数化的位置在这里也顺带定了：限定词在<b>整句之最前</b>，所以它登记的参数编号比投影与谓词都小，
-    /// 而文本上确实也在最前 —— 对位置形占位符（<c>?</c>）那一家，"编号序 = 文本序"这一条就是这么保住的。</summary>
+    /// <summary>分页的第三种落点：句首的限定词（Informix 血统的 SELECT FIRST n SKIP m）。前两套的槽位都
+    /// 接不住它——EmitPaging 长在句尾，包装那一档要的是把整句包住，限定词在本句里面、又不包任何一句。
+    /// 默认空实现 = 已落地的几家都没有这一档。走这一支的方言必须把 EmitPaging 收成空体，否则同一份分页
+    /// 在句首与句尾各发一遍（与 Oracle 那一对「PagingWrapsSelect ∶ 空的 EmitPaging」同一种成对纪律）。
+    /// 参数化的位置在这里也顺带定了：限定词在整句之最前，它登记的参数编号比投影与谓词都小——
+    /// 对位置形占位符那一家，"编号序 = 文本序"这一条就是这么保住的。</summary>
     protected virtual void EmitPagingQualifier(SqlWriter writer, SelectStatement select)
     {
     }
 
-    /// <summary>这一家要不要包装式分页。默认 false —— 两个已落地的方言族都是句尾加子句，
-    /// 所以这个开关对它们的产出零影响（黄金样本逐字未动是这一句的见证方式）。</summary>
+    /// <summary>这一家要不要包装式分页。默认 false——两个已落地的方言族都是句尾加子句，
+    /// 这个开关对它们的产出零影响。</summary>
     protected virtual bool PagingWrapsSelect => false;
 
-    /// <summary>把 <see cref="EmitSelectBody"/> 包进分页的外层。声明要包装却不实现这一口的方言
-    /// <b>必须报错</b>而不是悄悄发一条不分页的 SQL —— 那会把"取前 5 行"变成全表扫（§5.8 禁静默退化的同一格）。</summary>
+    /// <summary>把 EmitSelectBody 包进分页的外层。声明要包装却不实现这一口的方言必须报错，
+    /// 而不是悄悄发一条不分页的 SQL——那会把"取前 5 行"变成全表扫。</summary>
     protected virtual void EmitWrappedPaging(in SelectStatement select, SqlWriter writer)
         => throw new QuickSqlException($"{Kind} 声明了包装式分页却没有实现 {nameof(EmitWrappedPaging)}，宁可报错也不能发一条不分页的 SQL");
 
-    /// <summary>分页的<b>形状</b>各家不同（T-SQL 跟在 ORDER BY 之后、PG 用 <c>LIMIT</c>、DM 要三层嵌套的
-    /// <c>ROWNUM</c>），所以这里是抽象口。共同的「要不要补占位序」规则在 <see cref="EmitPagingOrdering"/>。
-    /// <b>走包装那一支的方言不会到这里</b>：它的分页文本在 <see cref="EmitWrappedPaging"/> 里。</summary>
+    /// <summary>分页的形状各家不同（T-SQL 跟在 ORDER BY 之后、PG 用 LIMIT、DM 要三层嵌套的 ROWNUM），
+    /// 所以这里是抽象口。共同的「要不要补占位序」规则在 EmitPagingOrdering。
+    /// 走包装那一支的方言不会到这里：它的分页文本在 EmitWrappedPaging 里。</summary>
     protected abstract void EmitPaging(SqlWriter writer, SelectStatement select);
 
     public virtual void Emit(in InsertStatement insert, SqlWriter writer)
@@ -210,19 +204,18 @@ public abstract class DialectBase(IdentifierPolicy identifiers, IValueBinder val
     protected virtual void EmitReturning(SqlWriter writer, IReadOnlyList<ColumnContract> returning)
         => throw new QuickSqlException($"{Kind} 未实现 RETURNING/OUTPUT，但请求了主键回填（§4 的 IKeyStrategy）");
 
-    /// <summary>整语句 upsert 的默认：抛。句尾那一族走 <see cref="Providers.IBulkStrategy.UpsertClause"/>
-    /// 而不是这一颗（内核先问那一份句尾），只有"没有那颗槽"的一家（SQLite 的 <c>ON CONFLICT</c>、
-    /// <c>MERGE INTO</c> 那一族）到这里；没覆写又没有句尾的家，<c>InsertOrUpdate</c> 在内核那一层就当场拒，
-    /// 走不到这一句的默认抛。这一句抛因此是"覆写漏了一家"的编程期信号，不是给现场的常规红。</summary>
+    /// <summary>整语句 upsert 的默认：抛。句尾那一族走 IBulkStrategy.UpsertClause 而不是这一颗
+    /// （内核先问那一份句尾），只有"没有那颗槽"的一家（SQLite 的 ON CONFLICT、MERGE INTO 那一族）到这里；
+    /// 没覆写又没有句尾的家，InsertOrUpdate 在内核那一层就当场拒，走不到这一句的默认抛。
+    /// 这一句抛因此是"覆写漏了一家"的编程期信号，不是给现场的常规红。</summary>
     public virtual void Emit(in UpsertStatement upsert, SqlWriter writer)
         => throw new QuickSqlException($"{Kind} 既没接句尾 UpsertClause、也没覆写整语句 upsert 的 emit：InsertOrUpdate 在这一家不可达。");
 
-    /// <summary><c>MERGE</c> 一族共用的后半段：<c>ON (键配) WHEN MATCHED UPDATE SET WHEN NOT MATCHED INSERT VALUES</c>，
-    /// 可选以分号收尾（T-SQL 的 <c>MERGE</c> 必须收一个 <c>;</c>，Oracle 血统与虚谷不收）。三家各写自己的
-    /// <c>MERGE INTO … USING (…)</c> 前半段（源的形状与别名写法是它们的分岔点），尾巴都到这里，一处真相。
-    /// 键只进 <c>ON</c> 与 <c>INSERT</c>、不进 <c>UPDATE SET</c>（改自己的键不是整行更新，与句尾族同判）；
-    /// <c>UPDATE SET</c> 因此只并 <see cref="UpsertStatement.Settable"/>，<c>INSERT</c> 并整张
-    /// <see cref="UpsertStatement.Columns"/>（= 可写 ++ 键）。</summary>
+    /// <summary>MERGE 一族共用的后半段：ON (键配) WHEN MATCHED UPDATE SET WHEN NOT MATCHED INSERT VALUES，
+    /// 可选以分号收尾（T-SQL 的 MERGE 必须收分号，Oracle 血统与虚谷不收）。三家各写自己的
+    /// MERGE INTO … USING (…) 前半段（源的形状与别名写法是它们的分岔点），尾巴都到这里，一处真相。
+    /// 键只进 ON 与 INSERT、不进 UPDATE SET（改自己的键不是整行更新，与句尾族同判）；
+    /// UPDATE SET 因此只并 UpsertStatement.Settable，INSERT 并整张 UpsertStatement.Columns（可写 + 键）。</summary>
     protected void EmitMergeTail(SqlWriter writer, string targetAlias, string sourceAlias, in UpsertStatement upsert, bool semicolon)
     {
         writer.Append(" ON (");
@@ -267,7 +260,7 @@ public abstract class DialectBase(IdentifierPolicy identifiers, IValueBinder val
             writer.Append(';');
     }
 
-    /// <summary>一颗 <c>别名.列</c>：两侧各过一次 <see cref="EmitIdentifier"/>（引号与折叠归本家策略），中间一个点。</summary>
+    /// <summary>一颗「别名.列」：两侧各过一次 EmitIdentifier（引号与折叠归本家策略），中间一个点。</summary>
     protected void EmitQualified(SqlWriter writer, string alias, string column)
     {
         EmitIdentifier(writer, alias);
@@ -318,7 +311,7 @@ public abstract class DialectBase(IdentifierPolicy identifiers, IValueBinder val
         }
     }
 
-    /// <summary>ANSI 写法：<c>UPDATE [Orders] AS [t0]</c>。T-SQL 不接受目标别名，所以它覆写这三步。</summary>
+    /// <summary>ANSI 写法：UPDATE [Orders] AS [t0]。T-SQL 不接受目标别名，所以它覆写这三步。</summary>
     protected virtual void EmitUpdateTarget(SqlWriter writer, TableRef table)
     {
         EmitTableName(writer, table.Table);
@@ -338,20 +331,19 @@ public abstract class DialectBase(IdentifierPolicy identifiers, IValueBinder val
 
     protected virtual void EmitDeleteTarget(SqlWriter writer, TableRef table) => EmitUpdateTarget(writer, table);
 
-    /// <summary>T-SQL 的 <c>DELETE</c> 在目标之后再来一个 <c>FROM</c>，PG 系要 <c>USING</c>。</summary>
+    /// <summary>T-SQL 的 DELETE 在目标之后再来一个 FROM，PG 系要 USING。</summary>
     protected virtual string DeleteJoinKeyword => " FROM ";
 
-    /// <summary><c>FROM</c> 里表源与它别名之间的那颗连接词。<b>Oracle 血统没有 <c>AS</c></b>：
-    /// 那一家只在<em>列</em>别名上接受 <c>AS</c>，表别名只能是 <c>FROM 表 别名</c> 那种挨着写。
-    /// 它不是一处版式偏好而是"这条语句在这一家过不过解析器"，所以留在方言而不是共用层的字面量里。</summary>
+    /// <summary>FROM 里表源与它别名之间的那颗连接词。Oracle 血统没有 AS：那一家只在列别名上接受 AS，
+    /// 表别名只能是「FROM 表 别名」那种挨着写。它不是版式偏好而是"这条语句在这一家过不过解析器"，
+    /// 所以留在方言而不是共用层的字面量里。</summary>
     protected virtual string SourceAliasKeyword => " AS ";
 
-    /// <summary>目标表之外的那些表源落成一段子句。<paramref name="keyword"/> 自带前后空格，
-    /// 因为它的形状本身就是分岔点之一（T-SQL 在 DELETE 后要再来一个 <c>FROM</c>，PG 系要 <c>USING</c>）。
-    /// <paramref name="folded"/> 是<b>被这次发射消化掉、要并入 <c>WHERE</c> 的条件</b>：
-    /// 共用写法把条件留在 <c>ON</c> 上，于是返回 null；PG 系的 <c>UPDATE … FROM</c> / <c>DELETE … USING</c>
-    /// 只吃逗号分隔的表源（连着目标表的 <c>JOIN</c> 在那两家都不合法），条件必须挪进 <c>WHERE</c> ——
-    /// 那对 <c>INNER JOIN</c> 等价、对外连接不等价，所以挪的那一家遇到非 INNER 要抛而不是折。</summary>
+    /// <summary>目标表之外的那些表源落成一段子句。keyword 自带前后空格，因为它的形状本身就是分岔点之一
+    /// （T-SQL 在 DELETE 后要再来一个 FROM，PG 系要 USING）。folded 是被这次发射消化掉、要并入 WHERE 的条件：
+    /// 共用写法把条件留在 ON 上，于是返回 null；PG 系的 UPDATE … FROM / DELETE … USING 只吃逗号分隔的表源
+    /// （连着目标表的 JOIN 在那两家都不合法），条件必须挪进 WHERE——那对 INNER JOIN 等价、对外连接不等价，
+    /// 所以挪的那一家遇到非 INNER 要抛而不是折。</summary>
     protected virtual void EmitJoinedSources(SqlWriter writer, string keyword, IReadOnlyList<JoinClause> joins, out SqlExpression? folded)
     {
         folded = null;
@@ -393,7 +385,7 @@ public abstract class DialectBase(IdentifierPolicy identifiers, IValueBinder val
 
             EmitExpression(projection.Node, writer);
 
-            // 只有计算列才需要别名：直接列的名字对物化没有意义（列序才是真相，§10.3），
+            // 只有计算列才需要别名：直接列的名字对物化没有意义（列序才是真相），
             // 多打一个 AS 只会把黄金样本搞脏。
             if (projection.Alias is { Length: > 0 } alias && projection.Node is not ColumnExpression)
             {
@@ -433,7 +425,7 @@ public abstract class DialectBase(IdentifierPolicy identifiers, IValueBinder val
         }
     }
 
-    /// <summary>把一个内层语句包成表源：<c>( … )</c> 之后由 <see cref="EmitSource"/> 挂别名。
+    /// <summary>把一个内层语句包成表源：( … ) 之后由 EmitSource 挂别名。
     /// 括号是这句能当表源用的全部条件，两形（表达式里的相关子查询与规划出来的派生表）共用同一段。</summary>
     void EmitWrapped(SelectStatement inner, SqlWriter writer)
     {
@@ -441,6 +433,23 @@ public abstract class DialectBase(IdentifierPolicy identifiers, IValueBinder val
         Emit(inner, writer);
         writer.Append(')');
     }
+
+    /// <summary>集合运算四种关键字里唯一一颗有方言分岔的：EXCEPT 在 Oracle 血统（含达梦/神通）
+    /// 上的别名是 MINUS（语义同格——第一腿有、第二腿没有，两腿各去重后求差）。
+    /// 其余三档（UNION ALL / UNION / INTERSECT）任何一家同字，进形状不进方言；
+    /// 只有这一档要开口，因为那一族的老版本只认 MINUS。</summary>
+    protected virtual string ExceptKeyword => "EXCEPT";
+
+    /// <summary>SourceUnion 的接缝关键字。四个档都是句子级的关键字（进形状不进方言），
+    /// 这里只是把 SetOperationKind 翻成文本，分岔只有 ExceptKeyword 那一格。</summary>
+    string SetOpKeyword(SetOperationKind operation) => operation switch
+    {
+        SetOperationKind.UnionAll => "UNION ALL",
+        SetOperationKind.Union => "UNION",
+        SetOperationKind.Intersect => "INTERSECT",
+        SetOperationKind.Except => ExceptKeyword,
+        _ => throw new QuickSqlException($"{Kind} 未知集合运算档 {operation}"),
+    };
 
     protected void EmitSource(TableSource source, SqlWriter writer)
     {
@@ -459,16 +468,15 @@ public abstract class DialectBase(IdentifierPolicy identifiers, IValueBinder val
                 break;
 
             case SourceUnion union:
-                // 一片一条 SELECT，用 UNION ALL 串起来，整串占一个表位。这里发的是<em>本体</em>而不是
-                // <see cref="Emit"/>：分支带分页尾巴会写成"每片各取 N 行"，而括号里挂 ORDER BY 在
-                // T-SQL 与 Oracle 那一族还是语法错。序与分页只长在外层，那是编译口的事
-                // （<c>QueryCompiler.CompileSplit</c>），本方法只保证发不出别的形状。
+                // 一片一条 SELECT，按 Operation 指的关键字串起来，整串占一个表位。这里发的是本体而不是 Emit：
+                // 分支带分页尾巴会写成"每片各取 N 行"，而括号里挂 ORDER BY 在 T-SQL 与 Oracle 那一族还是语法错。
+                // 序与分页只长在外层，那是编译口的事（QueryCompiler.CompileSplit），本方法只保证发不出别的形状。
                 writer.Append('(');
 
                 for (var i = 0; i < union.Branches.Count; i++)
                 {
                     if (i > 0)
-                        writer.Append(union.All ? " UNION ALL " : " UNION ");
+                        writer.Append(' ').Append(SetOpKeyword(union.Operation)).Append(' ');
 
                     EmitSelectBody(union.Branches[i], writer);
                 }
@@ -477,8 +485,8 @@ public abstract class DialectBase(IdentifierPolicy identifiers, IValueBinder val
                 break;
 
             case SourceRawText raw:
-                // 文本一颗不动，只在外面包一层括号 —— 别名那一段在下面与各家同一条路（GBase 8s / Oracle 血统不写 AS）。
-                // 参数逐颗<em>登记而不落地名字</em>：名字已经在用户的文本里了，这里要的是让它进参数集合，
+                // 文本一颗不动，只在外面包一层括号——别名那一段在下面与各家同一条路（GBase 8s / Oracle 血统不写 AS）。
+                // 参数逐颗登记而不落地名字：名字已经在用户的文本里了，这里要的是让它进参数集合，
                 // 否则症状是"文本里有 @min、驱动收不到 @min"那种要到运行期才现形的错。
                 writer.Append('(').Append(raw.Sql).Append(')');
 
@@ -525,7 +533,7 @@ public abstract class DialectBase(IdentifierPolicy identifiers, IValueBinder val
         EmitIdentifier(writer, source.Ref.Alias);
 
         // 行集的列名只有这一处来源：库不看 VALUES 里的参数叫什么，只看这份清单，
-        // 而连接条件与 SET 右侧都按名字引它 —— 清单与 <see cref="SourceRows.Rows"/> 不同序就是静默串列。
+        // 而连接条件与 SET 右侧都按名字引它——清单与 SourceRows.Rows 不同序就是静默串列。
         if (source is SourceRows rows)
         {
             writer.Append(" (");
@@ -542,9 +550,9 @@ public abstract class DialectBase(IdentifierPolicy identifiers, IValueBinder val
         EmitOrderingList(ordering, writer);
     }
 
-    /// <summary>序清单的<em>本体</em>（不含 <c>ORDER BY</c> 那四个字）：外层那句由
-    /// <see cref="EmitOrdering"/> 补前导空格，OVER 里那一段自己写关键字、前后各留一格 ——
-    /// 两处共用的是"逐颗带方向"这一份写法，而 <c>ASC</c> 到底写不写正是两族必须一致的那一格。</summary>
+    /// <summary>序清单的本体（不含 ORDER BY 那四个字）：外层那句由 EmitOrdering 补前导空格，
+    /// OVER 里那一段自己写关键字、前后各留一格——两处共用"逐颗带方向"这一份写法，
+    /// 而 ASC 到底写不写正是两族必须一致的那一格。</summary>
     protected void EmitOrderingList(IReadOnlyList<OrderExpression> ordering, SqlWriter writer)
     {
         for (var i = 0; i < ordering.Count; i++)
@@ -557,14 +565,10 @@ public abstract class DialectBase(IdentifierPolicy identifiers, IValueBinder val
         }
     }
 
-    /// <summary>行号：<c>ROW_NUMBER() OVER (PARTITION BY … ORDER BY …)</c>。与 QuickFx 日期三口同一档分工——
-    /// <b>共用层出文本，方言只出自己的引号</b>，十八家一张模板都不登记（对照：凡带函数名的形状都得逐家给模板）。
-    /// <para>它是 <c>virtual</c> 留的那格<em>不是给"大概相同"的邻居覆写用的</em>，是给将来某一家<em>量出</em>分岔用的
-    /// （函数名大小写敏感的引擎、或走 <c>QUALIFY</c> 的那一系）：今天没有一家有分岔的实证，所以谁都不覆写，
-    /// 而 <c>DbCapabilities.WindowFunctions</c> 那一位也不当事分派点用——口径见
-    /// <see cref="ISqlDialect.SupportsJoinedWrites"/> 头部那句「位表今天零读者，判据落在代码真走到的那一格」。
-    /// 没有活库见证的那几家（§13.5 那本账上的离线档）此处的读数因此仍是「文本钉住了」，不是「库里接得住」，
-    /// 翻档要的是各家的出处，不在这一格里预支。</para></summary>
+    /// <summary>行号：ROW_NUMBER() OVER (PARTITION BY … ORDER BY …)。与 QuickFx 日期三口同一档分工——
+    /// 共用层出文本，方言只出自己的引号，各家一张模板都不登记。virtual 留的那格不是给"大概相同"的邻居
+    /// 覆写用的，是给将来某一家量出分岔用的（函数名大小写敏感的引擎、或走 QUALIFY 的那一系）：
+    /// 今天没有一家有分岔的实证，DbCapabilities.WindowFunctions 那一位也不当事分派点用。</summary>
     protected virtual void EmitRowNumber(RowNumberExpression rowNumber, SqlWriter writer)
     {
         writer.Append("ROW_NUMBER() OVER (");
@@ -583,8 +587,8 @@ public abstract class DialectBase(IdentifierPolicy identifiers, IValueBinder val
         writer.Append(')');
     }
 
-    /// <summary>§9.4：<c>Skip/Take</c> 无 <c>OrderBy</c> 时，抛错或补主键序由上游策略决定；
-    /// 走到这里说明策略是 <c>Allow</c>，那么要求 ORDER BY 的库必须补一个占位序，否则文本直接语法错。</summary>
+    /// <summary>Skip/Take 无 OrderBy 时，抛错或补主键序由上游策略决定；走到这里说明策略是 Allow，
+    /// 那么要求 ORDER BY 的库必须补一个占位序，否则文本直接语法错。</summary>
     protected void EmitPagingOrdering(SqlWriter writer, SelectStatement select)
     {
         if (select.OrderBy.Count > 0 || !select.RequireOrderingForPaging || !PagingRequiresOrdering)
@@ -636,10 +640,10 @@ public abstract class DialectBase(IdentifierPolicy identifiers, IValueBinder val
     // ── 表达式 ────────────────────────────────────────────────────────
 
     /// <summary>发射前的最后一道方言改写机会：把 AST 节点换成另一颗再交给 switch。
-    /// 默认原样返回；<b>唯一一颗覆写者是 <c>SqliteDialect</c></b>——那一家把比较表达式里的
-    /// <see cref="ParameterValue"/>（decimal 值）包一层 <c>CAST(@p AS NUMERIC)</c>，
-    /// 因为本家把定点存成 TEXT 而 SUM/AVG 返回 INTEGER，存储类排序 INTEGER &lt; TEXT 会让比较静默失败。
-    /// 之所以是"发射前"而不是"翻译期"：CAST 是 SQL 文本层的事，AST 在翻译期应当保持 provider 无关。</summary>
+    /// 默认原样返回；唯一的覆写者是 SqliteDialect——那一家把比较表达式里的 ParameterValue（decimal 值）
+    /// 包一层 CAST(@p AS NUMERIC)，因为本家把定点存成 TEXT 而 SUM/AVG 返回 INTEGER，
+    /// 存储类排序 INTEGER 小于 TEXT 会让比较静默失败。之所以是"发射前"而不是"翻译期"：
+    /// CAST 是 SQL 文本层的事，AST 在翻译期应当保持 provider 无关。</summary>
     protected virtual SqlExpression PrepareForEmission(SqlExpression node) => node;
 
     protected virtual void EmitExpression(SqlExpression node, SqlWriter writer)
@@ -741,8 +745,8 @@ public abstract class DialectBase(IdentifierPolicy identifiers, IValueBinder val
         EmitIdentifier(writer, column.Column.ColumnName);
     }
 
-    /// <summary>参数化的唯一收口：名字由 writer 发号，形状由 <see cref="IValueBinder"/> 决定（§4）。
-    /// 谁在这里自己 <c>AddParameter</c>，谁就会造出「文本里有 @p3、集合里没有 p3」这种只能执行期炸的 SQL。</summary>
+    /// <summary>参数化的唯一收口：名字由 writer 发号，形状由 IValueBinder 决定。
+    /// 谁在这里自己 AddParameter，谁就会造出「文本里有 @p3、集合里没有 p3」这种只能执行期炸的 SQL。</summary>
     protected virtual void EmitParameter(ParameterValue parameter, SqlWriter writer)
         => writer.AppendParameter(Values.CreateParameter(writer.NextParameterName(), parameter.Value, parameter.Hint));
 
@@ -787,7 +791,7 @@ public abstract class DialectBase(IdentifierPolicy identifiers, IValueBinder val
             writer.Append(" LIKE ");
             EmitOperand(binary.Right, binary.Operator, writer, isRight: true);
 
-            // 转义符由翻译器烘进模式串（§5.7），这里必须把它一起写出来，否则 '\' 变成普通字符。
+            // 转义符由翻译器烘进模式串，这里必须把它一起写出来，否则 '\' 变成普通字符。
             writer.Append(" ESCAPE '").Append(Expressions.LikeEscapeCharacter).Append('\'');
             return;
         }
@@ -797,7 +801,7 @@ public abstract class DialectBase(IdentifierPolicy identifiers, IValueBinder val
         EmitOperand(binary.Right, binary.Operator, writer, isRight: true);
     }
 
-    /// <summary>同种连接词不加括号（翻译器已把 AND/OR 折成右倾扁平链，§13.2），只在混嵌时加：
+    /// <summary>同种连接词不加括号（翻译器已把 AND/OR 折成右倾扁平链），只在混嵌时加：
     /// 这样黄金样本读起来跟人手写的一样。</summary>
     void EmitLogical(SqlBinaryExpression binary, SqlWriter writer)
     {
@@ -849,15 +853,9 @@ public abstract class DialectBase(IdentifierPolicy identifiers, IValueBinder val
     static int Precedence(BinaryOperator op) => op switch
     {
         BinaryOperator.And or BinaryOperator.Or => 1,
-        // <c>IS DISTINCT FROM</c> 排在比较符<b>之下</b>（更松）：<c>a = b IS DISTINCT FROM c</c> 读作
-        // <c>(a = b) IS DISTINCT FROM c</c>。出处是 PG 手册 4.1.6 的 Table 4.2（<c>&lt; &gt; = &lt;= &gt;= &lt;&gt;</c>
-        // 那一行在 <c>IS ISNULL NOTNULL</c> 之上，表是"由高到低"排的），文法侧对应
-        // <c>distinct_expr: a_expr_compare IS NOT DISTINCT FROM a_expr_compare</c> 那条产生式 —— 左右操作数
-        // 都只吃到比较符那一层。<b>9.5 之前这一档是反的</b>（手册 4.1.6 末尾那条 Note：9.5 起才改，
-        // "IS tests used to have higher priority"），而 §9.1 记的金仓 V8 内核是 9.2 一线，
-        // 于是它落在旧规则那一侧的可能性是<em>真的</em> —— 这一档两家可能不同形，未实测，记在 §14。
-        // 今天它谁都碰不到：合并语句的守卫把 <c>IS DISTINCT FROM</c> 直接挂在 <c>AND/OR</c> 下面，
-        // 左右操作数都是列与参数，所以改这个数不动任何一份黄金样本（跑整套离线套件已核）。
+        // IS DISTINCT FROM 排在比较符之下（更松）：a = b IS DISTINCT FROM c 读作 (a = b) IS DISTINCT FROM c。
+        // 出处是 PG 手册 4.1.6（9.5 起才改成这一档，旧版相反）；金仓 V8 内核是 9.2 一线，两家可能不同形，
+        // 未实测。今天谁都碰不到：合并守卫把 IS DISTINCT FROM 直接挂在 AND/OR 下面，改这个数不动黄金样本。
         BinaryOperator.IsDistinctFrom => 2,
         BinaryOperator.Equal or BinaryOperator.NotEqual or BinaryOperator.LessThan
             or BinaryOperator.LessThanOrEqual or BinaryOperator.GreaterThan or BinaryOperator.GreaterThanOrEqual
@@ -923,8 +921,8 @@ public abstract class DialectBase(IdentifierPolicy identifiers, IValueBinder val
         }
     }
 
-    /// <summary>PG 系有 <c>IS TRUE</c>，T-SQL 与 Oracle 系没有，只能比 <c>= 1</c>/<c>= 0</c>；
-    /// 可空列上 <c>= 0</c> 匹配不到 NULL，这是 §10.5 那类事故的发生地，所以覆写点留在这里。</summary>
+    /// <summary>PG 系有 IS TRUE，T-SQL 与 Oracle 系没有，只能比 = 1 / = 0；
+    /// 可空列上 = 0 匹配不到 NULL，是那一类事故的发生地，所以覆写点留在这里。</summary>
     protected virtual void EmitBooleanEquality(SqlWriter writer, bool value)
         => writer.Append(value ? " = 1" : " = 0");
 
@@ -956,8 +954,8 @@ public abstract class DialectBase(IdentifierPolicy identifiers, IValueBinder val
     }
 
     /// <summary>在一个私有文本上渲染子表达式，再回填到父 writer。参数进同一张表，编号也自然连续
-    /// （编号长在那张表上，见 <see cref="SqlWriter.NextParameterName"/>）——两条分岔共用一份参数集合，
-    /// 这是 <see cref="SqlWriter.Fork"/> 存在的唯一理由。</summary>
+    /// （编号长在那张表上，见 SqlWriter.NextParameterName）——两条分岔共用一份参数集合，
+    /// 这是 SqlWriter.Fork 存在的唯一理由。</summary>
     string Sub(SqlWriter writer, SqlExpression node)
     {
         var forked = writer.Fork();
@@ -967,7 +965,7 @@ public abstract class DialectBase(IdentifierPolicy identifiers, IValueBinder val
         return forked.ToString();
     }
 
-    /// <summary>手写循环而不是 LINQ：闭包会捕获 <see cref="SqlWriter"/>，而它是 ref struct，捕获即编译错误。</summary>
+    /// <summary>手写循环而不是 LINQ：闭包会捕获 SqlWriter，而它是 ref struct，捕获即编译错误。</summary>
     string[] RenderArguments(IReadOnlyList<SqlExpression> arguments, SqlWriter writer)
     {
         var rendered = new string[arguments.Count];
@@ -978,17 +976,13 @@ public abstract class DialectBase(IdentifierPolicy identifiers, IValueBinder val
         return rendered;
     }
 
-    /// <summary>函数模板 → 文本。<b>位置形占位符那一家在这里多一道核对</b>，而这一道核对是这一格第一次成为必需：
-    /// <see cref="RenderArguments"/> 按<em>实参</em>次序把参数登记进那张共享表，<c>string.Format</c> 再按
-    /// <em>模板</em>次序把渲染好的片段放进去 —— 两个次序一旦不一致，带名字的方言无感（<c>@p3</c> 跟着文本走，
-    /// 驱动按名字绑），位置形那一家是<em>静默错配</em>（<c>?</c> 按第几颗绑，而文本里的第几颗与参数表里的
-    /// 第几颗不再是一回事）。所以这一支既不许实参重复出现，也不许编号倒序 ——
-    /// 两种都是名字式方言天天在用而位置式用不了的形状：<c>T-SQL</c> 的
-    /// <c>CHARINDEX({1}, {0})</c> 是倒序，<c>SUBSTRING({0}, {1} + 1, LEN({0}))</c> 是重复。
-    /// <b>抛而不是发</b>：错配的代价是值写到隔壁列上，那是 §1.2 原则 4 的反面，也是 §5.8 那句"绝不静默"
-    /// 在本格唯一可能兑现的形式 —— 这一格没有第二次机会被人在评审里看见，它只在批量的第 3 千行上红。
-    /// 判据取 <see cref="ParameterPrefix"/> 那颗字符而不新立一位布尔：位置形<em>就是</em> <c>?</c>，
-    /// 再挂一颗开关只给"两者各说一句话"留了位置。</summary>
+    /// <summary>函数模板 → 文本。位置形占位符那一家在这里多一道核对：RenderArguments 按实参次序把参数
+    /// 登记进那张共享表，string.Format 再按模板次序把渲染好的片段放进去——两个次序一旦不一致，带名字的
+    /// 方言无感（@p3 跟着文本走，驱动按名字绑），位置形那一家是静默错配（? 按第几颗绑）。所以这一支既不许
+    /// 实参重复出现、也不许编号倒序——两种都是名字式方言天天在用而位置式用不了的形状
+    /// （CHARINDEX({1}, {0}) 是倒序，SUBSTRING({0}, {1} + 1, LEN({0})) 是重复）。抛而不是发：
+    /// 错配的代价是值写到隔壁列上，而这一格没有第二次机会被人在评审里看见，它只在批量的第 3 千行上红。
+    /// 判据取 ParameterPrefix 那颗字符而不新立一位布尔：位置形就是 ?，再挂一颗开关只给"两者各说一句话"留位置。</summary>
     protected virtual void EmitFunction(FunctionExpression function, SqlWriter writer)
     {
         if (ParameterPrefix == '?' && !PlaceholdersAscendOnce(function.Template, function.Arguments.Count))
@@ -1001,8 +995,8 @@ public abstract class DialectBase(IdentifierPolicy identifiers, IValueBinder val
         writer.Append(QuickFn.Apply(function.Template, RenderArguments(function.Arguments, writer)));
     }
 
-    /// <summary>扫模板里的 <c>{n}</c>：必须恰好是 <c>0,1,2,…,argumentCount-1</c> 且各出现一次。
-    /// <c>{{</c> 与 <c>}}</c> 是 <c>string.Format</c> 的转义花括号，跳过；本仓库的模板里没有带格式说明符的写法，
+    /// <summary>扫模板里的 {n}：必须恰好是 0,1,2,…,argumentCount-1 且各出现一次。
+    /// 双花括号是 string.Format 的转义写法，跳过；本仓库的模板里没有带格式说明符的写法，
     /// 所以遇到非数字的花括号不当作实参引用。</summary>
     static bool PlaceholdersAscendOnce(string template, int argumentCount)
     {
@@ -1041,16 +1035,14 @@ public abstract class DialectBase(IdentifierPolicy identifiers, IValueBinder val
 
     public virtual void EmitIdentifier(SqlWriter writer, string identifier) => writer.AppendIdentifier(Identifiers, identifier);
 
-    /// <summary>默认给写语句的目标沿用 <c>t0</c> —— 与 <see cref="EmitUpdateTarget"/> 那句"ANSI 写法"是同一件事的两半：
-    /// 目标起了别名，引用就得用那个别名。Oracle 血统两半一起换（不能起别名 ⇒ 前缀只能用表名本身），
-    /// 所以这一口与 <see cref="EmitUpdateTarget"/> 是成对覆写的，见 <see cref="ISqlDialect.WriteTargetAlias"/>。</summary>
+    /// <summary>默认给写语句的目标沿用 t0——与 EmitUpdateTarget 那句"ANSI 写法"是同一件事的两半：
+    /// 目标起了别名，引用就得用那个别名。Oracle 血统两半一起换（不能起别名则前缀只能用表名本身），
+    /// 所以这一口与 EmitUpdateTarget 是成对覆写的，见 ISqlDialect.WriteTargetAlias。</summary>
     public virtual string WriteTargetAlias(TableInfo table) => QuickSqlOrm.AliasAt(0);
 
-    /// <summary>表名在<em>整个发射层唯一的出口</em>：读、三种写、装载通道都从这里过（规格 §16.4②
-    /// 说的"方言发射器是唯一出口"钉的就是这一颗，而它要的架构测试今天补在
-    /// <c>TableNamingEmissionTests</c>）。<b>分表模板不许原样发出去</b>：带着占位符发出去要么得到
-    /// 一句打到不存在的表上的 SQL，要么——走过一次 DDL——建出一张名字里真带 <c>{year}</c> 的表。
-    /// 两种都要到运行期才看得见，所以在这里当场抛。</summary>
+    /// <summary>表名在整个发射层唯一的出口：读、三种写、装载通道都从这里过。
+    /// 分表模板不许原样发出去：带着占位符发出去要么得到一句打到不存在的表上的 SQL，
+    /// 要么——走过一次 DDL——建出一张名字里真带 {year} 的表。两种都要到运行期才看得见，所以在这里当场抛。</summary>
     public virtual void EmitTableName(SqlWriter writer, TableInfo table)
     {
         if (table.Split is { } split)

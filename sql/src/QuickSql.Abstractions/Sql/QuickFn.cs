@@ -1,7 +1,7 @@
 namespace QuickSql.Sql;
 
-/// <summary>CLR 形状 → 符号 → provider 模板，三段式（§4 的 <c>IExpressionRules</c>）。
-/// 翻译器只认识左边这些符号，<b>绝不</b>在表达式树里硬写 <c>DATEADD</c> 或 <c>BTRIM</c>：
+/// <summary>CLR 形状到符号再到 provider 模板的三段式。
+/// 翻译器只认识这些符号，绝不在表达式树里硬写方言函数（DATEADD、BTRIM 之类）：
 /// 那等于把方言知识漏进共用层，金仓与达梦的复用价值就没了。</summary>
 public static class QuickFn
 {
@@ -53,11 +53,10 @@ public static class QuickFn
     public const string Min = "agg.min";
     public const string Max = "agg.max";
 
-    /// <summary>注册表的键 = 符号 + 元数。同一个符号在不同实参个数下模板不同
-    /// （<c>Math.Round(x)</c> 是 <c>ROUND(x, 0)</c>，<c>Math.Round(x, 2)</c> 是 <c>ROUND(x, 2)</c>），
-    /// 不带元数的话 <c>string.Format</c> 会<b>静默丢掉</b>多余实参，生成一条少了一截的 SQL。</summary>
+    /// <summary>注册表的键 = 符号 + 元数。同一个符号在不同实参个数下模板不同（一参与两参两式），
+    /// 不带元数的话 string.Format 会静默丢掉多余实参，生成一条少了一截的 SQL。</summary>
     public static string Key(string symbol, int arity) => symbol + "/" + arity.ToString();
 
-    /// <summary>把模板里的 <c>{i}</c> 填成已渲染的实参。约定实参已经带好了自己的引号与转义。</summary>
+    /// <summary>把模板里的 {i} 填成已渲染的实参。约定实参已经带好了自己的引号与转义。</summary>
     public static string Apply(string template, IReadOnlyList<string> arguments) => string.Format(template, [.. arguments]);
 }

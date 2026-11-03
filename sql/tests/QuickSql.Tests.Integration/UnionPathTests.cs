@@ -115,6 +115,25 @@ public sealed class UnionPathTests
         Assert.Equal(new[] { 5, 10 }, firstTwo.Select(r => r.Quantity));
     }
 
+    /// <summary>交集与差集（2026-11-01 补的两口）在真库上对账：交集取两腿重叠的行（15~25 那一段），
+    /// 差集取"第一腿有、第二腿没有"的行（30 —— ≥15 而不在 ≤25 里）。裁判口径与合并档同一条：
+    /// 行数与量值集合，不用被测的读口自证清白。两腿同一张表、同一实体投影，整行相等即行相等 ——
+    /// 这也是 INTERSECT/EXCEPT 的 SQL 语义（各腿去重后求交/求差）。</summary>
+    [Fact]
+    public async Task Intersect_and_except_answer_on_the_overlapping_rows()
+    {
+        await SeedAsync();
+
+        var heavy = WholeBatch.Where(r => r.Quantity >= 15);   // 20, 30, 15, 25 —— 4 行
+        var light = WholeBatch.Where(r => r.Quantity <= 25);   // 10, 20, 5, 15, 25 —— 5 行
+
+        var both = await heavy.Intersect(light).ToListAsync(ct);
+        var difference = await heavy.Except(light).ToListAsync(ct);
+
+        Assert.Equal(new[] { 15, 20, 25 }, both.Select(r => r.Quantity).OrderBy(q => q));
+        Assert.Equal(new[] { 30 }, difference.Select(r => r.Quantity).OrderBy(q => q));
+    }
+
     /// <summary>拒收口在真库现场各跑一遍：带分页的腿与套娃的腿，链上当场抛 —— 两句在任何一家一样。</summary>
     [Fact]
     public async Task Legs_with_paging_and_nested_unions_are_refused()

@@ -1,27 +1,26 @@
 namespace QuickSql.Tracking;
 
-/// <summary>会话的跟踪器视图（§8.2 的 <c>db.ChangeTracker</c>）。
+/// <summary>会话的跟踪器视图（db.ChangeTracker）。
 /// 放成抽象类而不是接口，是因为实现侧要带的东西（每类型的节点表、身份映射）没有一个属于调用方要看的部分；
-/// 而它必须落在 Abstractions 里，因为 <c>DbContext</c> 的公开属性要有类型可写。
-/// <b>非线程安全</b>：一个会话同一时刻只归一个执行流（§7 生命周期表里那句「DbContext 才需要 Scoped」的落地含义）。</summary>
+/// 而它必须落在 Abstractions 里，因为 DbContext 的公开属性要有类型可写。
+/// 非线程安全：一个会话同一时刻只归一个执行流。</summary>
 public abstract class DbChangeTracker
 {
-    /// <summary>当前被跟踪的实例数（所有实体类型合计）。<c>Detached</c> 的不算。</summary>
+    /// <summary>当前被跟踪的实例数（所有实体类型合计）。Detached 的不算。</summary>
     public abstract int Count { get; }
 
-    /// <summary>是否有会被 <c>SaveChanges</c> 写出去的实例。判定含最近一次比较的结论，
-    /// 所以「改了又改回来」在这里是 <c>false</c>，而不是「曾经碰过」。</summary>
+    /// <summary>是否有会被 SaveChanges 写出去的实例。判定含最近一次比较的结论，
+    /// 所以"改了又改回来"在这里是 false，而不是"曾经碰过"。</summary>
     public abstract bool HasChanges { get; }
 
-    /// <summary>逐个实例的入口，顺序是「实体类型首次出现序 + 类型内跟踪序」而不是库里的行序。
-    /// 这个顺序进了 <c>SaveChanges</c> 的语句序（同类型内按跟踪序），所以日志对账时它是有意义的；
-    /// 跨类型的那一段另算 —— 会话按外键依赖排（§8.2），删除那一档还额外走逆序。</summary>
+    /// <summary>逐个实例的入口，顺序是"实体类型首次出现序 + 类型内跟踪序"而不是库里的行序。
+    /// 这个顺序进了 SaveChanges 的语句序（同类型内按跟踪序），所以日志对账时它是有意义的；
+    /// 跨类型的那一段另算——会话按外键依赖排，删除那一档还额外走逆序。</summary>
     public abstract IEnumerable<EntityEntry> Entries();
 
-    /// <summary>只要某一类实体的入口。<b>筛的是入口的泛型参数，也就是那份跟踪器的 <c>T</c></b>（不是 <c>GetType()</c>）：
-    /// 一只派生实例若当初是按基类纳入会话的，它就出现在基类的这一档里，而它写出去的也是基类那张表的列 ——
-    /// 与 <see cref="EntityEntry.EntityType"/> 同一个口径。泛型参数是不变的（<c>EntityEntry&lt;Derived&gt;</c>
-    /// 不是 <c>EntityEntry&lt;Base&gt;</c>），所以两份跟踪器不会互相串门。</summary>
+    /// <summary>只要某一类实体的入口。筛的是入口的泛型参数（那份跟踪器的 T），不是 GetType()：
+    /// 一只派生实例若当初是按基类纳入会话的，它就出现在基类的这一档里，而它写出去的也是基类那张表的列——
+    /// 与 EntityEntry.EntityType 同一个口径。泛型参数是不变的，所以两份跟踪器不会互相串门。</summary>
     public IEnumerable<EntityEntry<T>> Entries<T>() where T : class
     {
         foreach (var entry in Entries())
@@ -29,17 +28,12 @@ public abstract class DbChangeTracker
                 yield return typed;
     }
 
-    /// <summary>把每个实例的当前值与快照比一遍，据此更新 <see cref="EntityState"/> 与脏列集合。
-    /// 返回本次改动状态的实例数（0 就是"没有任何东西变过"，测试与日志要的就是这个数）。
-    /// <c>AutoDetectChangesEnabled = false</c> 时它仍会在这里跑；<em>不</em>跑的是链式物化之前那一次，
-    /// 那一条路的代价账在 §8.2「快照」那一格与 <c>ChangeTrackerDetect10k</c> 那一行基准上
-    /// （实测 520 B/只、约 0.24 µs/只，全部落在装箱上；见 §12.8 的 PR 附件表）。
-    /// <b>v0.39 起这一句作废</b>：§12.8 添了第十三行（<c>Gates.SessionScanFloor</c>），这一轮比较的字节数
-    /// 从此有门禁钉着 —— 全员未变与每只都脏各一枚，再加一枚"1 000 只里只有一只欠语句"的保存全程。
-    /// 把 <c>DetectChanges</c> 做贵了的 PR 从今天起红在退出码的回归位上，不再只欠一句台账。</summary>
+    /// <summary>把每个实例的当前值与快照比一遍，据此更新 EntityState 与脏列集合。
+    /// 返回本次改动状态的实例数（0 就是"没有任何东西变过"）。
+    /// AutoDetectChangesEnabled = false 时它仍会在这里跑；不跑的是链式物化之前那一次。</summary>
     public abstract int DetectChanges();
 
-    /// <summary>把会话清空：所有实例转 <see cref="EntityState.Detached"/>，未写出的改动就此丢弃。
-    /// 不发任何语句 —— 想丢弃前先确认没有待写的改动，看 <see cref="HasChanges"/>。</summary>
+    /// <summary>把会话清空：所有实例转 Detached，未写出的改动就此丢弃。
+    /// 不发任何语句——想丢弃前先确认没有待写的改动，看 HasChanges。</summary>
     public abstract void Clear();
 }

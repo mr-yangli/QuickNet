@@ -963,7 +963,9 @@ public sealed class SqliteDialectTests
         var notNull = Checks.Raised<QuickSqlException>(() => Statement(w => Provider.CodeFirst.EmitAddColumn(w, contract.Table, name with { IsNullable = false })));
 
         Checks.Has("Cannot add a NOT NULL column with default value NULL", notNull.Message);
-        Checks.Has("列默认值", notNull.Message);
+        // 2026-11-01 契约有了「列默认值」那一格：没有配的那一形照旧拒，话术点名"没配默认值"与配的路子。
+        Checks.Has("没有配默认值", notNull.Message);
+        Checks.Has("HasDefaultValue", notNull.Message);
 
         // 自增那一颗也是抛，红话是库自己说过的【实测·312b ∶ 2813 Cannot add a PRIMARY KEY column】。
         var identity = Checks.Raised<QuickSqlException>(() => Statement(w => Provider.CodeFirst.EmitAddColumn(w, contract.Table, key with { IsIdentity = true })));

@@ -7,37 +7,21 @@ using QuickSql.Metadata;
 
 namespace QuickSql.Materialization;
 
-/// <summary>原生 SQL 的结果集 → CLR 对象：<b>按列名对属性名</b>装配。
-///
-/// <para>与 <see cref="Materializer"/> 那三条路（实体契约、投影槽位、标量直读）的分工是
-/// <b>这一口没有模型可读</b>：手写 SQL 交回来的列序与列名不在 <c>QueryModel</c> 里，
-/// 所以那一侧的"槽位顺序即投影顺序"在这里不成立，只能按名字问。</para>
-///
-/// <para><b>反射按<em>型</em>一次，名字对位按<em>场次</em>一次</b>：属性清单、读口与写口的编译只发生在第一次
-/// 见到这个 <c>T</c> 的时候（<see cref="Plans"/> 按型存），之后每次执行只带一张自己的一次性对照表 ——
-/// 第一行读列名、填序号，剩下的行走已编译委托。这与 <c>Materializer.DtoReaders</c> 给链式投影做的那件事同形，
-/// 而它在这里不是可选项：这一口是报表出口，一句 SQL 套在循环里跑几百次是常态用法，
-/// 「每执行一次问一遍属性」会把 §12.7 C 那条「加载可以反射、调用不行」在这一支上破掉。</para>
-///
-/// <para><b>两条匹配规则，一条报错规则</b>：结果集里对不上任何属性的列<em>忽略</em>（手写 SQL 常带辅助列、
-/// 计数列、临时 join 列）；属性拿不到列的<em>留默认值</em>（那是那句 SQL 少选了一列的正当结果，看得见的是 SQL 作者）；
-/// 而<b>一颗属性都没对上时抛</b> —— 整行全默认值的对象是一句"看起来完全合理"的空壳，
-/// 与 §5.8 禁静默退化同一条判据。</para>
-///
-/// <para>形状要求是「无参构造 + 公共可写属性」——无参那一颗<b>不问可见性</b>
-/// （判据与两条实测边界见 <see cref="MemberAccessors.ParameterlessConstructor"/>），
-/// 属性那一颗仍然要公共可写，因为这一口的落点就是往里填。<b>构造器 DTO 与 record 不支持</b>：
-/// 它们的参数顺序在这一口里没有对应物（列序由 SQL 决定），低层口
-/// <c>AdoExecutor.QueryAsync&lt;T&gt;(DialectSql, Func&lt;DbDataReader, T&gt;, …)</c> 才是那种形状的落点 ——
-/// 自己给委托，那里什么形状都装得下。</para></summary>
+/// <summary>原生 SQL 的结果集 → CLR 对象：按列名对属性名装配。与 Materializer 那三条路（实体契约、投影槽位、
+/// 标量直读）的分工是这一口没有模型可读：手写 SQL 交回来的列序与列名不在 QueryModel 里，只能按名字问。
+/// 反射按型一次、名字对位按场次一次：属性清单与读写口的编译只在第一次见到 T 时发生（Plans 按型存），
+/// 之后每次执行只带一张一次性对照表——这一口是报表出口，一句 SQL 套在循环里跑几百次是常态用法，
+/// 每执行一次问一遍属性会把"加载可以反射、调用不行"在这一支上破掉。匹配规则：对不上任何属性的列忽略
+/// （手写 SQL 常带辅助列），属性拿不到列的留默认值（那句 SQL 少选一列的正当结果），一颗属性都没对上时抛
+/// （整行全默认值的对象是"看起来完全合理"的空壳）。形状要求「无参构造 + 公共可写属性」；构造器 DTO 与
+/// record 不支持——参数顺序在这一口没有对应物，低层口 AdoExecutor.QueryAsync 自己给委托才是那种形状的落点。</summary>
 public static class RawRowReader
 {
     static readonly ConcurrentDictionary<Type, object> Plans = new();
 
-    /// <summary>给一句原生 SQL 造一行读取器。两条形状分支的分工见本节的注释：
-    /// 可直读的标量形状读第 0 列，其余按「无参构造 + 公共可写属性」装配。
-    /// <b>每次执行调一次</b>：<c>AdoExecutor</c> 那几个原生口就是这么用的，而按型缓存的那一份
-    /// 只存与结果集无关的东西，列序号活在返回的这张一次性对照表里。</summary>
+    /// <summary>给一句原生 SQL 造一行读取器：可直读的标量形状读第 0 列，其余按「无参构造 + 公共可写属性」装配。
+    /// 每次执行调一次（AdoExecutor 那几个原生口就是这么用的），按型缓存的那一份只存与结果集无关的东西，
+    /// 列序号活在返回的这张一次性对照表里。</summary>
     [RequiresUnreferencedCode("行出口按运行期类型找公共可写属性，并为每颗属性建一次读口。")]
     [RequiresDynamicCode("行出口用表达式树编译属性读口、写口与构造函数委托。")]
     public static Func<DbDataReader, T> Create<T>()
@@ -64,9 +48,8 @@ public static class RawRowReader
 
     const int Unbound = -2;
 
-    /// <summary>按型存的那一份：<b>只含与结果集无关的东西</b>（属性清单、读口、写口、构造委托）。
-    /// 列序号不能进这一份 —— 同一个 <c>T</c> 可以被两句列序不同的 SQL 用，把序号存进按型缓存
-    /// 就是让第二句读到第一句的对位。</summary>
+    /// <summary>按型存的那一份：只含与结果集无关的东西（属性清单、读口、写口、构造委托）。列序号不能进
+    /// 这一份——同一个 T 可以被两句列序不同的 SQL 用，把序号存进按型缓存就是让第二句读到第一句的对位。</summary>
     sealed class Plan<T>
     {
         public string[] Names { get; }
@@ -150,8 +133,8 @@ public static class RawRowReader
         }
     }
 
-    /// <summary>一颗属性的「按序号读并装箱」委托：<c>ValueConverter.Read&lt;声明类型&gt;</c> 的泛型实例
-    /// 在<b>建计划时</b>闭一次、编译成委托，之后每行不再问类型。</summary>
+    /// <summary>一颗属性的「按序号读并装箱」委托：ValueConverter.Read&lt;声明类型&gt; 的泛型实例在建计划时
+    /// 闭一次、编译成委托，之后每行不再问类型。</summary>
     [RequiresDynamicCode("把 ValueConverter.Read<TProp> 闭成按序号取值的委托。")]
     static Func<DbDataReader, int, object> BoxedColumnReader(PropertyInfo property)
     {
@@ -167,11 +150,10 @@ public static class RawRowReader
             reader, ordinal).Compile();
     }
 
-    /// <summary>一列能装下的 CLR 形状：<see cref="ContractResolver"/> 那份可映射判定的同一闭合集合，
-    /// 多加一颗 <c>byte[]</c>（原生 SQL 常直接选 <c>VARBINARY</c>/<c>BLOB</c> 列，而实体侧不认它是因为
-    /// 实体属性到列名的映射另有渠道，不是这里也要跟着挡）。
-    /// 落在这族之外的一律走对象装配那一条，于是 <c>struct</c> 里那种"三个字段"的形状会撞在
-    /// 「没有无参构造/没有可写属性」那句可读的报错上，而不是被当成标量去 <c>Convert.ChangeType</c>。</summary>
+    /// <summary>一列能装下的 CLR 形状：ContractResolver 那份可映射判定的同一闭合集合，多加一颗 byte[]
+    /// （原生 SQL 常直接选 VARBINARY/BLOB 列；实体侧不认它是因为属性到列名的映射另有渠道，不是这里也要跟着挡）。
+    /// 落在这族之外的一律走对象装配那条，struct 里"三个字段"的形状会撞在「没有无参构造/没有可写属性」
+    /// 那句可读的报错上，而不是被当成标量去 Convert.ChangeType。</summary>
     static bool IsColumnShape(Type type)
         => type.IsPrimitive
            || type.IsEnum

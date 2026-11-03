@@ -3,7 +3,7 @@ using QuickSql.Sql.Ast;
 
 namespace QuickSql.Query.Model;
 
-/// <summary>急切加载（Include）的树节点（§5.6）。每个节点代表一条导航属性的加载意图，
+/// <summary>急切加载（Include）的树节点。每个节点代表一条导航属性的加载意图，
 /// 子节点表示 ThenInclude 链。编译器按深度优先遍历生成 LEFT JOIN 与扩展列，
 /// 物化器按同一顺序读取并设置导航属性。</summary>
 public sealed class IncludeNode

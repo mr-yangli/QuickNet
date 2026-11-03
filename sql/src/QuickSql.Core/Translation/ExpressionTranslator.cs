@@ -15,11 +15,10 @@ using System.Runtime.CompilerServices;
 
 namespace QuickSql.Translation;
 
-/// <summary>lambda → AST 表达式。链式与 LINQ 共用这一个访问器（§5.5 硬约束 2：LINQ 侧不许有第二套翻译路径）。
-/// 翻译不了的形态一律抛 <see cref="UntranslatableExpressionException"/> 并给改写建议，绝不静默客户端求值（§5.8）。</summary>
-/// <remarks>闭包常量求值需要反射与委托编译，因此整个归约器标 <c>RUC/RDC</c>：AOT 场景要么换成表达式树解释器
-/// （EF Core 为此自带一个），要么走 <c>QuickSql.Generators</c> 预翻译的查询。这条边界只有<b>一处</b>，
-/// 由调用方（查询提供者）显式承担。</remarks>
+/// <summary>lambda → AST 表达式。链式与 LINQ 共用这一个访问器（LINQ 侧不许有第二套翻译路径）；
+/// 翻译不了的形态一律抛 UntranslatableExpressionException 并给改写建议，绝不静默客户端求值。
+/// 闭包常量求值需要反射与委托编译，因此整颗标 RUC/RDC：AOT 场景要么换表达式树解释器，
+/// 要么走 QuickSql.Generators 预翻译的查询——这条边界只有一处，由调用方（查询提供者）显式承担。</summary>
 [RequiresUnreferencedCode("闭包常量求值按 MemberInfo 读字段/属性。")]
 [RequiresDynamicCode("闭包常量求值的退路是 LambdaExpression.Compile()。")]
 public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegistry schemas, Func<Type, int, TableRef> newTableRef)
@@ -29,12 +28,12 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
     readonly Func<Type, int, TableRef> _newTableRef = newTableRef;
     int _subqueryIndex = 1000;
 
-    /// <summary>谓词位：bool 列要补成 <c>[flag] = 1</c>，SQL Server 不接受裸 bit 列作条件。</summary>
+    /// <summary>谓词位：bool 列要补成 [flag] = 1，SQL Server 不接受裸 bit 列作条件。</summary>
     public SqlExpression Predicate(LambdaExpression lambda, Scope scope)
     {
         var node = Visit(lambda.Body, scope);
 
-        // 行号不能拿来筛行——这一问在组合时就判，不等库报错（判据与两条出路在 <see cref="WindowGuard"/>）。
+        // 行号不能拿来筛行——这一问在组合时就判，不等库报错（判据与两条出路在 WindowGuard）。
         WindowGuard.RejectRowNumber(node, "谓词位（WHERE / HAVING / 连接条件 / 全局过滤器）");
 
         return Booleanized(lambda.Body, node);
@@ -96,7 +95,7 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
 
         var type = value.GetType();
 
-        // 枚举按底层整型落库（§9.3）：不这样做的库会按名字绑参，读回来就是一串问号。
+        // 枚举按底层整型落库：不这样做的库会按名字绑参，读回来就是一串问号。
         if (type.IsEnum)
             value = Convert.ChangeType(value, Enum.GetUnderlyingType(type));
 
@@ -111,14 +110,10 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
             BinaryExpression b => ReferencesScope(b.Left, scope) || ReferencesScope(b.Right, scope),
 
             // 缺这一臂时，"引用了行的成员初始化"被判成不引用参数，走进 Evaluate 的编译退路，
-            // 吐出来的是 InvalidOperationException: variable 'o' of type 'X' referenced from scope ''
-            // —— 一句指不了路的内部错误。补上之后同一颗表达式拿到的是"该形态当前无映射"（实测两形：
-            // <c>new S { A = o.A } == default</c> 与 <c>new S { A = o.A }.ToString() != "x"</c>）。
-            // 另注：net10 上 <see cref="MemberInitExpression"/> 已经不继承 UnaryExpression
-            // （基类是 Expression，属性叫 <c>NewExpression</c> 而不是 <c>New</c>），靠下面那条
-            // UnaryExpression 兜不到 —— 实测过。两类仍未覆盖、症状还是那句内部错误（§14 已记）：
-            // 集合初始化 <c>new C { Items = { o.A } }</c>（这一支不走 OfType&lt;MemberAssignment&gt;），
-            // 以及 IN 的集合那一侧（<c>new[]{ o.X }.Contains(y)</c>，它直接 Evaluate，不过分类器）。
+            // 吐出来的是 InvalidOperationException: variable 'o' referenced from scope ''
+            // —— 一句指不了路的内部错误；补上之后同一颗表达式拿到的是"该形态当前无映射"。
+            // net10 上 MemberInitExpression 已不继承 UnaryExpression，靠下面那条兜不到（实测过）。
+            // 集合初始化（new C { Items = { o.A } }）与 IN 的集合侧（new[]{ o.X }.Contains(y)）仍未覆盖，症状同上。
             MemberInitExpression init
                 => init.Bindings.OfType<MemberAssignment>().Any(b => ReferencesScope(b.Expression, scope))
                    || ReferencesScope(init.NewExpression, scope),
@@ -135,13 +130,9 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
         };
 
     /// <summary>求值「不引用任何查询参数」的子表达式。先走常数/字段/属性这条无代码生成的快路，
-    /// 只有真正需要执行用户算术时才付 <c>Compile()</c> 的成本。
-    ///
-    /// <para><b>编译产物按节点缓存</b>（<see cref="ConditionalWeakTable{TKey,TValue}"/>，键随节点回收）：
-    /// 链式对象复用时（§5.11）<c>Where(o =&gt; …)</c> 交回来的是同一棵 lambda 子树，第 N 次执行若每次都
-    /// 为每颗不可约子表达式重新 Compile，那是数十微秒级的每次执行固定税。节点的求值只依赖节点自身
-    /// （闭包已捕获在里面），与 <see cref="Scope"/> 无关，所以这份缓存是安全的；整句翻译的缓存要过
-    /// "别名/参数位随查询模型变"那一关，没在这里一起做。</para></summary>
+    /// 只有真正需要执行用户算术时才付 Compile() 的成本。编译产物按节点缓存（ConditionalWeakTable，
+    /// 键随节点回收）：链式对象复用时 Where 交回来的是同一棵 lambda 子树，不缓存就是每次执行数十微秒级的
+    /// 固定税；节点的求值只依赖节点自身（闭包已捕获在里面），与 Scope 无关，所以这份缓存是安全的。</summary>
     static readonly ConditionalWeakTable<Expression, StrongBox<Func<object>>> CompiledEvaluators = new();
 
     public static object? Evaluate(Expression node) => node switch
@@ -155,9 +146,8 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
         UnaryExpression { NodeType: ExpressionType.Convert or ExpressionType.ConvertChecked } u => Coerce(Evaluate(u.Operand), u.Type),
 
         // default(T)、用户算术、方法调用等一律交给编译退路：形态再多也不必在此枚举一遍。
-        // 编译成 Func<object> 直接调用，不走 DynamicInvoke：后者每次调用多一层运行期参数封送与装箱，
-        // 而这颗退路在谓词翻译里按"每颗不可约子表达式"付 —— 同一次编译的产物，调用形状没有理由更贵。
-        // void 子表达式（原 DynamicInvoke 对它是 null）在 Convert 处编不出来，单独按 null 交回，语义逐字保留。
+        // 编译成 Func<object> 直接调用，不走 DynamicInvoke（每次调用多一层参数封送与装箱，
+        // 而这颗退路按"每颗不可约子表达式"付）；void 子表达式在 Convert 处编不出来，单独按 null 交回。
         _ => node.Type == typeof(void) ? null : CompiledEvaluator(node)(),
     };
 
@@ -192,9 +182,8 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
                 : target;
         }
 
-        // 分组形参（<c>g</c>）不是表位，它的成员读法在列契约之外：单列键是 <c>g.Key</c> 那一颗表达式，
-        // 复合键是 <c>g.Key.&lt;成员&gt;</c>。判在位置绑定与 Part 之前 —— 走后两条路都会把 `g` 当表位问，
-        // 得到一句「该形参没有对应的 FROM 表」，而那是一个把正确写法报成错误的消息。
+        // 分组形参（g）不是表位，它的成员读法在列契约之外：单列键是 g.Key 那一颗表达式，复合键是 g.Key.成员。
+        // 判在位置绑定与 Part 之前——走后两条路都会把 g 当表位问，得到一句把正确写法报成错误的消息。
         if (RootedAtGrouping(member, scope, out var grouping, out var path))
             return GroupingKey(grouping, path, member);
 
@@ -212,15 +201,14 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
         if (member.Expression is null || !ReferencesScope(member.Expression, scope))
             return Value(Evaluate(member), hint);
 
-        // 引用了表位、却又不是列的成员读法（<c>o.CreatedAt.Year</c>、<c>o.CustomerName.Length</c>）
-        // 只能是 CLR 的派生形状。认不出来必须抛：把 <c>o.CreatedAt.Kind</c> 静默翻译成一个裸列，
-        // 产出的是"语法正确、结果错"的 SQL —— 那正是 §5.8 禁止的那一类。
+        // 引用了表位、却又不是列的成员读法（o.CreatedAt.Year、o.CustomerName.Length）
+        // 只能是 CLR 的派生形状。认不出来必须抛：把 o.CreatedAt.Kind 静默翻译成一个裸列，
+        // 产出的是"语法正确、结果错"的 SQL。
         return Part(member, scope, hint);
     }
 
-    /// <summary>这一串成员读法是不是长在一个分组形参上（<c>g</c>），并把它的路径按外→内收成
-    /// <c>["Key"]</c> / <c>["Key","City"]</c>。中间只要出现非成员节点（方法调用、转换…）就不算，
-    /// 交给原有那两条路给出它们各自的报错。</summary>
+    /// <summary>这一串成员读法是不是长在一个分组形参上（g），并把它的路径按外→内收成 ["Key"] / ["Key","City"]。
+    /// 中间只要出现非成员节点（方法调用、转换…）就不算，交给原有那两条路给出它们各自的报错。</summary>
     static bool RootedAtGrouping(MemberExpression member, Scope scope, out GroupingShape grouping, out string[] path)
     {
         var names = new List<string>();
@@ -247,8 +235,8 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
         return true;
     }
 
-    /// <summary><c>g.Key</c> 与 <c>g.Key.&lt;成员&gt;</c> 的落点（§5.3）。除了这两条形就没有别的：
-    /// 组里的行在分组之后不再是一列列可选的值，而这正是 <c>IGrouping</c> 那个类型只有 <c>Key</c> 一个属性的原因。</summary>
+    /// <summary>g.Key 与 g.Key.成员 的落点。除了这两条形就没有别的：组里的行在分组之后不再是一列列可选的值，
+    /// 而这正是 IGrouping 那个类型只有 Key 一个属性的原因。</summary>
     static SqlExpression GroupingKey(GroupingShape grouping, IReadOnlyList<string> path, Expression node)
     {
         if (path[0] != "Key")
@@ -279,14 +267,13 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
                 $"分组键里没有成员 {path[1]}（在册的成员：{string.Join("、", grouping.Members.Keys)}）");
     }
 
-    /// <summary>列的 CLR 形状是闭合的：值类型（含枚举、<c>Guid</c>、<c>decimal</c>、日期）加上
-    /// <c>string</c> 与 <c>byte[]</c>。除此之外的类型当宿主用，只能是导航或未映射成员。
-    /// 别拿 <c>StoreTypeOf</c> 来问"这是不是列" —— 它对认不出的类型是直接抛"没有类型映射"的，
-    /// 而这里要的是判断本身，不是那条报错。</summary>
+    /// <summary>列的 CLR 形状是闭合的：值类型（含枚举、Guid、decimal、日期）加上 string 与 byte[]。
+    /// 除此之外的类型当宿主用，只能是导航或未映射成员。别拿 StoreTypeOf 来问"这是不是列"——
+    /// 它对认不出的类型直接抛"没有类型映射"，而这里要的是判断本身，不是那条报错。</summary>
     static bool IsStorable(Type owner) => owner.IsValueType || owner == typeof(string) || owner == typeof(byte[]);
 
-    /// <summary>把宿主写成 <c>t0.Customer</c> 这种能直接对照 FROM 的路径：报错要指到表位，
-    /// 而不是复述一遍用户写的形参名（形参名不参与任何解析，§5.1）。</summary>
+    /// <summary>把宿主写成 t0.Customer 这种能直接对照 FROM 的路径：报错要指到表位，
+    /// 而不是复述一遍用户写的形参名（形参名不参与任何解析）。</summary>
     static string OwnerPath(Expression owner, Scope scope)
         => owner switch
         {
@@ -301,19 +288,17 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
             ? $"{path} 是集合导航而不是列：批量加载（IncludeMany，两次查询 + 内存缝合）见 §5.7；要现在拿到明细行请显式 join 到明细表，注意那会让主表行重复。引用导航那一档（to-one）在投影/谓词里已经会自动联表（§5.2），集合导航没有这一档，因为一条 LEFT JOIN 就把每行主表复制成明细行数那么多行 —— 页码、行数与聚合会一起改语义。"
             : $"{path} 不是列 —— 引用导航整个当值用没有对应物（要读它的列请再往下写一格，如 {path}.某一列，那条 LEFT JOIN 库自己补，§5.2；判那条边空不空则要比较它那一侧的主键列）；未映射的计算成员（表达式体属性、[Computed] 之外的那些）则是根本取不到列。");
 
-    /// <summary>列上的 CLR 派生读法 → 符号函数（§5.7 覆盖矩阵）。
-    /// 键是<b>属性名</b>，与 <see cref="SymbolicKey"/> 那张"方法名"表是两套形状：表达式树里属性访问
-    /// 是 <see cref="MemberExpression"/>，只有 <c>get_XXX</c> 以方法形态出现时才走那边。</summary>
+    /// <summary>列上的 CLR 派生读法 → 符号函数。键是属性名，与 SymbolicKey 那张"方法名"表是两套形状：
+    /// 表达式树里属性访问是 MemberExpression，只有 get_XXX 以方法形态出现时才走那边。</summary>
     SqlExpression Part(MemberExpression member, Scope scope, ColumnContract? hint)
     {
         var owner = member.Expression!;
         var kind = Nullable.GetUnderlyingType(owner.Type) ?? owner.Type;
 
-        // 穿过引用导航读成员（<c>o.Customer.City</c>）：宿主不是列，所以这既不是列读法，也不是下面那张
-        // 派生读法表里的一条。契约上有那条 to-one 边就把宿主补成一张表位（<c>LEFT JOIN</c> 由
-        // <see cref="NavigationJoinScout"/> 欠着，算子落地时进 FROM，§5.2），读的那一格落在这张新表上 ——
-        // 调用方既不写 <c>Include</c> 也不写 join。认不出才抛：把 <c>o.CreatedAt.Kind</c> 静默翻译成一个裸列，
-        // 产出的是"语法正确、结果错"的 SQL —— 那正是 §5.8 禁止的那一类。
+        // 穿过引用导航读成员（o.Customer.City）：宿主不是列，契约上有那条 to-one 边就把宿主补成一张表位
+        // （LEFT JOIN 由 NavigationJoinScout 欠着，算子落地时进 FROM），读的那一格落在这张新表上——
+        // 调用方既不写 Include 也不写 join。认不出才抛：把 o.CreatedAt.Kind 静默翻译成裸列，
+        // 产出的是"语法正确、结果错"的 SQL。
         if (!IsStorable(kind))
         {
             var target = scope.NavigationTable(owner);
@@ -321,7 +306,7 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
             if (target?.Contract is { } targetContract && targetContract.ByMember.TryGetValue(member.Member.Name, out var column))
                 return new ColumnExpression(target, column);
 
-            // 宿主联上了而这一格仍认不出（导航的导航整个当值、集合导航、未映射成员）时报的是<em>整条读法</em>：
+            // 宿主联上了而这一格仍认不出（导航的导航整个当值、集合导航、未映射成员）时报的是整条读法：
             // 只报宿主会把"缺的是 .Manager 那一格"说成"Customer 不是列"，而 Customer 这一形刚刚才落得成。
             throw target is null
                 ? Navigation(owner, OwnerPath(owner, scope))
@@ -365,14 +350,14 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
                 Booleanized(node.Right, Visit(node.Right, scope)));
         }
 
-        // 先按「直连列」定尺子，再递归：这样 StringLength / Unicode 能进到参数绑定（§10.3 的单一真相）。
+        // 先按「直连列」定尺子，再递归：这样 StringLength / Unicode 能进到参数绑定（单一真相）。
         var leftColumn = DirectColumn(node.Left, scope);
         var rightColumn = DirectColumn(node.Right, scope);
         var lhs = Visit(node.Left, scope, leftColumn ?? hint);
         var rhs = Visit(node.Right, scope, rightColumn ?? hint);
 
         // null / bool 两侧都判（Yoda 条件也要走同一口折叠）：折叠只看右的那一版，
-        // `null == o.Name` 会落成 `WHERE @p0 = [Name]`——语法对、结果错，任何行都是 UNKNOWN（§5.8）。
+        // null == o.Name 会落成 WHERE @p0 = [Name]——语法对、结果错，任何行都是 UNKNOWN。
         // 列侧在哪边就折哪边。
         if (node.NodeType is ExpressionType.Equal or ExpressionType.NotEqual)
         {
@@ -395,17 +380,17 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
         }
 
         // C# 的 "a + b" 把 null 当空串，而 T-SQL/Oracle 的 + 会把整个表达式变成 NULL：
-        // 不折成 CONCAT，== "xy" 这类查询在库里会悄悄少行（§5.8 的「绝不静默生成错 SQL」）。
+        // 不折成 CONCAT，== "xy" 这类查询在库里会悄悄少行。
         if (node.NodeType == ExpressionType.Add && node.Type == typeof(string))
             return Template(QuickFn.Concat, [lhs, rhs]);
 
         return new SqlBinaryExpression(Operator(node.NodeType), lhs, rhs);
     }
 
-    /// <summary>CLR 侧是 bool、SQL 侧却不是一个"谓词形状"时要补 <c>= 1</c>（T-SQL 不接受裸 bit 列作条件）。
-    /// 谓词形状是一张闭合表：比较/逻辑/LIKE、<c>IS NULL</c>/<c>NOT</c>、<c>EXISTS</c>、<c>IN</c>，
-    /// 以及方言自己给的恒真/恒假片段（空集合那条 <c>1 = 0</c>）。漏掉一种就得到
-    /// <c>[Id] IN (…) = 1</c> 这种在库里直接语法错的文本 —— 它只在真连库时才暴露，所以形状表要写全。</summary>
+    /// <summary>CLR 侧是 bool、SQL 侧却不是一个"谓词形状"时要补 = 1（T-SQL 不接受裸 bit 列作条件）。
+    /// 谓词形状是一张闭合表：比较/逻辑/LIKE、IS NULL/NOT、EXISTS、IN，以及方言自己给的恒真/恒假片段
+    /// （空集合那条 1 = 0）。漏掉一种就得到 [Id] IN (…) = 1 这种在库里直接语法错的文本——
+    /// 它只在真连库时才暴露，所以形状表要写全。</summary>
     static bool IsPredicate(SqlExpression ast) => ast is SqlBinaryExpression or SqlUnaryExpression
                                                   or ExistsExpression or InExpression or InlineLiteral;
 
@@ -439,8 +424,8 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
 
     static SqlExpression Fold(BinaryOperator op, SqlExpression left, SqlExpression right)
     {
-        // 保持 AND/OR 扁平右倾：否则 `a && b && c` 在链式（两次 Append）与 LINQ（一棵树）下
-        // 会长出两棵不同的树，§13.2 的等价性测试立刻红。
+        // 保持 AND/OR 扁平右倾：否则 a && b && c 在链式（两次 Append）与 LINQ（一棵树）下
+        // 会长出两棵不同的树，等价性测试立刻红。
         if (left is SqlBinaryExpression { Operator: var same } existing && same == op)
             return existing with { Right = Fold(op, existing.Right, right) };
 
@@ -483,14 +468,11 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
         => (Nullable.GetUnderlyingType(from) ?? from) == (Nullable.GetUnderlyingType(to) ?? to);
 
     /// <summary>这一颗 Convert 只是 CLR 的表示差异、不改变落进库的值，因此不发射 SQL 转换。
-    /// 判据一律看穿一层 <see cref="Nullable"/>，且不收紧原有豁免只放宽：
-    /// <c>enum == enum?</c> 与 <c>int 列 == short? 量</c> 这类比较，C# 长出的是提升到 <c>Int32?</c>/<c>Int64</c>
-    /// 的转换，两侧各裹一层 Nullable 就让 <c>IsEnum</c> 读成 false、<c>IsSameColumnar</c> 比出不同型，
-    /// 于是落到 <c>StoreTypeOf</c> —— 那里取到的是 DDL 建表型名（MySQL 给 "INT"），
-    /// 发出去成 <c>CAST(@p0 AS INT)</c>，而 MySQL 的 CAST 不认 INT，整条句子语法错。
-    /// 整型之间只豁免加宽（16→32、32→64）：整数加宽不改变值，两侧进库是同一颗比较，
-    /// 且免掉列侧的 CAST 才守得住索引；收窄会真丢值，留着 CAST 让它响。
-    /// <c>char</c> 不进整型表：它的列是 CHAR(1) 存文本，拿数值去比字符是库级静默降级，比报错更坏。</summary>
+    /// 判据一律看穿一层 Nullable，且不收紧原有豁免只放宽：enum == enum? 与 int 列 == short? 量这类比较，
+    /// C# 长出的是提升后的转换，两侧各裹一层 Nullable 就让同列判断比出不同型，落到 StoreTypeOf 取到的是
+    /// DDL 建表型名（MySQL 给 "INT"），发出去成 CAST(@p0 AS INT)，而 MySQL 的 CAST 不认 INT，整条句子语法错。
+    /// 整型之间只豁免加宽（16→32、32→64）：加宽不改变值，且免掉列侧的 CAST 才守得住索引；收窄会真丢值，
+    /// 留着 CAST 让它响。char 不进整型表：它的列是 CHAR(1) 存文本，拿数值去比字符是库级静默降级，比报错更坏。</summary>
     static bool RepresentationOnly(Type from, Type to)
     {
         var source = Nullable.GetUnderlyingType(from) ?? from;
@@ -503,7 +485,7 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
         return width > 0 && width < IntegerWidth(target) && source != typeof(ulong);
     }
 
-    /// <summary>整型的位宽；不在表上的（含 <c>char</c>、decimal、引用型）回 0，表示这一族不讨论加宽。</summary>
+    /// <summary>整型的位宽；不在表上的（含 char、decimal、引用型）回 0，表示这一族不讨论加宽。</summary>
     static int IntegerWidth(Type type)
     {
         if (type == typeof(sbyte) || type == typeof(byte)) return 8;
@@ -522,18 +504,18 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
 
         var declaring = node.Method.DeclaringType;
 
-        // 行号四颗在"逐颗 Visit 实参"那一段之前先接走。两件事都在这里定：① 这一颗的三档分工要看<em>原始</em>实参
-        // （方向那颗要当场求值，落成参数就改了句子的形状）；② 报错点必须是这一颗自己的指路 —— 晚一步的话，
-        // 第二颗实参里一颗本家不认的表达式（如 o.Name.PadRight(3).Length > 0）会抢先把消息换成
-        // "为 String.PadRight 注册映射"，用户看到的是隔壁那一格，而重载决议走错档这件事从头到尾没被说过。
+        // 行号四颗在"逐颗 Visit 实参"那一段之前先接走。两件事都在这里定：① 这一颗的三档分工要看原始实参
+        // （方向那颗要当场求值，落成参数就改了句子的形状）；② 报错点必须是这一颗自己的指路——晚一步的话，
+        // 第二颗实参里一颗本家不认的表达式会抢先把消息换成"为 String.PadRight 注册映射"，
+        // 用户看到的是隔壁那一格，而重载决议走错档这件事从头到尾没被说过。
         if (declaring == typeof(QuickFx) && node.Method.Name == nameof(QuickFx.RowNumber))
             return RowNumber(node, scope);
 
-        // 分组链上的 Enumerable 方法先判掉（§5.3）：`g.Count()` 落 COUNT(*)、`g.Sum(o => o.列)` 落 SUM(那一列)，
-        // 其余那几颗（Any/First/Distinct…）在 GROUP BY 语义下没有对应物，要给出的是这个理由，而不是
-        // 下面那句"为 Enumerable.X 注册映射"——那里指错了地方：缺的不是方言模板。
-        // 判在集合导航那两条<em>之前</em>：二者在树上是同一个 Enumerable 扩展方法，区别只在第一个实参
-        // 是"表位形参的导航成员"还是"分组形参本身"，分错支会得到一条相关子查询套进 GROUP BY 句里。
+        // 分组链上的 Enumerable 方法先判掉：g.Count() 落 COUNT(*)、g.Sum(o => o.列) 落 SUM(那一列)，
+        // 其余那几颗（Any/First/Distinct…）在 GROUP BY 语义下没有对应物，要给出的是这个理由，
+        // 而不是下面那句"为 Enumerable.X 注册映射"——那里指错了地方：缺的不是方言模板。
+        // 判在集合导航那两条之前：二者在树上是同一个 Enumerable 扩展方法，区别只在第一个实参是
+        // "表位形参的导航成员"还是"分组形参本身"，分错支会得到一条相关子查询套进 GROUP BY 句里。
         if (declaring == typeof(Enumerable) && IsOverGrouping(node, scope, out _))
             return GroupAggregate(node, scope);
 
@@ -545,7 +527,7 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
             case "Contains" when node.Arguments.Count is 2 or 3 && (declaring == typeof(Enumerable) || declaring == typeof(MemoryExtensions)):
                 {
                     // 比较器实参只有 null 这一种可以当没看见 —— 它在两侧都等价于 EqualityComparer<T>.Default。
-                    // 真给了比较器还照默认语义发射，等于把用户显式指定的相等规则偷偷换掉（§5.8）。
+                    // 真给了比较器还照默认语义发射，等于把用户显式指定的相等规则偷偷换掉。
                     if (node.Arguments.Count == 3 && node.Arguments[2] is not ConstantExpression { Value: null })
                         throw new UntranslatableExpressionException(node.ToString(),
                             "IN 的元素相等规则要下推到库里才保得住语义，本版本只接受默认比较器（编译期传下来的 null）。" +
@@ -566,18 +548,16 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
                 return Binary(Expression.MakeBinary(ExpressionType.Equal, node.Arguments[0], node.Arguments[1]), scope, hint);
 
             // 带"相等规则"的那一颗（StringComparison / 某个比较器）先拒掉，理由与上面 Contains 那条同一条口径：
-            // 规则下推不到库里，而照默认语义发射等于把调用方显式指定的相等规则偷偷换掉（§5.8）。
+            // 规则下推不到库里，而照默认语义发射等于把调用方显式指定的相等规则偷偷换掉。
             case "Equals" when HasEqualityRuleArgument(node):
                 throw new UntranslatableExpressionException(node.ToString(),
                     "带 StringComparison / IEqualityComparer 的相等规则下推不到库里：各家 COLLATE 与大小写口径不同，" +
                     "照默认语义发射就是把调用方指定的规则偷偷换掉。要比大小写不敏感就两侧都写 ToLower()/ToUpper()，" +
                     "或先 ToList()/ToListAsync() 落到内存再比。");
 
-            // 值相等那一族：`x.Equals(y)`（实例）与 `object.Equals(x, y)` / `string.Equals(x, y)`（静态）。
-            // 原先这一支只认 declaring == typeof(string)，于是 ABP 那类仓储里的常态写法 `x.Id.Equals(id)`
-            // 整族落到"为 Object.Equals 注册映射"那句上（Id 是 long/Guid 时 C# 绑到 Int64.Equals(long) 或
-            // Object.Equals(object)，量那一侧还多一层装箱 Convert）—— 那句话还指错了地方：缺的不是方言模板，
-            // `=` 就是它的落点（实测十八格形状见 ValueEquality 那条注释）。
+            // 值相等那一族：x.Equals(y)（实例）与 object.Equals(x, y) / string.Equals(x, y)（静态）。
+            // 只认 string 一家的话，x.Id.Equals(id)（Id 是 long/Guid，C# 绑到 Int64.Equals 或 Object.Equals）
+            // 整族会落到"为 Object.Equals 注册映射"那句指错地方的报错上；`=` 才是它的落点。
             case "Equals" when TryValueEquality(node, out var equalsLeft, out var equalsRight):
                 return ValueEquality(node, equalsLeft, equalsRight, scope, hint);
 
@@ -626,8 +606,8 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
             $"为 {declaring?.Name}.{node.Method.Name} 注册映射：provider.Expressions.Register(\"{MethodKey(node.Method)}\", new FunctionMapping(\"模板\"))；不想注册就先 ToList()/ToListAsync() 落到内存再调这个方法");
     }
 
-    /// <summary>这一颗 <c>Equals</c> 的实参里带不带"相等规则"（<see cref="StringComparison"/> 或某个比较器）。
-    /// 按实参的型判而不是按 <c>GetParameters()</c>：省一次反射分配，而这两个型只可能从规则实参上冒出来。</summary>
+    /// <summary>这一颗 Equals 的实参里带不带"相等规则"（StringComparison 或某个比较器）。
+    /// 按实参的型判而不是按 GetParameters()：省一次反射分配，而这两个型只可能从规则实参上冒出来。</summary>
     static bool HasEqualityRuleArgument(MethodCallExpression node)
     {
         foreach (var argument in node.Arguments)
@@ -637,10 +617,9 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
         return false;
     }
 
-    /// <summary>把 <c>Equals</c> 认成"两侧各一个值"的形状：实例一元（<c>x.Equals(y)</c>），
-    /// 或 <c>object</c>/<c>string</c> 上那颗静态二元（<c>object.Equals(x, y)</c>）。
-    /// 认不出就回 <see langword="false"/>，让 <see cref="Call"/> 末尾那句"为 … 注册映射"照旧开口 ——
-    /// 例如 <c>EqualityComparer&lt;T&gt;.Default.Equals(a, b)</c>（实例二元）就落在那一头。</summary>
+    /// <summary>把 Equals 认成"两侧各一个值"的形状：实例一元（x.Equals(y)），或 object/string 上那颗静态二元
+    /// （object.Equals(x, y)）。认不出就回 false，让 Call 末尾那句"为 … 注册映射"照旧开口——
+    /// 例如 EqualityComparer&lt;T&gt;.Default.Equals(a, b)（实例二元）就落在那一头。</summary>
     static bool TryValueEquality(MethodCallExpression node, out Expression left, out Expression right)
     {
         if (node.Object is { } receiver && node.Arguments.Count == 1)
@@ -663,18 +642,13 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
         return false;
     }
 
-    /// <summary>值相等落 <c>=</c>。<b>两侧同型这一问在这里比 <c>==</c> 那条路严一档，而这一严是有账的</b>：
-    /// <c>==</c> 上有编译器替调用方做好的提升（<c>int</c> 列 == <c>long</c> 量在树上已经是一层 <c>Convert</c>），
-    /// <c>Equals</c> 上没有 —— 装进 <c>object</c> 的两个值<em>只有同型才相等</em>，所以
-    /// <c>intCol.Equals(someLong)</c> 在 CLR 上恒为 false（实测 <c>Int32.Equals(Convert(lid, Object))</c> 那一格），
-    /// 照 <c>=</c> 发射就把它翻成"值相同就中"。整型加宽与 <c>enum</c>↔底层型这两条在 <c>==</c> 那一格是豁免
-    /// （<see cref="RepresentationOnly"/>），在这一格必须拒。
-    ///
-    /// <para><b>它故意不走 <see cref="Binary"/> 那条路</b>：那一条会把 <c>== null</c> 折成 <c>IS NULL</c>，
-    /// 而 CLR 上 <c>x.Equals(null)</c> 恒为 false（<c>Nullable&lt;T&gt;.Equals(null)</c> 也是 false），
-    /// <c>col = @p</c>（<c>@p</c> 为 NULL）在库里是未知、行被滤掉，与 false 同值 —— 折成 <c>IS NULL</c> 反而是错的。
-    /// 顺带记一格反向的差异：<c>x.Equals(y)</c> 在 <c>x</c> 为 null 时 CLR 抛 <c>NullReferenceException</c>，
-    /// 而库里那一行只是不中；这一格上库比 CLR 宽，与今天 <c>string.Equals</c> 那一支的行为逐字相同。</para></summary>
+    /// <summary>值相等落 =。两侧同型这一问在这里比 == 那条路严一档：== 上有编译器替调用方做好的提升
+    /// （int 列 == long 量在树上已经是一层 Convert），Equals 上没有——装进 object 的两个值只有同型才相等，
+    /// intCol.Equals(someLong) 在 CLR 上恒为 false，照 = 发射就把它翻成"值相同就中"；整型加宽与
+    /// enum 对底层型这两条在 == 那一格是豁免（RepresentationOnly），在这一格必须拒。
+    /// 它故意不走 Binary 那条路：那一条会把 == null 折成 IS NULL，而 CLR 上 x.Equals(null) 恒为 false，
+    /// 折成 IS NULL 会让空列那一行反而命中，是错的。反向的一格：x.Equals(y) 在 x 为 null 时 CLR 抛
+    /// NullReferenceException，库里那一行只是不中——这一格上库比 CLR 宽，与 string.Equals 那支行为逐字相同。</summary>
     SqlExpression ValueEquality(MethodCallExpression node, Expression left, Expression right, Scope scope, ColumnContract? hint)
     {
         var leftType = ComparedType(left);
@@ -690,8 +664,8 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
         return new SqlBinaryExpression(BinaryOperator.Equal, Visit(left, scope, hint), Visit(right, scope, hint));
     }
 
-    /// <summary>参与"同型"那一问的型：剥掉装箱（<c>Convert(x, object)</c>，C# 在 <c>Equals(object)</c> 上总会补一层）；
-    /// 空常量回 <see langword="null"/>，表示它不参与这一问（<see cref="ValueEquality"/> 里那句账）。</summary>
+    /// <summary>参与"同型"那一问的型：剥掉装箱（Convert(x, object)，C# 在 Equals(object) 上总会补一层）；
+    /// 空常量回 null，表示它不参与这一问（ValueEquality 里那句账）。</summary>
     static Type? ComparedType(Expression node) => node switch
     {
         ConstantExpression { Value: null } => null,
@@ -703,10 +677,10 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
     static IEnumerable AsEnumerable(object? value, Expression node)
         => value as IEnumerable ?? throw new UntranslatableExpressionException(node.ToString(), "IN 的集合必须是可求值的集合常量");
 
-    /// <summary>剥掉数组 → <c>Span&lt;T&gt;</c>/<c>ReadOnlySpan&lt;T&gt;</c> 的隐式转换。
-    /// .NET 10 起 <c>ids.Contains(x)</c>（<c>ids</c> 是数组）绑到 <c>MemoryExtensions.Contains(ReadOnlySpan&lt;T&gt;, T)</c>
-    /// 而不是 <c>Enumerable.Contains</c>，树上因此多一层 <c>op_Implicit</c>；span 不是 <c>IEnumerable</c>，
-    /// 也不可能被常量求值认出来，而数组→span 是无损的，所以回到原数组才是这一版的正确读法。</summary>
+    /// <summary>剥掉数组 → Span&lt;T&gt;/ReadOnlySpan&lt;T&gt; 的隐式转换。.NET 10 起 ids.Contains(x)（ids 是数组）
+    /// 绑到 MemoryExtensions.Contains(ReadOnlySpan&lt;T&gt;, T) 而不是 Enumerable.Contains，树上因此多一层
+    /// op_Implicit；span 不是 IEnumerable，也不可能被常量求值认出来，而数组→span 是无损的，
+    /// 所以回到原数组才是正确读法。</summary>
     static Expression SpanSource(Expression node)
         => node is MethodCallExpression { Method.Name: "op_Implicit", Method.DeclaringType: { IsGenericType: true } span, Arguments.Count: 1 } cast
            && IsSpan(span.GetGenericTypeDefinition())
@@ -726,13 +700,13 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
             values.Add(Value(item, column));
 
         if (values.Count == 0)
-            // 空集合特化成恒假（§5.7 的 Contains 条目），恒假的写法由方言决定。
+            // 空集合特化成恒假，恒假的写法由方言决定。
             return new InlineLiteral(Provider.Dialect.EmptySetPredicate);
 
-        // 按 provider 预算分块（v0.39 修的那格）：整条 IN 一次发出，SQL Server 的 2100 参数上限、
-        // Oracle 的 1000 项 IN 列表上限会让大集合直接在驱动侧炸——Include 衼条路早就按预算分块了，
-        // 唯独用户谓词这条最高频的 IN 是漏网的。超预算发 `x IN (…) OR x IN (…)`：
-        // 发射侧对混嵌 AND/OR 自动加括号（EmitLogical / EmitBooleanOperand），NOT 包整个链条也括得对。
+        // 按 provider 预算分块：整条 IN 一次发出，SQL Server 的 2100 参数上限、Oracle 的 1000 项 IN 列表上限
+        // 会让大集合直接在驱动侧炸——Include 那条路早就按预算分块了，唯独用户谓词这条最高频的 IN 是漏网的。
+        // 超预算发 x IN (…) OR x IN (…)：发射侧对混嵌 AND/OR 自动加括号（EmitLogical / EmitBooleanOperand），
+        // NOT 包整个链条也括得对。
         var budget = Provider.Bulk?.ParameterBudget ?? StatementEmitter.ConservativeParameterBudget;
         var perChunk = Math.Max(1, StatementEmitter.RowsPerStatement(budget, 1));
 
@@ -752,12 +726,11 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
         return chain!;
     }
 
-    // ── 分组链上的聚合（§5.3） ────────────────────────────────────────
+    // ── 分组链上的聚合 ────────────────────────────────────────────────
 
-    /// <summary>这一颗 Enumerable 扩展方法是不是打在<em>分组形参</em>上（<c>g.Count()</c> / <c>g.Sum(o =&gt; …)</c>）。
-    /// 判据只有一个：第一个实参是 <see cref="Scope"/> 里那个分组形参本身。
-    /// <b>不判方法的重载</b>：<c>Enumerable.Sum</c> 有十来颗重载（含 <c>Func&lt;T,int&gt;</c> 与 <c>Func&lt;T,int?&gt;</c> 两族），
-    /// 认重载名要反射比 <c>MethodInfo</c>，而这一格要的只是"宿主是不是那一组"。</summary>
+    /// <summary>这一颗 Enumerable 扩展方法是不是打在分组形参上（g.Count() / g.Sum(o => …)）。
+    /// 判据只有一个：第一个实参是 Scope 里那个分组形参本身。不判方法的重载：Enumerable.Sum 有十来颗重载，
+    /// 认重载名要反射比 MethodInfo，而这一格要的只是"宿主是不是那一组"。</summary>
     static bool IsOverGrouping(MethodCallExpression node, Scope scope, out GroupingShape grouping)
     {
         grouping = default;
@@ -768,10 +741,9 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
         return node.Arguments[0] is ParameterExpression parameter && scope.TryGroupingOf(parameter, out grouping);
     }
 
-    /// <summary><c>g.Count()</c> → <c>COUNT(*)</c>，<c>g.Sum(o =&gt; o.Amount)</c> → <c>SUM([t0].[Amount])</c>。
-    /// 发射用的模板与聚合出口那一条（<see cref="Query.QueryCompiler.Aggregate"/>）取的是同一张注册表，
-    /// 所以方言<em>不需要为分组新登记任何东西</em>；区别只在参数：那里的聚合是整句的选列，这里的聚合
-    /// 是一颗投影槽位或 <c>HAVING</c> 的一侧，组由 <c>GROUP BY</c> 划，不再有第二层 FROM。</summary>
+    /// <summary>g.Count() → COUNT(*)，g.Sum(o => o.Amount) → SUM([t0].[Amount])。发射用的模板与聚合出口
+    /// 那一条（QueryCompiler.Aggregate）取的是同一张注册表，方言不需要为分组新登记任何东西；区别只在参数：
+    /// 那里的聚合是整句的选列，这里的聚合是一颗投影槽位或 HAVING 的一侧，组由 GROUP BY 划，没有第二层 FROM。</summary>
     SqlExpression GroupAggregate(MethodCallExpression node, Scope scope)
     {
         IsOverGrouping(node, scope, out var grouping);
@@ -790,7 +762,7 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
                     "带条件的计数（g.Count(o => …)）要下推成 COUNT(CASE WHEN … THEN 1 END)，本版本未接入");
 
             // LongCount 与 Count 发同一句 COUNT(*)：库里那一列本来就是整数，
-            // 读回 int 还是 long 由投影槽位的声明类型定（§5.7 那套按声明类型判的形状）。
+            // 读回 int 还是 long 由投影槽位的声明类型定。
             return Template(QuickFn.Count, [new StarExpression(null)]);
         }
 
@@ -823,9 +795,9 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
 
     // ── 关联子查询（集合导航上的 Any / Count） ────────────────────────
 
-    /// <summary>把 <c>o.Items.Any(...)</c> / <c>o.Items.Count(...)</c> 翻译成关联子查询。
-    /// 检测模式：<c>Arguments[0]</c> 是 <c>parameter.Navigation</c>，且该成员不是列而是集合导航。
-    /// 关联条件由子端的外键列指向父端的主键列拼出（与 <c>IncludeMany</c> 的 FK 发现逻辑同一套约定）。</summary>
+    /// <summary>把 o.Items.Any(...) / o.Items.Count(...) 翻译成关联子查询。检测模式：Arguments[0] 是
+    /// parameter.Navigation，且该成员不是列而是集合导航。关联条件由子端的外键列指向父端的主键列拼出
+    /// （与 IncludeMany 的 FK 发现逻辑同一套约定）。</summary>
     bool TryNavigationSubquery(MethodCallExpression node, Scope scope, out SqlExpression result)
     {
         result = null!;
@@ -920,12 +892,10 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
 
     // ── 非导航子查询（IQuery 闭包捕获） ──────────────────────────────
 
-    /// <summary>检测闭包捕获的 <see cref="QuickSqlQuery{T}"/> 上的终端方法调用，翻译成子查询 AST。
-    /// 形态：<c>subQuery.Count()</c> → 标量子查询；<c>subQuery.Contains(x)</c> → IN 子查询；
-    /// <c>subQuery.Sum/Max/Min/Average(selector)</c> → 聚合标量子查询；
-    /// <c>Enumerable.Contains(subQuery, x)</c> → IN 子查询（扩展方法后备）。
-    /// 检测在 <c>Call</c> 最前面跑，早于所有现有的方法分派——否则 <c>Contains</c> 会走集合常量路径、
-    /// <c>Count</c> 会落到"未注册映射"的报错。</summary>
+    /// <summary>检测闭包捕获的 QuickSqlQuery 上的终端方法调用，翻译成子查询 AST。形态：subQuery.Count() →
+    /// 标量子查询；subQuery.Contains(x) → IN 子查询；subQuery.Sum/Max/Min/Average(selector) → 聚合标量子查询；
+    /// Enumerable.Contains(subQuery, x) → IN 子查询（扩展方法后备）。检测在 Call 最前面跑，早于所有现有的
+    /// 方法分派——否则 Contains 会走集合常量路径、Count 会落到"未注册映射"的报错。</summary>
     bool TryIQuerySubquery(MethodCallExpression node, Scope scope, ColumnContract? hint, [NotNullWhen(true)] out SqlExpression? result)
     {
         result = null;
@@ -972,12 +942,10 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
         return false;
     }
 
-    /// <summary>从表达式节点提取运行期的 <see cref="QueryEngine"/>。
-    /// 闭包捕获的 <c>QuickSqlQuery&lt;T&gt;</c> 在表达式树里是一串 <c>MemberExpression</c>（闭包字段访问链），
-    /// <see cref="Evaluate"/> 能把它求回运行期对象；然后走 <see cref="IEngineCarrier"/> 这一型判断拿引擎。
-    /// 只接受"简单变量引用"——闭包字段访问链。如果查询上再链了 Where/Select 等方法调用，
-    /// lambda 里可能引用外层参数（关联子查询），<see cref="Evaluate"/> 的 Compile 退路拿不到外层参数会炸，
-    /// 所以这一律拒绝；用户需要先把子查询存进变量再调终端方法。</summary>
+    /// <summary>从表达式节点提取运行期的 QueryEngine。闭包捕获的 QuickSqlQuery 在表达式树里是一串
+    /// MemberExpression（闭包字段访问链），Evaluate 能把它求回运行期对象；然后走 IEngineCarrier 这一型判断拿引擎。
+    /// 只接受"简单变量引用"：查询上再链了 Where/Select 等方法调用时，lambda 里可能引用外层参数（关联子查询），
+    /// Compile 退路拿不到外层参数会炸，所以这一律拒绝；用户需要先把子查询存进变量再调终端方法。</summary>
     static QueryEngine? ExtractQuery(Expression expr)
     {
         // 先挡掉方法调用链（那串只能靠 Compile 求值，引用外层参数时会炸），再做类型判断。
@@ -989,9 +957,8 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
         return Evaluate(expr) is IEngineCarrier carrier ? carrier.Engine : null;
     }
 
-    /// <summary>判表达式是否"简单闭包变量引用"——一串 <see cref="MemberExpression"/> 字段访问，
-    /// 不含方法调用。方法调用链（如 <c>query.Where(...)</c>）的 lambda 里可能引用外层参数，
-    /// <see cref="Evaluate"/> 的 Compile 退路拿不到外层参数会炸。</summary>
+    /// <summary>判表达式是否"简单闭包变量引用"——一串 MemberExpression 字段访问，不含方法调用。
+    /// 方法调用链（如 query.Where(...)）的 lambda 里可能引用外层参数，Evaluate 的 Compile 退路拿不到会炸。</summary>
     static bool IsSimpleClosureReference(Expression expr) => expr switch
     {
         ConstantExpression => true,
@@ -1034,11 +1001,10 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
         return new InExpression(target, Subquery: ast);
     }
 
-    /// <summary>子查询的 <see cref="SelectStatement"/> 里的 <see cref="TableRef"/> 来自子查询自己的
-    /// <c>RootEngine</c>，别名总是 <c>t0</c>、<c>t1</c>……嵌进外层 WHERE 后和外层的别名撞车——
-    /// <c>SUM(t0.Amount)</c> 指的到底是子查询的表还是外层的表？SQL 引擎按最近绑定选，结果就指错了。
-    /// 这一手把子查询 AST 里所有 <see cref="TableRef"/> 按 <see cref="_subqueryIndex"/> 重发一套不冲突的别名，
-    /// 与导航子查询（<c>TryNavigationAny</c> 里 <c>_newTableRef(childType, _subqueryIndex++)</c>）同一套策略。</summary>
+    /// <summary>子查询的 SelectStatement 里的 TableRef 来自子查询自己的引擎，别名总是 t0、t1……
+    /// 嵌进外层 WHERE 后和外层的别名撞车——SUM(t0.Amount) 指的到底是子查询的表还是外层的表？SQL 引擎按
+    /// 最近绑定选，结果就指错了。这一手把子查询 AST 里所有 TableRef 按 _subqueryIndex 重发一套不冲突的别名，
+    /// 与导航子查询同一套策略。</summary>
     SelectStatement RemapSubqueryAliases(SelectStatement stmt)
     {
         var map = new Dictionary<TableRef, TableRef>();
@@ -1137,8 +1103,8 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
             SourceTable => new SourceTable(newRef),
             SourceSubquery sub => new SourceSubquery(newRef, RemapStatement(sub.Query, map)),
             SourceDerived derived => new SourceDerived(newRef, RemapStatement(derived.Query, map)),
-            SourceUnion union => new SourceUnion(newRef, [.. union.Branches.Select(b => RemapStatement(b, map))], union.All),
-            // 原生文本这一形没有可改名的列引用（那一段一颗不动），但<em>别名要跟着改</em>：外层那句的
+            SourceUnion union => new SourceUnion(newRef, [.. union.Branches.Select(b => RemapStatement(b, map))], union.Operation),
+            // 原生文本这一形没有可改名的列引用（那一段一颗不动），但别名要跟着改：外层那句的
             // WHERE 里的 [t1000].[Amount] 已经被改名，而 FROM (…) 挂的名字若还停在 [t0]，
             // 得到的是一句"无法绑定多部分标识符"。
             SourceRawText raw => new SourceRawText(newRef, raw.Sql, raw.Parameters),
@@ -1203,8 +1169,8 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
         _ => node,
     };
 
-    /// <summary>剥掉 <c>Expression&lt;T&gt;</c> 参数在表达式树里的 <c>Quote</c> 包裹。
-    /// 方法形参是 <c>Expression&lt;Func&lt;T,TResult&gt;&gt;</c> 时，调用方的 lambda 在树上多一层 Quote。</summary>
+    /// <summary>剥掉 Expression&lt;T&gt; 参数在表达式树里的 Quote 包裹。
+    /// 方法形参是 Expression&lt;Func&lt;T,TResult&gt;&gt; 时，调用方的 lambda 在树上多一层 Quote。</summary>
     static Expression StripQuote(Expression node) => node is UnaryExpression { NodeType: ExpressionType.Quote } q ? StripQuote(q.Operand) : node;
 
     [RequiresUnreferencedCode("按运行期 Type 反射判集合元素型。")]
@@ -1223,9 +1189,9 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
         return null;
     }
 
-    /// <summary>子查询版的 FK 发现：与 <c>QueryEngine</c>/<c>DbSet</c> 里那两份逻辑同三档（点名那一档走
-    /// <see cref="ContractResolver.ResolveDeclaredFkColumns"/>，同一根边不许两个答案），
-    /// 但只返回列名清单、不抛带上下文的异常（调用方按 <c>return false</c> 处理）。</summary>
+    /// <summary>子查询版的 FK 发现：与 QueryEngine/DbSet 里那两份逻辑同三档（点名那一档走
+    /// ContractResolver.ResolveDeclaredFkColumns，同一根边不许两个答案），
+    /// 但只返回列名清单、不抛带上下文的异常（调用方按 return false 处理）。</summary>
     static IReadOnlyList<string> DiscoverFkColumnsForSubquery(EntityContract parentContract, EntityContract childContract, string memberName)
     {
         var parentKeys = parentContract.PrimaryKey;
@@ -1340,8 +1306,8 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
 
     static string MethodKey(MethodInfo method) => (method.DeclaringType?.FullName ?? "global") + "." + method.Name;
 
-    /// <summary><c>string.Concat(a,b,c)</c> 折成两两嵌套的 CONCAT：模板是按元数登记的，
-    /// 让 N 参直接进 <c>CONCAT({0}, {1})</c> 会被 string.Format 静默丢掉第三个实参。</summary>
+    /// <summary>string.Concat(a,b,c) 折成两两嵌套的 CONCAT：模板是按元数登记的，
+    /// 让 N 参直接进 CONCAT({0}, {1}) 会被 string.Format 静默丢掉第三个实参。</summary>
     SqlExpression FoldConcatenation(IReadOnlyList<SqlExpression> arguments)
     {
         if (arguments.Count == 0)
@@ -1355,13 +1321,12 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
         return result;
     }
 
-    // ── QuickFx 三口（日期范围/交集，文档站 06 篇 §2 末尾那几行） ──────────────
+    // ── QuickFx 三口（日期范围/交集） ──────────────────────────────────
 
-    /// <summary>QuickFx 三口。它们是<b>谓词形状</b>而不是函数调用：译文只由比较与
-    /// <see cref="BinaryOperator.And"/> 组成，十八家方言共用这一份，谁都不用登记模板
-    /// （对照：凡要落 <see cref="FunctionExpression"/> 的形状都得逐家给）。
-    /// 名字/元数认不出时交回 <see langword="null"/>，让调用点走「未登记函数」的那句原话
-    /// —— QuickFx 将来添别的形状时，漏在这颗计数的自动拿到可读的拒而不是静默。</summary>
+    /// <summary>QuickFx 三口。它们是谓词形状而不是函数调用：译文只由比较与 AND 组成，
+    /// 十八家方言共用这一份，谁都不用登记模板（凡要落 FunctionExpression 的形状都得逐家给）。
+    /// 名字/元数认不出时交回 null，让调用点走「未登记函数」的那句原话——QuickFx 将来添别的形状时，
+    /// 漏在这颗计数的自动拿到可读的拒而不是静默。</summary>
     SqlExpression? FxShape(MethodCallExpression node, IReadOnlyList<SqlExpression> arguments, Scope scope)
     {
         switch ((node.Method.Name, arguments.Count))
@@ -1393,8 +1358,8 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
 
             case (nameof(QuickFx.DateIntersection), 4):
             case (nameof(QuickFx.DateTimeIntersection), 4):
-                // 闭端 [begin, end] 两段重叠：{0} <= {3} AND {1} >= {2} —— 旧 SqlSugar 封装的四参模板原样，
-                // 对应手写 s.BeginDate <= To && s.EndDate >= From 的自然语序，口径等价钉逐字节可比。
+                // 闭端 [begin, end] 两段重叠：{0} <= {3} AND {1} >= {2}，
+                // 对应手写 s.BeginDate <= To && s.EndDate >= From 的自然语序，口径等价、逐字节可比。
                 return new SqlBinaryExpression(BinaryOperator.And,
                     new SqlBinaryExpression(BinaryOperator.LessThanOrEqual, arguments[0], arguments[3]),
                     new SqlBinaryExpression(BinaryOperator.GreaterThanOrEqual, arguments[1], arguments[2]));
@@ -1404,10 +1369,10 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
         }
     }
 
-    /// <summary>行号四颗 → 一颗 <see cref="RowNumberExpression"/>。入口在 <c>Call</c> 的最上面（早于逐颗 Visit 实参那一段），
-    /// 留在这里的是三档分工本身。判据取<em>方法签名上第二颗形参的型</em>：<c>(orderKey, bool)</c> 是方向档、
-    /// <c>(partitionKey, orderKey)</c> 是分堆档，两档同元数而实参的型分不开它们 —— 调用方拿一颗 bool 表达式当第二颗
-    /// 实参写时，C# 的重载决议已经把那颗送上 bool 档了，此处照签名读到的就是它去的那一档，
+    /// <summary>行号四颗 → 一颗 RowNumberExpression。入口在 Call 的最上面（早于逐颗 Visit 实参那一段），
+    /// 留在这里的是三档分工本身。判据取方法签名上第二颗形参的型：(orderKey, bool) 是方向档、
+    /// (partitionKey, orderKey) 是分堆档，两档同元数而实参的型分不开它们——调用方拿一颗 bool 表达式当第二颗
+    /// 实参写时，重载决议已经把那颗送上 bool 档了，此处照签名读到的就是它去的那一档，
     /// 于是拿到的是"方向那颗读不出值"这条指路，而不是一句静默的错句。</summary>
     SqlExpression RowNumber(MethodCallExpression node, Scope scope)
     {
@@ -1439,10 +1404,9 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
     }
 
     /// <summary>OVER 里的一颗键：先问它挂不挂在查询行上，再翻，翻完不许里面已经藏了一颗行号。
-    /// <b>常量序键在这里就是拒，不是发</b>：<c>ORDER BY @p0</c> 在库里是一句能执行的话，
-    /// 而它给的是"任意序"，行号于是随执行计划漂——那种句子绿在测试里、错在报表上（§5.8 禁的正是这一格）。
-    /// 判 <see cref="ReferencesScope"/> 早于 <see cref="Visit"/>：引着行的子树直送 Visit 各按各的路走，
-    /// 而不引用行的那颗到了 Visit 会折成参数，报错的人就变成库里那个人了。</summary>
+    /// 常量序键在这里就是拒，不是发：ORDER BY @p0 在库里是一句能执行的话，而它给的是"任意序"，
+    /// 行号于是随执行计划漂——那种句子绿在测试里、错在报表上。判 ReferencesScope 早于 Visit：
+    /// 引着行的子树直送 Visit 各按各的路走，而不引用行的那颗到了 Visit 会折成参数，报错的人就变成库里那个人了。</summary>
     SqlExpression WindowKey(Expression key, Scope scope, string role)
     {
         if (!ReferencesScope(key, scope))
@@ -1460,8 +1424,8 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
         return node;
     }
 
-    /// <summary>方向那颗要当场读得出值：<c>ORDER BY 列 DESC</c> 是句子的形状，不是每行各问一次的东西。
-    /// 落在行上的 bool 成员在这一档已经被重载决议送进来了（<see cref="RowNumber"/> 头部那句），
+    /// <summary>方向那颗要当场读得出值：ORDER BY 列 DESC 是句子的形状，不是每行各问一次的东西。
+    /// 落在行上的 bool 成员在这一档已经被重载决议送进来了（RowNumber 头部那句），
     /// 所以这句要把那条重载的分岔说出来，否则用户看到的是"我明明写的是排序键"。</summary>
     static bool WindowDirection(Expression node, Scope scope)
     {
@@ -1475,8 +1439,8 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
         return Evaluate(node) is true;
     }
 
-    /// <summary>DateRange 的边界求值：能读出 <see cref="DateOnly"/> 就交真值；装在装箱 Convert 里的闭包
-    /// 先剥一层再求值。其余形状（null、的似是而非的型）汇总交 false，由调用点的同一条消息收拢。</summary>
+    /// <summary>DateRange 的边界求值：能读出 DateOnly 就交真值；装在装箱 Convert 里的闭包
+    /// 先剥一层再求值。其余形状（null、似是而非的型）汇总交 false，由调用点的同一条消息收拢。</summary>
     static bool TryEvaluateBound(Expression bound, out DateOnly value)
     {
         value = default;
@@ -1507,13 +1471,13 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
             : throw new UntranslatableExpressionException(key, $"{Provider.Kind} 未登记函数 {key}（可用 provider.Expressions.Register 覆写）");
     }
 
-    /// <summary><paramref name="pattern"/> 就是最终模式串：通配符有意义，本方法不再转义它。
-    /// 用户给的字面量要先进 <see cref="EscapeLike"/> 再补通配符，反了会把通配符一起转义掉。</summary>
+    /// <summary>pattern 就是最终模式串：通配符有意义，本方法不再转义它。
+    /// 用户给的字面量要先进 EscapeLike 再补通配符，反了会把通配符一起转义掉。</summary>
     public SqlExpression Like(SqlExpression target, string pattern, ColumnContract? hint)
         => new SqlBinaryExpression(BinaryOperator.Like, target, new ParameterValue(pattern, hint));
 
-    /// <summary>转义用户输入里被当成字面量的通配符，否则 <c>"50%"</c> 会匹配到 <c>"50abc"</c>。
-    /// 转义符自身要先替换，不然第二步的 <c>%</c> 会被当成刚写下的通配符转义。</summary>
+    /// <summary>转义用户输入里被当成字面量的通配符，否则 "50%" 会匹配到 "50abc"。
+    /// 转义符自身要先替换，不然第二步的 % 会被当成刚写下的通配符转义。</summary>
     string EscapeLike(string literal)
     {
         var escape = Provider.Expressions.LikeEscapeCharacter.ToString();
@@ -1523,9 +1487,8 @@ public sealed class ExpressionTranslator(IDbProvider provider, IEntitySchemaRegi
                       .Replace("_", escape + "_", StringComparison.Ordinal);
     }
 
-    /// <summary>StartsWith / EndsWith / Contains(string) 的 LIKE 形态（§5.7 的字符串条目）。
-    /// <b>先转义字面量、后补通配符</b>：两个动作对调，通配符就被 <see cref="EscapeLike"/> 一起吞了，
-    /// <c>Contains</c> 会静默退化成全等匹配（少行而不是报错，正是 §5.8 不许的那种错）。</summary>
+    /// <summary>StartsWith / EndsWith / Contains(string) 的 LIKE 形态。先转义字面量、后补通配符：
+    /// 两个动作对调，通配符就被 EscapeLike 一起吞了，Contains 会静默退化成全等匹配（少行而不是报错）。</summary>
     SqlExpression StringLike(MethodCallExpression node, Scope scope)
     {
         var target = Visit(node.Object!, scope, null);
