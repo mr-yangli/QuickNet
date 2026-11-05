@@ -9,14 +9,10 @@ namespace QuickSql.Providers.OceanBase;
 /// 点名的语义分岔（分区表、全局索引、AUTO_ID_CACHE 自增不连续）全在文本层之外，不改发射形状；
 /// 覆写点（自增写法、表选项）需要的是与 MySQL 同一颗值（推断，未实测），照 TiDB 同一条纪律选继承。</summary>
 [QuickSqlProvider(DbKind.OceanBase)]
-public sealed class OceanBaseProvider : MySqlProviderBase
+public sealed class OceanBaseProvider(DbProviderFactory driverFactory)
+    : MySqlProviderBase(DbKind.OceanBase, driverFactory)
 {
     /// <summary>内建表里的 key。与 mysql／tidb 共用同一份 assembly（MySqlConnector）；从未解析成功过，刻意不写 factoryType。
     /// 比前两颗多一层不确定：若现场把库建在 Oracle 模，该走的是另一颗驱动——这一格差异今天无处声明（"模式在连接上决定"缺口）。</summary>
     public const string DriverKey = "oceanbase";
-
-    public OceanBaseProvider(DbProviderFactory driverFactory)
-        : base(DbKind.OceanBase, driverFactory)
-    {
-    }
 }

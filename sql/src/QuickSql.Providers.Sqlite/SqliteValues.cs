@@ -2,7 +2,6 @@ using System.Data;
 using System.Globalization;
 using System.Text;
 using QuickSql.Metadata;
-using QuickSql.Providers;
 using QuickSql.Sql;
 using QuickSql.Values;
 
@@ -40,24 +39,25 @@ public sealed class SqliteValues : IValueBinder
     /// 写出来是把意图交给读这份文件的人）。其余一律原样交出。两颗要在交出之前知道：
     /// DateTime 的 Kind 会整颗丢掉（三种 Kind 交进去读回同一串），本家没有把"这是哪一种钟"
     /// 送进库的路；DateOnly 交出去得到的是裸日期而不是零点那一形——那正是 Fn.ToDate 两臂之差的另一半。</summary>
-    static object? Normalize(object? value) => value switch
-    {
-        null => DBNull.Value,
-        { } typed when typed.GetType().IsEnum => EnumAsIntegral(typed),
-        decimal money => money.ToString(CultureInfo.InvariantCulture),
-        ulong wide => Invariant(wide),
-        TimeSpan span => span.Ticks,
-        TimeOnly clock => clock.Ticks,
-        char letter => letter.ToString(),
-        var typed => typed,
-    };
+    static object? Normalize(object? value) =>
+        value switch
+        {
+            null => DBNull.Value,
+            { } typed when typed.GetType().IsEnum => EnumAsIntegral(typed),
+            decimal money => money.ToString(CultureInfo.InvariantCulture),
+            ulong wide => Invariant(wide),
+            TimeSpan span => span.Ticks,
+            TimeOnly clock => clock.Ticks,
+            char letter => letter.ToString(),
+            var typed => typed,
+        };
 
     /// <summary>枚举的底层类型由声明决定，所以按它取对应宽度：byte 底不许被 widen 成 int，
     /// 否则 DbType 与实参类型对不上。本家的拷贝比另六家更必要：这里 DbType 不参与，
     /// "落成什么"完全由这一颗返回的 CLR 型决定，宽窄选错会静默改变存储文本。</summary>
     static object EnumAsIntegral(object value)
     {
-        var convertible = (IConvertible) value;
+        var convertible = (IConvertible)value;
 
         return Type.GetTypeCode(Enum.GetUnderlyingType(value.GetType())) switch
         {
@@ -75,13 +75,14 @@ public sealed class SqliteValues : IValueBinder
     /// <summary>尺寸。本家它是七家里唯一一颗实测证明完全不被读的，这里填的数不改变任何行为
     /// （只在 SqlLogging 打印参数时露一次脸）。之所以仍然按 hint 报而不是恒 0：
     /// 将来若换一颗认 Size 的驱动，这里不需要重学一遍"该报哪颗数"。</summary>
-    static int SizeOf(object? value, ColumnContract? hint) => value switch
-    {
-        null => 0,
-        string text => hint?.MaxChars ?? text.Length,
-        byte[] bytes => bytes.Length,
-        _ => 0,
-    };
+    static int SizeOf(object? value, ColumnContract? hint) =>
+        value switch
+        {
+            null => 0,
+            string text => hint?.MaxChars ?? text.Length,
+            byte[] bytes => bytes.Length,
+            _ => 0,
+        };
 
     /// <summary>与 Normalize 同源，所以本方法看到的 decimal/ulong/TimeOnly/TimeSpan 已经是
     /// 字符串或整数了——下面那几臂与 SqliteTypes.GetStoreType 逐颗对得上，两处不许分岔。
@@ -160,12 +161,19 @@ public sealed class SqliteValues : IValueBinder
                 sql = flag ? "1" : "0";
                 return true;
 
-            case byte or sbyte or short or ushort or int or uint or long:
+            case byte
+            or sbyte
+            or short
+            or ushort
+            or int
+            or uint
+            or long:
                 sql = Invariant(value);
                 return true;
 
             // ulong 与定点同一支：加引号（带形状入库的文本）。
-            case ulong or decimal:
+            case ulong
+            or decimal:
                 sql = Literal(Invariant(value));
                 return true;
 
@@ -178,7 +186,8 @@ public sealed class SqliteValues : IValueBinder
                 sql = Invariant(clock.Ticks);
                 return true;
 
-            case float or double:
+            case float
+            or double:
                 sql = InlineNumber(Invariant(value));
 
                 // 空串 = 这一格拒了（非有限值）。本家有 'Inf'/'NaN' 那一族 CAST 写法，
@@ -219,8 +228,8 @@ public sealed class SqliteValues : IValueBinder
     /// 逐字符的），正是要防的静默空集；也不写成 3 位（另六家的常见做法）：本家存的是 100 纳秒，
     /// 截到毫秒会让一句真命中变空集。残余风险：跨零那一侧（23:59:59.9999999 过驱动之后
     /// 是不是还是那一串）没量过，属于"文本序 vs 时刻序"那一族口子。</summary>
-    static string InlineDateTime(DateTime value)
-        => Stamp(value.ToString(SecondFormat, CultureInfo.InvariantCulture), value.Ticks);
+    static string InlineDateTime(DateTime value) =>
+        Stamp(value.ToString(SecondFormat, CultureInfo.InvariantCulture), value.Ticks);
 
     /// <summary>带偏移那一形：时刻与小数同一条归一，后面直接接 zzz。零偏移驱动写的是 +00:00、
     /// 不是 Z 也不是不留，所以只能取 zzz（z 得 +0、K 得 Z，两形与库里都不等）。本家发这一支
@@ -230,24 +239,26 @@ public sealed class SqliteValues : IValueBinder
     /// 同一串钟面配两个偏移，按真实瞬间早的那颗在词法上排在后面（'+0' 排在 '+8' 前面）；
     /// 无偏移的串是带偏移那一串的前缀，同样比不出真实先后。所以本家的 DateTimeOffset 列
     /// 能等值而不能排序——那是排序语义的缺口而不是等号的缺口。</summary>
-    static string InlineOffset(DateTimeOffset value)
-        => Stamp(value.ToString(SecondFormat, CultureInfo.InvariantCulture), value.Ticks)
-           + value.ToString("zzz", CultureInfo.InvariantCulture);
+    static string InlineOffset(DateTimeOffset value) =>
+        Stamp(value.ToString(SecondFormat, CultureInfo.InvariantCulture), value.Ticks)
+        + value.ToString("zzz", CultureInfo.InvariantCulture);
 
     /// <summary>秒那一段后面接什么：非零小数就接（去掉尾零），整秒什么都不接。
     /// 之所以按 Ticks 算而不是一条 fffffff 格式串再 TrimEnd：偏移那一支的串以数字结尾，
     /// 整串 TrimEnd('0') 会把偏移也削掉——所以两颗分开拼、小数只属于自己的那一段。</summary>
     static string Stamp(string seconds, long ticks)
     {
-        var fraction = (ticks % TimeSpan.TicksPerSecond).ToString("D7", CultureInfo.InvariantCulture).TrimEnd('0');
+        var fraction = (ticks % TimeSpan.TicksPerSecond)
+            .ToString("D7", CultureInfo.InvariantCulture)
+            .TrimEnd('0');
 
         return fraction.Length == 0 ? seconds : seconds + "." + fraction;
     }
 
     const string SecondFormat = "yyyy-MM-dd HH:mm:ss";
 
-    static string Invariant(object? value)
-        => value is IFormattable formattable
+    static string Invariant(object? value) =>
+        value is IFormattable formattable
             ? formattable.ToString(null, CultureInfo.InvariantCulture)
             : value?.ToString() ?? string.Empty;
 

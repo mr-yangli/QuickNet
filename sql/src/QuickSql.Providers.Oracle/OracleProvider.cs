@@ -12,14 +12,10 @@ namespace QuickSql.Providers.Oracle;
 /// 内建表那颗 assembly 名 Oracle.ManagedDataAccess 的唯一出处是我们自己的注释，从未解析成功过；
 /// "已适配"三句在本家一句都立不起来——整层文本层口径、未实测，现场真装上那天第一件事是按厂商读数改回。</summary>
 [QuickSqlProvider(DbKind.Oracle)]
-public sealed class OracleProvider : OracleProviderBase
+public sealed class OracleProvider(DbProviderFactory driverFactory)
+    : OracleProviderBase(DbKind.Oracle, driverFactory)
 {
     /// <summary>内建表里的 key。assembly 那颗 Oracle.ManagedDataAccess 是文档口径的名字且从未解析成功过；
     /// 刻意不写 factoryType，走"扫导出类型里第一个 DbProviderFactory 子类"那条兜底。</summary>
     public const string DriverKey = "oracle";
-
-    public OracleProvider(DbProviderFactory driverFactory)
-        : base(DbKind.Oracle, driverFactory)
-    {
-    }
 }

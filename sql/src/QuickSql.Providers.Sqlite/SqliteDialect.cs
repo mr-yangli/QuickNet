@@ -14,8 +14,12 @@ namespace QuickSql.Providers.Sqlite;
 /// N'…' 在这一族是语法错，所以 PrefixUnicodeLiterals 恒 false；RETURNING、IS DISTINCT FROM、
 /// DROP COLUMN 各有引擎版本门槛而 DbCapabilities 没有"库版本"那一格，本文件所有"能用"的读数
 /// 都自带一个没地方声明的前提，STRICT 表与生成列也不发。</summary>
-public sealed class SqliteDialect(SqliteTypes types, SqliteKeys keys, SqliteValues values, SqliteExpressions expressions)
-    : DialectBase(IdentifierPolicy.Sqlite, values, expressions)
+public sealed class SqliteDialect(
+    SqliteTypes types,
+    SqliteKeys keys,
+    SqliteValues values,
+    SqliteExpressions expressions
+) : DialectBase(IdentifierPolicy.Sqlite, values, expressions)
 {
     public override DbKind Kind { get; } = DbKind.Sqlite;
 
@@ -32,35 +36,45 @@ public sealed class SqliteDialect(SqliteTypes types, SqliteKeys keys, SqliteValu
     /// 让 1700 &gt; '1000' 得 0。在比较表达式入口把 decimal 参数包 CAST(@p AS NUMERIC)，
     /// 库会把另一侧的 TEXT 列值按数值比较（NUMERIC 是 CAST 专用名，与 DDL 的 TEXT 不冲突）。
     /// MAX/MIN 保留列的 TEXT 类型，两侧同型不受影响，本方法只对比较运算符生效。</summary>
-    protected override SqlExpression PrepareForEmission(SqlExpression node)
-        => node is SqlBinaryExpression binary && IsComparison(binary.Operator)
+    protected override SqlExpression PrepareForEmission(SqlExpression node) =>
+        node is SqlBinaryExpression binary && IsComparison(binary.Operator)
             ? WrapDecimalParameters(binary)
             : node;
 
     static SqlBinaryExpression WrapDecimalParameters(SqlBinaryExpression binary)
     {
-        var left = IsDecimalParameter(binary.Left) ? new CastExpression(binary.Left, "NUMERIC") : binary.Left;
-        var right = IsDecimalParameter(binary.Right) ? new CastExpression(binary.Right, "NUMERIC") : binary.Right;
+        var left = IsDecimalParameter(binary.Left)
+            ? new CastExpression(binary.Left, "NUMERIC")
+            : binary.Left;
+        var right = IsDecimalParameter(binary.Right)
+            ? new CastExpression(binary.Right, "NUMERIC")
+            : binary.Right;
 
         return ReferenceEquals(left, binary.Left) && ReferenceEquals(right, binary.Right)
             ? binary
             : new SqlBinaryExpression(binary.Operator, left, right);
     }
 
-    static bool IsComparison(BinaryOperator op) => op
-        is BinaryOperator.Equal or BinaryOperator.NotEqual
-        or BinaryOperator.LessThan or BinaryOperator.LessThanOrEqual
-        or BinaryOperator.GreaterThan or BinaryOperator.GreaterThanOrEqual;
+    static bool IsComparison(BinaryOperator op) =>
+        op
+            is BinaryOperator.Equal
+                or BinaryOperator.NotEqual
+                or BinaryOperator.LessThan
+                or BinaryOperator.LessThanOrEqual
+                or BinaryOperator.GreaterThan
+                or BinaryOperator.GreaterThanOrEqual;
 
-    static bool IsDecimalParameter(SqlExpression expr)
-        => expr is ParameterValue { Value: decimal };
+    static bool IsDecimalParameter(SqlExpression expr) => expr is ParameterValue { Value: decimal };
 
     /// <summary>类注释第五段：UPDATE 半边有子句而列名清单发不出，DELETE 半边两样都没有。</summary>
     public override bool SupportsJoinedWrites => false;
 
     /// <summary>句尾 RETURNING（与 PG 血统同形而四宿主都有活库读数）；
     /// 文本本体归 SqliteKeys.EmitReturning，与另六家同一条分工。</summary>
-    protected override void EmitReturning(SqlWriter writer, IReadOnlyList<ColumnContract> returning) => keys.EmitReturning(writer, returning);
+    protected override void EmitReturning(
+        SqlWriter writer,
+        IReadOnlyList<ColumnContract> returning
+    ) => keys.EmitReturning(writer, returning);
 
     /// <summary>LIMIT n OFFSET m，与 PostgreSqlDialect 那一份逐字同形而差一颗哨兵：
     /// 那一家两支各自可缺省，本家光写 OFFSET 是语法错，所以有偏移而无上限时必须先落一颗 LIMIT -1。
@@ -87,7 +101,12 @@ public sealed class SqliteDialect(SqliteTypes types, SqliteKeys keys, SqliteValu
     /// 那一家是"压根没有多表更新的子句"，本家是有子句而 AS t(cols) 被拒。
     /// 消息里两条等价路都有实测——读到这条错的人下一步就是问"那这一家怎么写"，
     /// 本家能答"有两条路、都量过，只是共用层不发"。</summary>
-    protected override void EmitJoinedSources(SqlWriter writer, string keyword, IReadOnlyList<JoinClause> joins, out SqlExpression? folded)
+    protected override void EmitJoinedSources(
+        SqlWriter writer,
+        string keyword,
+        IReadOnlyList<JoinClause> joins,
+        out SqlExpression? folded
+    )
     {
         folded = null;
 
@@ -96,12 +115,13 @@ public sealed class SqliteDialect(SqliteTypes types, SqliteKeys keys, SqliteValu
 
         throw new QuickSqlException(
             $"{Kind} 的写语句接不下 §12.5 合并档那一形（{keyword.Trim()} 那一段有 {joins.Count} 个表源）：这一家的 "
-            + "UPDATE … FROM 只认源自己带出来的列名，而 (VALUES …) 出来的隐式名是 column1..N，给它改名那一形 "
-            + "AS t(cols) 在本家被拒（五形五拒，2107 是 UPDATE 侧的第六次）；DELETE 那半边连 FROM/USING 子句都没有。"
-            + "本家量过的两条等价路是 UPDATE … SET v = (SELECT … FROM 源 WHERE …) 的标量子查询形与 "
-            + "… WHERE EXISTS (SELECT 1 FROM 源 WHERE …) 的关联形，而共用层不发那两种形状。"
-            + "整批退回一句一实体由 SupportsJoinedWrites 决定（语义与合并档等价，§12.4 第 2 项），走到这里说明那颗开关被绕过了 —— "
-            + "宁可报错也不能悄悄丢掉表源，那等于丢掉连接条件（§1.2 原则 4）。");
+                + "UPDATE … FROM 只认源自己带出来的列名，而 (VALUES …) 出来的隐式名是 column1..N，给它改名那一形 "
+                + "AS t(cols) 在本家被拒（五形五拒，2107 是 UPDATE 侧的第六次）；DELETE 那半边连 FROM/USING 子句都没有。"
+                + "本家量过的两条等价路是 UPDATE … SET v = (SELECT … FROM 源 WHERE …) 的标量子查询形与 "
+                + "… WHERE EXISTS (SELECT 1 FROM 源 WHERE …) 的关联形，而共用层不发那两种形状。"
+                + "整批退回一句一实体由 SupportsJoinedWrites 决定（语义与合并档等价，§12.4 第 2 项），走到这里说明那颗开关被绕过了 —— "
+                + "宁可报错也不能悄悄丢掉表源，那等于丢掉连接条件（§1.2 原则 4）。"
+        );
     }
 
     /// <summary>InsertOrUpdate 在本家的发射：复用共用层那颗 INSERT … VALUES（列清单、VALUES 形状与
@@ -114,7 +134,12 @@ public sealed class SqliteDialect(SqliteTypes types, SqliteKeys keys, SqliteValu
     public override void Emit(in UpsertStatement upsert, SqlWriter writer)
     {
         // 共用层那份 INSERT：本家不发 Returning（回填那一档不在这条链上），所以 Returning 留空 = 逐字一条普通 INSERT … VALUES。
-        var insert = new InsertStatement { Table = upsert.Table, Columns = upsert.Columns, Rows = upsert.Rows };
+        var insert = new InsertStatement
+        {
+            Table = upsert.Table,
+            Columns = upsert.Columns,
+            Rows = upsert.Rows,
+        };
 
         base.Emit(in insert, writer);
 

@@ -1,7 +1,6 @@
-using System.Data.Common;
-using QuickSql.Providers;
 using QuickSql.Sql;
 using QuickSql.Values;
+using System.Data.Common;
 
 namespace QuickSql.Providers.OracleBase;
 
@@ -36,9 +35,13 @@ public abstract class OracleProviderBase : IDbProvider
 
     /// <summary>这一档的位掩码本体。</summary>
     protected static DbCapabilities FamilyCapabilities =>
-        DbCapabilities.Paging_RowNum | DbCapabilities.Guid_Char36 | DbCapabilities.Schemas |
-        DbCapabilities.CaseSensitive_Identifiers | DbCapabilities.Comment_On_Column |
-        DbCapabilities.Alter_Column_Precision | DbCapabilities.Transactions;
+        DbCapabilities.Paging_RowNum
+        | DbCapabilities.Guid_Char36
+        | DbCapabilities.Schemas
+        | DbCapabilities.CaseSensitive_Identifiers
+        | DbCapabilities.Comment_On_Column
+        | DbCapabilities.Alter_Column_Precision
+        | DbCapabilities.Transactions;
 
     public IConnectorFactory Connectors { get; }
 
@@ -58,7 +61,8 @@ public abstract class OracleProviderBase : IDbProvider
 
     /// <summary>DDL 那一格的覆写点。参数把家族共用的类型映射递过去，是为了让覆写者不必自己去拿单例——
     /// 一旦哪天 OracleTypes 也要按库种分叉，这里就是那根线。</summary>
-    protected virtual ICodeFirstDialect CreateCodeFirst(OracleTypes types) => new OracleCodeFirst(types);
+    protected virtual ICodeFirstDialect CreateCodeFirst(OracleTypes types) =>
+        new OracleCodeFirst(types);
 
     public ISchemaReader Schema { get; } = new OracleSchemaReader();
 

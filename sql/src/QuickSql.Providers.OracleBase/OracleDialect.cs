@@ -12,8 +12,13 @@ namespace QuickSql.Providers.OracleBase;
 /// 布尔与 uuid 非原生（没有 IS TRUE，恒假谓词只能是 1 = 0，可空布尔列上 = 0 匹配不到 NULL 的事故也跟着回来）；
 /// 标识符发射前折成大写，建表与查询共用同一个归一口。类不 sealed：达梦与神通只覆写真正分岔的那几处。
 /// 本类的产出文本没有在一台真库上跑过——每一处"这一家不认 X"都是厂商文档口径。</summary>
-public class OracleDialect(DbKind kind, OracleTypes types, OracleKeys keys, OracleValues values, OracleExpressions expressions)
-    : DialectBase(IdentifierPolicy.OracleFamily, values, expressions)
+public class OracleDialect(
+    DbKind kind,
+    OracleTypes types,
+    OracleKeys keys,
+    OracleValues values,
+    OracleExpressions expressions
+) : DialectBase(IdentifierPolicy.OracleFamily, values, expressions)
 {
     public override DbKind Kind { get; } = kind;
 
@@ -40,13 +45,14 @@ public class OracleDialect(DbKind kind, OracleTypes types, OracleKeys keys, Orac
 
     /// <summary>转交 OracleKeys.EmitReturning（那里的答案永远是抛）。文案要点名"缺的是哪个槽位"：
     /// "Oracle 没有 RETURNING"是一句会让现场去找 RETURNING … INTO 的错话——那一条要的是 OUT 绑定，本 SPI 表达不了。</summary>
-    protected override void EmitReturning(SqlWriter writer, IReadOnlyList<ColumnContract> returning) => keys.EmitReturning(writer, returning);
+    protected override void EmitReturning(
+        SqlWriter writer,
+        IReadOnlyList<ColumnContract> returning
+    ) => keys.EmitReturning(writer, returning);
 
     /// <summary>走包装那一支时 Emit 在 EmitWrappedPaging 处就返回了，能到这里的一条必然没有分页。
     /// 这是抽象口的形状要求而不是一条分支：写成"到了这里就抛"会是死代码。</summary>
-    protected override void EmitPaging(SqlWriter writer, SelectStatement select)
-    {
-    }
+    protected override void EmitPaging(SqlWriter writer, SelectStatement select) { }
 
     /// <summary>两三层的 ROWNUM 分页，层数是两档：只有 Take 包一层（外层不再需要那个伪列，不产生多余的列）；
     /// 带 Skip 必须再包一层——WHERE ROWNUM ＞ m 直接写在内层永远为空（第 1 行拿到 1 时比较失败就不继续编号），
@@ -105,12 +111,18 @@ public class OracleDialect(DbKind kind, OracleTypes types, OracleKeys keys, Orac
     /// <summary>ANSI 那一份是 UPDATE 表 AS 别名，T-SQL 是 UPDATE 别名 … FROM 表 AS 别名，
     /// 这一族两个都不是：目标位只有一张表，别名那颗参数无处安放。DELETE 共用这一口：
     /// 这一家的 DELETE FROM 表 与 UPDATE 表 在"目标位不接受别名"这一条上同形。</summary>
-    protected override void EmitUpdateTarget(SqlWriter writer, TableRef table) => EmitTableName(writer, table.Table);
+    protected override void EmitUpdateTarget(SqlWriter writer, TableRef table) =>
+        EmitTableName(writer, table.Table);
 
     /// <summary>这一族没有 UPDATE … FROM 也没有 DELETE … USING，带表源的写语句在这里抛而不是悄悄丢掉那些表源：
     /// 一条少了行集的合并 UPDATE 会把同一个值写给整张表，那是最坏的一种静默退化。与 EmitUpdateTarget 是同一条分岔的两半
     /// （不能起别名，也就不能带别的表进来）；DialectBase.EmitJoinedSources 本是覆写点，这里的答案是"带不了，等 MERGE INTO"。</summary>
-    protected override void EmitJoinedSources(SqlWriter writer, string keyword, IReadOnlyList<JoinClause> joins, out SqlExpression? folded)
+    protected override void EmitJoinedSources(
+        SqlWriter writer,
+        string keyword,
+        IReadOnlyList<JoinClause> joins,
+        out SqlExpression? folded
+    )
     {
         folded = null;
 
@@ -119,9 +131,12 @@ public class OracleDialect(DbKind kind, OracleTypes types, OracleKeys keys, Orac
 
         throw new QuickSqlException(
             $"{Kind} 的写语句不接受额外的表源：这一家没有 {keyword.Trim()} 这种子句，"
-            + "带别的表的更新要写成 MERGE INTO … USING (…) ON (…) WHEN MATCHED THEN …，本版本未接（§12.5 末尾那一格）。"
-            + "日常路径不会到这里 —— SupportsJoinedWrites 为 false 时 SaveChanges 整桶退回一句一实体，"
-            + "语义与合并档等价（§12.4 第 1 项），代价是那 " + joins.Count + " 组表源所代表的行各占一次往返。");
+                + "带别的表的更新要写成 MERGE INTO … USING (…) ON (…) WHEN MATCHED THEN …，本版本未接（§12.5 末尾那一格）。"
+                + "日常路径不会到这里 —— SupportsJoinedWrites 为 false 时 SaveChanges 整桶退回一句一实体，"
+                + "语义与合并档等价（§12.4 第 1 项），代价是那 "
+                + joins.Count
+                + " 组表源所代表的行各占一次往返。"
+        );
     }
 
     /// <summary>源在本家起的别名（目标另起 t0）。两家都是不带 AS 的表别名——MERGE 的两个别名都是表位。</summary>

@@ -1,5 +1,4 @@
 using QuickSql.Metadata;
-using QuickSql.Providers;
 using QuickSql.Sql.Ast;
 
 namespace QuickSql.Providers.PostgreSqlBase;
@@ -14,6 +13,14 @@ public sealed class PostgreSqlConcurrency : IConcurrencyStrategy
 
     /// <summary>与 T-SQL 同一个调用点（发射之前合取进 AST 的 WHERE）。NULL 档由调用方先折成 IS NULL：
     /// "col" = NULL 恒为 UNKNOWN，每次保存都成假冲突。</summary>
-    public SqlExpression BuildPredicate(SqlExpression target, ColumnContract column, object? originalValue)
-        => new SqlBinaryExpression(BinaryOperator.Equal, target, new ParameterValue(originalValue, column));
+    public SqlExpression BuildPredicate(
+        SqlExpression target,
+        ColumnContract column,
+        object? originalValue
+    ) =>
+        new SqlBinaryExpression(
+            BinaryOperator.Equal,
+            target,
+            new ParameterValue(originalValue, column)
+        );
 }

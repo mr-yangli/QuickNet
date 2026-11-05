@@ -4,7 +4,6 @@ using System.Globalization;
 using System.Reflection;
 using System.Text;
 using QuickSql.Metadata;
-using QuickSql.Providers;
 
 namespace QuickSql.Providers.PostgreSqlBase;
 
@@ -25,8 +24,15 @@ sealed class PostgreSqlBulkCopyChannel : IBulkCopyChannel
     readonly MethodInfo? _disposeAsync;
     readonly MethodInfo? _dispose;
 
-    PostgreSqlBulkCopyChannel(MethodInfo begin, PropertyInfo timeout, MethodInfo writeRow, MethodInfo complete,
-        MethodInfo asTask, MethodInfo? disposeAsync, MethodInfo? dispose)
+    PostgreSqlBulkCopyChannel(
+        MethodInfo begin,
+        PropertyInfo timeout,
+        MethodInfo writeRow,
+        MethodInfo complete,
+        MethodInfo asTask,
+        MethodInfo? disposeAsync,
+        MethodInfo? dispose
+    )
     {
         _begin = begin;
         _timeout = timeout;
@@ -43,12 +49,18 @@ sealed class PostgreSqlBulkCopyChannel : IBulkCopyChannel
 
     /// <summary>这一家的装载类不欠连接串任何开关（UnavailableBecauseOf 走接口的默认 null）——
     /// 与 MySQL 那家恰成两个样本：那一家真实欠一颗参数，这一家服务端能连上就能装。</summary>
-
-    [RequiresUnreferencedCode("本对象的 MemberInfo 全部来自按类型名与形状的反射查找（TryResolve），裁剪后的驱动走不到这里。")]
+    [RequiresUnreferencedCode(
+        "本对象的 MemberInfo 全部来自按类型名与形状的反射查找（TryResolve），裁剪后的驱动走不到这里。"
+    )]
     [RequiresDynamicCode("与 RequiresUnreferencedCode 同一条：反射调用导入器需要运行时生成代码。")]
-    public async Task<int> WriteAsync(BulkConnection target, BulkCopyRequest request, CancellationToken ct)
+    public async Task<int> WriteAsync(
+        BulkConnection target,
+        BulkCopyRequest request,
+        CancellationToken ct
+    )
     {
-        var importer = await Await(_begin.Invoke(target.Connection, [Statement(request), ct])!).ConfigureAwait(false);
+        var importer = await Await(_begin.Invoke(target.Connection, [Statement(request), ct])!)
+            .ConfigureAwait(false);
 
         // Timeout 的可写性在 TryResolve 里已点死（SetMethod 为空整家不进场），这里直接落值。
         _timeout.SetValue(importer, TimeSpan.FromSeconds(target.TimeoutSeconds));
@@ -78,12 +90,16 @@ sealed class PostgreSqlBulkCopyChannel : IBulkCopyChannel
     /// 反射边界上没有静态泛型，只能"先 await、再按名取 Result"；ValueTask 转 Task 走它自己的 AsTask()
     /// （TryResolve 已点存在）。RequiresUnreferencedCode 落在这颗 helper 上：
     /// 它把整段"按名点成员"的反射边界圈在自己体内，调用方本来就带着同一条税。</summary>
-    [RequiresUnreferencedCode("装箱 awaitable 的 AsTask 与 Result 按名点取：裁剪产物上这条通道不进场（TryResolve 已把泛型形状点死，走到这里即有源）。")]
+    [RequiresUnreferencedCode(
+        "装箱 awaitable 的 AsTask 与 Result 按名点取：裁剪产物上这条通道不进场（TryResolve 已把泛型形状点死，走到这里即有源）。"
+    )]
     [RequiresDynamicCode("反射调用装箱的 ValueTask/Task 成员需要运行时生成代码。")]
     static async Task<object?> Await(object awaitable)
     {
-        var task = awaitable as Task
-            ?? (Task)awaitable.GetType().GetMethod("AsTask", Type.EmptyTypes)!.Invoke(awaitable, null)!;
+        var task =
+            awaitable as Task
+            ?? (Task)
+                awaitable.GetType().GetMethod("AsTask", Type.EmptyTypes)!.Invoke(awaitable, null)!;
 
         await task.ConfigureAwait(false);
 
@@ -108,24 +124,25 @@ sealed class PostgreSqlBulkCopyChannel : IBulkCopyChannel
         return "COPY " + request.DestinationTable + " (" + columns + ") FROM STDIN (FORMAT BINARY)";
     }
 
-    static Type? NetType(Type clrType) => Flatten(clrType) switch
-    {
-        var t when t == typeof(bool) => t,
-        var t when t == typeof(byte) => t,
-        var t when t == typeof(short) => t,
-        var t when t == typeof(int) => t,
-        var t when t == typeof(long) => t,
-        var t when t == typeof(float) => t,
-        var t when t == typeof(double) => t,
-        var t when t == typeof(decimal) => t,
-        var t when t == typeof(string) => t,
-        var t when t == typeof(byte[]) => t,
-        var t when t == typeof(Guid) => t,
-        var t when t == typeof(DateTime) => t,
-        var t when t == typeof(DateTimeOffset) => t,
-        var t when t == typeof(TimeSpan) => t,
-        _ => null,
-    };
+    static Type? NetType(Type clrType) =>
+        Flatten(clrType) switch
+        {
+            var t when t == typeof(bool) => t,
+            var t when t == typeof(byte) => t,
+            var t when t == typeof(short) => t,
+            var t when t == typeof(int) => t,
+            var t when t == typeof(long) => t,
+            var t when t == typeof(float) => t,
+            var t when t == typeof(double) => t,
+            var t when t == typeof(decimal) => t,
+            var t when t == typeof(string) => t,
+            var t when t == typeof(byte[]) => t,
+            var t when t == typeof(Guid) => t,
+            var t when t == typeof(DateTime) => t,
+            var t when t == typeof(DateTimeOffset) => t,
+            var t when t == typeof(TimeSpan) => t,
+            _ => null,
+        };
 
     static Type Flatten(Type clrType)
     {
@@ -138,7 +155,9 @@ sealed class PostgreSqlBulkCopyChannel : IBulkCopyChannel
     /// 五颗成员各有不退的理由：WriteRowAsync 缺了就只能逐格 Write（逐格写会把"缺一颗"错报成"多一列"）；
     /// CompleteAsync 交回的行数是"报不出行数就不算通道"的那一颗，泛型只认 long/ulong 两种（随版本漂，认死一种会把能成的退掉）；
     /// Timeout 缺了批量会静默继承连接的默认超时（与文本层不同的一道默认值），不接；disposal 两条至少一条。</summary>
-    [RequiresUnreferencedCode("按类型名与形状在驱动程序集里找导入器与它的成员（TryResolve 本体），被裁剪的驱动会交回 null。")]
+    [RequiresUnreferencedCode(
+        "按类型名与形状在驱动程序集里找导入器与它的成员（TryResolve 本体），被裁剪的驱动会交回 null。"
+    )]
     [RequiresDynamicCode("反射调用导入器需要运行时生成代码。")]
     internal static PostgreSqlBulkCopyChannel? TryResolve(Assembly driver)
     {
@@ -156,11 +175,16 @@ sealed class PostgreSqlBulkCopyChannel : IBulkCopyChannel
             if (!candidate.IsSubclassOf(typeof(DbConnection)))
                 continue;
 
-            var method = candidate.GetMethod("BeginBinaryImportAsync", [typeof(string), typeof(CancellationToken)]);
+            var method = candidate.GetMethod(
+                "BeginBinaryImportAsync",
+                [typeof(string), typeof(CancellationToken)]
+            );
 
-            if (method is not { ReturnType.IsGenericType: true }
+            if (
+                method is not { ReturnType.IsGenericType: true }
                 || method.ReturnType.GetGenericTypeDefinition() != typeof(Task<>)
-                || method.ReturnType.GetGenericArguments()[0] != importer)
+                || method.ReturnType.GetGenericArguments()[0] != importer
+            )
                 continue;
 
             begin = method;
@@ -168,14 +192,26 @@ sealed class PostgreSqlBulkCopyChannel : IBulkCopyChannel
         }
 
         var timeout = importer.GetProperty("Timeout");
-        var writeRow = importer.GetMethod("WriteRowAsync", [typeof(CancellationToken), typeof(object[])]);
+        var writeRow = importer.GetMethod(
+            "WriteRowAsync",
+            [typeof(CancellationToken), typeof(object[])]
+        );
         var complete = importer.GetMethod("CompleteAsync", [typeof(CancellationToken)]);
 
-        if (begin is null || timeout is null || writeRow is null || complete is null || timeout.SetMethod is null)
+        if (
+            begin is null
+            || timeout is null
+            || writeRow is null
+            || complete is null
+            || timeout.SetMethod is null
+        )
             return null;
 
         // 行数只认 long/ulong 两种泛型参数；AsTask 是把 ValueTask 折进同一个 await 面的那颗，缺了不接。
-        if (!complete.ReturnType.IsGenericType || complete.ReturnType.GetGenericTypeDefinition() != typeof(ValueTask<>))
+        if (
+            !complete.ReturnType.IsGenericType
+            || complete.ReturnType.GetGenericTypeDefinition() != typeof(ValueTask<>)
+        )
             return null;
 
         var count = complete.ReturnType.GetGenericArguments()[0];
@@ -189,11 +225,21 @@ sealed class PostgreSqlBulkCopyChannel : IBulkCopyChannel
             return null;
 
         var disposeAsync = importer.GetMethod("DisposeAsync", Type.EmptyTypes);
-        var dispose = typeof(IDisposable).IsAssignableFrom(importer) ? importer.GetMethod("Dispose", Type.EmptyTypes) : null;
+        var dispose = typeof(IDisposable).IsAssignableFrom(importer)
+            ? importer.GetMethod("Dispose", Type.EmptyTypes)
+            : null;
 
         if (disposeAsync is null && dispose is null)
             return null;
 
-        return new PostgreSqlBulkCopyChannel(begin, timeout, writeRow, complete, asTask, disposeAsync, dispose);
+        return new PostgreSqlBulkCopyChannel(
+            begin,
+            timeout,
+            writeRow,
+            complete,
+            asTask,
+            disposeAsync,
+            dispose
+        );
     }
 }

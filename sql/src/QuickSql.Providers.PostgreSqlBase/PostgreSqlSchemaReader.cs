@@ -1,6 +1,5 @@
 using System.Data.Common;
 using QuickSql.Metadata;
-using QuickSql.Providers;
 
 namespace QuickSql.Providers.PostgreSqlBase;
 
@@ -70,7 +69,11 @@ public sealed class PostgreSqlSchemaReader : ISchemaReader
         WHERE ns.nspname = @schema AND cl.relname = @table AND a.attname = @column AND a.attnum > 0 AND NOT a.attisdropped
         """;
 
-    public async Task<SchemaTable?> ReadTableAsync(DbConnection connection, TableInfo table, CancellationToken ct = default)
+    public async Task<SchemaTable?> ReadTableAsync(
+        DbConnection connection,
+        TableInfo table,
+        CancellationToken ct = default
+    )
     {
         var schema = table.Schema ?? "public";
         var columns = new List<SchemaColumn>();
@@ -88,23 +91,25 @@ public sealed class PostgreSqlSchemaReader : ISchemaReader
             do
             {
                 var dataType = reader.GetString(2);
-                var chars = reader.IsDBNull(3) ? (int?) null : reader.GetInt32(3);
+                var chars = reader.IsDBNull(3) ? (int?)null : reader.GetInt32(3);
 
-                columns.Add(new SchemaColumn(
-                    reader.GetString(1),
-                    StoreType(dataType, chars, reader),
-                    chars,
-                    MaxBytes(dataType, chars),
-                    reader.GetString(7) is "YES",
-                    reader.GetInt32(0))
-                {
-                    Comment = reader.IsDBNull(9) ? string.Empty : reader.GetString(9),
-                    IsIdentity = reader.GetBoolean(8),
-                    IsPrimaryKey = false,
-                    Scale = Scale(dataType, reader),
-                });
-            }
-            while (await reader.ReadAsync(ct).ConfigureAwait(false));
+                columns.Add(
+                    new SchemaColumn(
+                        reader.GetString(1),
+                        StoreType(dataType, chars, reader),
+                        chars,
+                        MaxBytes(dataType, chars),
+                        reader.GetString(7) is "YES",
+                        reader.GetInt32(0)
+                    )
+                    {
+                        Comment = reader.IsDBNull(9) ? string.Empty : reader.GetString(9),
+                        IsIdentity = reader.GetBoolean(8),
+                        IsPrimaryKey = false,
+                        Scale = Scale(dataType, reader),
+                    }
+                );
+            } while (await reader.ReadAsync(ct).ConfigureAwait(false));
         }
 
         await using (var command = Command(connection, TableCommentSql))
@@ -114,10 +119,14 @@ public sealed class PostgreSqlSchemaReader : ISchemaReader
 
             await using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
 
-            tableComment = await reader.ReadAsync(ct).ConfigureAwait(false) && !reader.IsDBNull(0) ? reader.GetString(0) : string.Empty;
+            tableComment =
+                await reader.ReadAsync(ct).ConfigureAwait(false) && !reader.IsDBNull(0)
+                    ? reader.GetString(0)
+                    : string.Empty;
         }
 
-        var indexes = await ReadIndexesAsync(connection, schema, table, columns, ct).ConfigureAwait(false);
+        var indexes = await ReadIndexesAsync(connection, schema, table, columns, ct)
+            .ConfigureAwait(false);
 
         return new SchemaTable(table, [.. columns]) { Comment = tableComment, Indexes = indexes };
     }
@@ -129,9 +138,17 @@ public sealed class PostgreSqlSchemaReader : ISchemaReader
         string schema,
         TableInfo table,
         List<SchemaColumn> columns,
-        CancellationToken ct)
+        CancellationToken ct
+    )
     {
-        var read = new List<(string Name, bool Unique, bool Primary, bool Constraint, List<string> Columns)>();
+        var read =
+            new List<(
+                string Name,
+                bool Unique,
+                bool Primary,
+                bool Constraint,
+                List<string> Columns
+            )>();
 
         await using (var command = Command(connection, IndexesSql))
         {
@@ -158,17 +175,31 @@ public sealed class PostgreSqlSchemaReader : ISchemaReader
             }
         }
 
-        var keys = new HashSet<string>(read.Where(static x => x.Primary).SelectMany(static x => x.Columns), StringComparer.Ordinal);
+        var keys = new HashSet<string>(
+            read.Where(static x => x.Primary).SelectMany(static x => x.Columns),
+            StringComparer.Ordinal
+        );
 
         for (var i = 0; i < columns.Count; i++)
             if (keys.Contains(columns[i].Name))
                 columns[i] = columns[i] with { IsPrimaryKey = true };
 
-        return [.. read.Where(static x => !x.Primary)
-            .Select(x => new SchemaIndex(x.Name, x.Unique, [.. x.Columns]) { IsConstraint = x.Constraint })];
+        return
+        [
+            .. read.Where(static x => !x.Primary)
+                .Select(x => new SchemaIndex(x.Name, x.Unique, [.. x.Columns])
+                {
+                    IsConstraint = x.Constraint,
+                }),
+        ];
     }
 
-    public async Task<LengthSemanticsReading?> ProbeLengthSemanticsAsync(DbConnection connection, TableInfo table, string columnName, CancellationToken ct = default)
+    public async Task<LengthSemanticsReading?> ProbeLengthSemanticsAsync(
+        DbConnection connection,
+        TableInfo table,
+        string columnName,
+        CancellationToken ct = default
+    )
     {
         using var command = Command(connection, ProbeSql);
 
@@ -189,7 +220,12 @@ public sealed class PostgreSqlSchemaReader : ISchemaReader
 
         // 这一家没有第二把尺子：varchar(n) 的 n 恒为字符数。DefinitionByteLength 填同一个数而不是 0——
         // 填 0 会把"问不出答案"写成"答案是没有"（doctor 会报成"这一列长度 0"）。
-        return new LengthSemanticsReading(collation, declared, declared, typeName is "varchar" or "bpchar" or "text");
+        return new LengthSemanticsReading(
+            collation,
+            declared,
+            declared,
+            typeName is "varchar" or "bpchar" or "text"
+        );
     }
 
     /// <summary>这一列有没有存量空值——把一列收紧成 NOT NULL 前问的那一句。
@@ -200,17 +236,19 @@ public sealed class PostgreSqlSchemaReader : ISchemaReader
         DbConnection connection,
         TableInfo table,
         string columnName,
-        CancellationToken ct = default)
+        CancellationToken ct = default
+    )
     {
-        var sql = $"SELECT 1 FROM {Qualified(table)} WHERE {IdentifierPolicy.PostgreSQL.Quote(columnName)} IS NULL LIMIT 1";
+        var sql =
+            $"SELECT 1 FROM {Qualified(table)} WHERE {IdentifierPolicy.PostgreSQL.Quote(columnName)} IS NULL LIMIT 1";
 
         return HasRowAsync(connection, sql, ct);
     }
 
     /// <summary>表名限定与发射侧同一颗默认模式（public）：结构同步连的那条会话可以带着别的
     /// search_path，而这一句探的必须是刚才那张要被 ALTER 的表。</summary>
-    static string Qualified(TableInfo table)
-        => $"{IdentifierPolicy.PostgreSQL.Quote(table.Schema ?? "public")}.{IdentifierPolicy.PostgreSQL.Quote(table.Name)}";
+    static string Qualified(TableInfo table) =>
+        $"{IdentifierPolicy.PostgreSQL.Quote(table.Schema ?? "public")}.{IdentifierPolicy.PostgreSQL.Quote(table.Name)}";
 
     static async Task<bool?> HasRowAsync(DbConnection connection, string sql, CancellationToken ct)
     {
@@ -224,62 +262,74 @@ public sealed class PostgreSqlSchemaReader : ISchemaReader
     /// 手工建的表上 NUMERIC 不带位数而契约侧永远带，别名 int4/bool 与正名同型。
     /// 本家交回 true/false 而不是 null（位数、标度与时间精度三格都读得回来）；
     /// MaxChars 与 Scale 两格是加料（给 doctor 与"缺列就补"用），判形状只看这一个文本口。</summary>
-    public bool? ColumnShapeMatches(ColumnContract expected, SchemaColumn actual)
-        => string.Equals(Normalize(PostgreSqlTypes.Instance.GetStoreType(expected)), Normalize(actual.StoreType), StringComparison.Ordinal);
+    public bool? ColumnShapeMatches(ColumnContract expected, SchemaColumn actual) =>
+        string.Equals(
+            Normalize(PostgreSqlTypes.Instance.GetStoreType(expected)),
+            Normalize(actual.StoreType),
+            StringComparison.Ordinal
+        );
 
     static string Normalize(string storeType)
     {
         var text = storeType.Trim().ToLowerInvariant();
         var open = text.IndexOf('(');
 
-        return open < 0 ? Fold(text) : Fold(text[..open]) + text[open..].Replace(" ", string.Empty, StringComparison.Ordinal);
+        return open < 0
+            ? Fold(text)
+            : Fold(text[..open])
+                + text[open..].Replace(" ", string.Empty, StringComparison.Ordinal);
     }
 
     /// <summary>目录与发射形之间那几颗同义词，一张表收完（pg_type 别名与 information_schema 标准长名都指进来）。</summary>
-    static string Fold(string name) => name switch
-    {
-        "int4" or "int" or "serial" => "integer",
-        "int2" or "smallserial" => "smallint",
-        "int8" or "bigserial" => "bigint",
-        "float4" => "real",
-        "float8" => "double precision",
-        "bool" => "boolean",
-        "dec" or "decimal" => "numeric",
-        "character varying" => "varchar",
-        "character" or "bpchar" => "char",
-        "timestamp without time zone" => "timestamp",
-        "timestamp with time zone" => "timestamptz",
-        "time without time zone" => "time",
-        _ => name,
-    };
+    static string Fold(string name) =>
+        name switch
+        {
+            "int4" or "int" or "serial" => "integer",
+            "int2" or "smallserial" => "smallint",
+            "int8" or "bigserial" => "bigint",
+            "float4" => "real",
+            "float8" => "double precision",
+            "bool" => "boolean",
+            "dec" or "decimal" => "numeric",
+            "character varying" => "varchar",
+            "character" or "bpchar" => "char",
+            "timestamp without time zone" => "timestamp",
+            "timestamp with time zone" => "timestamptz",
+            "time without time zone" => "time",
+            _ => name,
+        };
 
-    static string StoreType(string dataType, int? chars, DbDataReader reader) => dataType switch
-    {
-        "character varying" => chars is { } n ? $"varchar({n})" : "text",
-        "character" => chars is { } n ? $"char({n})" : "char",
-        // 裸 NUMERIC 在这一支交回 NULL 位数（那是"不限定"，不是"0"）；无条件 GetInt32 读到不带括号的 numeric 会抛。
-        "numeric" => reader.IsDBNull(4) ? "numeric" : $"numeric({reader.GetInt32(4)},{reader.GetInt32(5)})",
-        "timestamp without time zone" => Timed("timestamp", reader),
-        "timestamp with time zone" => Timed("timestamptz", reader),
-        "time without time zone" => Timed("time", reader),
-        _ => dataType,
-    };
+    static string StoreType(string dataType, int? chars, DbDataReader reader) =>
+        dataType switch
+        {
+            "character varying" => chars is { } n ? $"varchar({n})" : "text",
+            "character" => chars is { } n ? $"char({n})" : "char",
+            // 裸 NUMERIC 在这一支交回 NULL 位数（那是"不限定"，不是"0"）；无条件 GetInt32 读到不带括号的 numeric 会抛。
+            "numeric" => reader.IsDBNull(4)
+                ? "numeric"
+                : $"numeric({reader.GetInt32(4)},{reader.GetInt32(5)})",
+            "timestamp without time zone" => Timed("timestamp", reader),
+            "timestamp with time zone" => Timed("timestamptz", reader),
+            "time without time zone" => Timed("time", reader),
+            _ => dataType,
+        };
 
-    static string Timed(string name, DbDataReader reader)
-        => reader.IsDBNull(6) ? name : $"{name}({reader.GetInt32(6)})";
+    static string Timed(string name, DbDataReader reader) =>
+        reader.IsDBNull(6) ? name : $"{name}({reader.GetInt32(6)})";
 
     /// <summary>标度在小数族是 numeric_scale，时间族是 datetime_precision：两格在契约侧是同一个词，折成一颗。</summary>
-    static int? Scale(string dataType, DbDataReader reader) => dataType switch
-    {
-        "numeric" => reader.IsDBNull(5) ? null : reader.GetInt32(5),
-        "timestamp without time zone" or "timestamp with time zone" or "time without time zone" =>
-            reader.IsDBNull(6) ? null : reader.GetInt32(6),
-        _ => null,
-    };
+    static int? Scale(string dataType, DbDataReader reader) =>
+        dataType switch
+        {
+            "numeric" => reader.IsDBNull(5) ? null : reader.GetInt32(5),
+            "timestamp without time zone"
+            or "timestamp with time zone"
+            or "time without time zone" => reader.IsDBNull(6) ? null : reader.GetInt32(6),
+            _ => null,
+        };
 
     /// <summary>字节上限在这家问不出来，所以只在 bytea 上给一个"按字节量"的事实，其余留 null。</summary>
-    static int? MaxBytes(string dataType, int? chars)
-        => dataType is "bytea" ? chars : null;
+    static int? MaxBytes(string dataType, int? chars) => dataType is "bytea" ? chars : null;
 
     static DbCommand Command(DbConnection connection, string sql)
     {

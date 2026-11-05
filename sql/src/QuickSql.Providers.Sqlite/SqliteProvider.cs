@@ -39,8 +39,12 @@ public sealed class SqliteProvider : IDbProvider
     /// <summary>位掩码本体，五位；不声明的各档逐条理由在类注释里。
     /// 它不是 virtual 而是一句直给：这一族今天没有叶子，而"不留一颗没人覆写的虚函数"这条纪律已经立过四次。</summary>
     public DbCapabilities Capabilities =>
-        DbCapabilities.Paging_LimitOffset | DbCapabilities.Returning | DbCapabilities.Identity_ExplicitInsert |
-        DbCapabilities.Schemas | DbCapabilities.MultiStatement | DbCapabilities.Transactions;
+        DbCapabilities.Paging_LimitOffset
+        | DbCapabilities.Returning
+        | DbCapabilities.Identity_ExplicitInsert
+        | DbCapabilities.Schemas
+        | DbCapabilities.MultiStatement
+        | DbCapabilities.Transactions;
 
     public IConnectorFactory Connectors { get; }
 
@@ -86,7 +90,10 @@ public sealed class SqliteProvider : IDbProvider
 
     /// <summary>打开再关闭一次连接：文件不存在时驱动会自动创建，已存在时是空操作。
     /// 不建表、不写任何内容——那是 SchemaSyncer 的职责。</summary>
-    public async Task EnsureDatabaseExistsAsync(string connectionString, CancellationToken ct = default)
+    public async Task EnsureDatabaseExistsAsync(
+        string connectionString,
+        CancellationToken ct = default
+    )
     {
         await using var connection = Connectors.CreateConnection(connectionString);
         await connection.OpenAsync(ct).ConfigureAwait(false);

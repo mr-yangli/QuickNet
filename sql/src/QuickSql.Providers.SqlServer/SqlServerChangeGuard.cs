@@ -1,6 +1,5 @@
 using System.Collections.Frozen;
 using QuickSql.Metadata;
-using QuickSql.Providers;
 using QuickSql.Sql;
 using QuickSql.Sql.Ast;
 
@@ -19,12 +18,24 @@ public sealed class SqlServerChangeGuard : IChangeGuard
     /// 名字取 ( 之前的那一段，所以 XML 与 xml、带长度的 VARCHAR(n) 与不带的都能命中。
     /// rowversion 不在这一列里：它名义上是 binary(8)，WHERE [Version] = @p 跑得通，
     /// 把它算成不可比就会让带并发列的表整批退回逐条。</summary>
-    static readonly FrozenSet<string> Incomparable = new[] { "text", "ntext", "image", "xml", "geography", "geometry", "sql_variant" }
-        .ToFrozenSet(StringComparer.OrdinalIgnoreCase);
+    static readonly FrozenSet<string> Incomparable = new[]
+    {
+        "text",
+        "ntext",
+        "image",
+        "xml",
+        "geography",
+        "geometry",
+        "sql_variant",
+    }.ToFrozenSet(StringComparer.OrdinalIgnoreCase);
 
     public bool Compares(ColumnContract column) => !Incomparable.Contains(BaseType(column));
 
-    public SqlExpression BuildDifference(ColumnContract column, SqlExpression stored, SqlExpression incoming)
+    public SqlExpression BuildDifference(
+        ColumnContract column,
+        SqlExpression stored,
+        SqlExpression incoming
+    )
     {
         var different = new SqlBinaryExpression(BinaryOperator.NotEqual, stored, incoming);
 

@@ -1,5 +1,4 @@
 using System.Data.Common;
-using QuickSql.Providers;
 
 namespace QuickSql.Providers.PostgreSqlBase;
 
@@ -28,7 +27,9 @@ public sealed class PostgreSqlConnectorFactory(DbProviderFactory factory) : ICon
 
     public DbConnection CreateConnection(string connectionString)
     {
-        var connection = factory.CreateConnection() ?? throw new QuickSqlException($"{factory.GetType().Name} 未实现 CreateConnection");
+        var connection =
+            factory.CreateConnection()
+            ?? throw new QuickSqlException($"{factory.GetType().Name} 未实现 CreateConnection");
 
         connection.ConnectionString = connectionString;
 

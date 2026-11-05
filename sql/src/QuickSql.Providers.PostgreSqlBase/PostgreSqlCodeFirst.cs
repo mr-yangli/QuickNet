@@ -1,5 +1,4 @@
 using QuickSql.Metadata;
-using QuickSql.Providers;
 using QuickSql.Sql;
 
 namespace QuickSql.Providers.PostgreSqlBase;
@@ -34,9 +33,14 @@ public class PostgreSqlCodeFirst(PostgreSqlTypes types) : ICodeFirstDialect
 
         if (contract.PrimaryKey.Length > 0)
         {
-            var key = string.Join(", ", contract.PrimaryKey.Select(c => Identifiers.Quote(c.ColumnName)));
+            var key = string.Join(
+                ", ",
+                contract.PrimaryKey.Select(c => Identifiers.Quote(c.ColumnName))
+            );
 
-            parts.Add($"CONSTRAINT {Identifiers.Quote("PK_" + contract.Table.Name)} PRIMARY KEY ({key})");
+            parts.Add(
+                $"CONSTRAINT {Identifiers.Quote("PK_" + contract.Table.Name)} PRIMARY KEY ({key})"
+            );
         }
 
         writer.Append(string.Join(", ", parts)).Append(')');
@@ -103,7 +107,9 @@ public class PostgreSqlCodeFirst(PostgreSqlTypes types) : ICodeFirstDialect
         // 聚簇在这一家不是索引的一种而是一条命令（CLUSTER），NonClustered/Clustered 都落成普通索引；
         // 全文检索要的是另一个访问方法 + 一个表达式，悄悄发成 btree 会建出查不了全文的索引。
         if (index.Kind == IndexKind.FullText)
-            throw new QuickSqlException($"PG 系不支持 CREATE INDEX … FULLTEXT 这种写法，全文索引要 USING gin (to_tsvector(…))，尚未接线（§9.2）");
+            throw new QuickSqlException(
+                $"PG 系不支持 CREATE INDEX … FULLTEXT 这种写法，全文索引要 USING gin (to_tsvector(…))，尚未接线（§9.2）"
+            );
 
         writer.Append(index.Kind == IndexKind.Unique ? "CREATE UNIQUE INDEX " : "CREATE INDEX ");
         writer.Append(Identifiers.Quote(index.Name)).Append(" ON ");
@@ -148,7 +154,10 @@ public class PostgreSqlCodeFirst(PostgreSqlTypes types) : ICodeFirstDialect
     {
         var stored = types.ApplyStorageDefaults(column);
 
-        writer.Append(Identifiers.Quote(column.ColumnName)).Append(' ').Append(types.GetStoreType(stored));
+        writer
+            .Append(Identifiers.Quote(column.ColumnName))
+            .Append(' ')
+            .Append(types.GetStoreType(stored));
 
         if (column.IsIdentity)
             writer.Append(IdentityClause);
@@ -170,7 +179,7 @@ public class PostgreSqlCodeFirst(PostgreSqlTypes types) : ICodeFirstDialect
     /// standard_conforming_strings 默认档上反斜杠不是转义，与谓词侧同一条依据。</summary>
     void EmitDefault(SqlWriter writer, ColumnContract column)
     {
-        if (column.DefaultValue is not {} value)
+        if (column.DefaultValue is not { } value)
             return;
 
         writer.Append(" DEFAULT ");

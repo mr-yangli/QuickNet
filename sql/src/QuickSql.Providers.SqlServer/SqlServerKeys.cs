@@ -1,5 +1,4 @@
 using QuickSql.Metadata;
-using QuickSql.Providers;
 using QuickSql.Sql;
 
 namespace QuickSql.Providers.SqlServer;
@@ -14,11 +13,16 @@ public sealed class SqlServerKeys : IKeyStrategy
     public bool SupportsExplicitIdentityInsert => true;
 
     /// <summary>调用方负责两侧的空格：这里只落地 OUTPUT inserted.[a], inserted.[b]。</summary>
-    public void EmitReturning(SqlWriter writer, IReadOnlyList<ColumnContract> returning) => EmitReturning(writer, returning, "inserted");
+    public void EmitReturning(SqlWriter writer, IReadOnlyList<ColumnContract> returning) =>
+        EmitReturning(writer, returning, "inserted");
 
     /// <summary>T-SQL 的 OUTPUT 在 INSERT/UPDATE 取 inserted、在 DELETE 取 deleted，
     /// 而 IKeyStrategy 只有一个不带前缀的入口，所以方言层走这个重载。</summary>
-    public void EmitReturning(SqlWriter writer, IReadOnlyList<ColumnContract> returning, string prefix)
+    public void EmitReturning(
+        SqlWriter writer,
+        IReadOnlyList<ColumnContract> returning,
+        string prefix
+    )
     {
         writer.Append("OUTPUT ");
 
@@ -49,6 +53,6 @@ public sealed class SqlServerKeys : IKeyStrategy
 
     /// <summary>不可达（SupportsBulkKeyRetrieval 为 true 时 Core 不会走到这里）。
     /// 留抛不留空体：将来谁把批量位掰了而没想清楚这一位，要撞见一条消息而不是一颗 null。</summary>
-    public void EmitPostStatementKeyRead(SqlWriter writer, ColumnContract key)
-        => throw new QuickSqlException("T-SQL 走 OUTPUT inserted.*，语句后回读那一档在这一家不可达。");
+    public void EmitPostStatementKeyRead(SqlWriter writer, ColumnContract key) =>
+        throw new QuickSqlException("T-SQL 走 OUTPUT inserted.*，语句后回读那一档在这一家不可达。");
 }

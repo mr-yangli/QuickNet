@@ -24,8 +24,16 @@ sealed class SqlServerBulkCopy : IBulkCopyChannel
     readonly MethodInfo _addMapping;
     readonly MethodInfo _write;
 
-    SqlServerBulkCopy(object options, ConstructorInfo ctor, PropertyInfo destination, PropertyInfo timeout,
-        PropertyInfo mappings, MethodInfo addMapping, PropertyInfo rowsCopied, MethodInfo write)
+    SqlServerBulkCopy(
+        object options,
+        ConstructorInfo ctor,
+        PropertyInfo destination,
+        PropertyInfo timeout,
+        PropertyInfo mappings,
+        MethodInfo addMapping,
+        PropertyInfo rowsCopied,
+        MethodInfo write
+    )
     {
         _options = options;
         _ctor = ctor;
@@ -39,9 +47,15 @@ sealed class SqlServerBulkCopy : IBulkCopyChannel
 
     public bool SupportsColumn(ColumnContract column) => NetType(column) is not null;
 
-    [RequiresUnreferencedCode("本对象的 MemberInfo 全部来自按类型名的反射查找（TryResolve 那一句），裁剪后的驱动走不到这里。")]
+    [RequiresUnreferencedCode(
+        "本对象的 MemberInfo 全部来自按类型名的反射查找（TryResolve 那一句），裁剪后的驱动走不到这里。"
+    )]
     [RequiresDynamicCode("与 RequiresUnreferencedCode 同一条：反射调用装载类需要运行时生成代码。")]
-    public async Task<int> WriteAsync(BulkConnection target, BulkCopyRequest request, CancellationToken ct)
+    public async Task<int> WriteAsync(
+        BulkConnection target,
+        BulkCopyRequest request,
+        CancellationToken ct
+    )
     {
         // 构造子只认这三件：连接、开关、外部事务。事务交 null 也是对的形状（那一批归连接自己的隐式事务）。
         var bulk = _ctor.Invoke([target.Connection, _options, target.Transaction]);
@@ -68,7 +82,9 @@ sealed class SqlServerBulkCopy : IBulkCopyChannel
 
             // RowsCopied 是这一族唯一的"进了几行"。它不存在时 TryResolve 已经交回 null（整家没有通道），
             // 所以走到这里就一定拿得出数——而拿不出数的那一种宁可没有通道，也不报一个看着对的数。
-            return checked((int)Convert.ToInt64(_rowsCopied.GetValue(bulk), CultureInfo.InvariantCulture));
+            return checked(
+                (int)Convert.ToInt64(_rowsCopied.GetValue(bulk), CultureInfo.InvariantCulture)
+            );
         }
         finally
         {
@@ -83,25 +99,29 @@ sealed class SqlServerBulkCopy : IBulkCopyChannel
     /// 已经折成整数，拿 ClrType 原样判会把每一条带枚举的批量白退一次。名单写成一颗颗 typeof 而不是数组，
     /// 是因为 DataColumnCollection.Add 的参数带 DynamicallyAccessedMembers、分析器只认编译期看得见的
     /// typeof 这一种证据（数组元素在它眼里是无源的，IL2073），白名单因此同时是"裁剪器要保住的那几张类型"的清单。</summary>
-    [return: DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicProperties)]
-    static Type? NetType(ColumnContract column) => Flatten(column.ClrType) switch
-    {
-        var t when t == typeof(bool) => typeof(bool),
-        var t when t == typeof(byte) => typeof(byte),
-        var t when t == typeof(short) => typeof(short),
-        var t when t == typeof(int) => typeof(int),
-        var t when t == typeof(long) => typeof(long),
-        var t when t == typeof(float) => typeof(float),
-        var t when t == typeof(double) => typeof(double),
-        var t when t == typeof(decimal) => typeof(decimal),
-        var t when t == typeof(string) => typeof(string),
-        var t when t == typeof(byte[]) => typeof(byte[]),
-        var t when t == typeof(Guid) => typeof(Guid),
-        var t when t == typeof(DateTime) => typeof(DateTime),
-        var t when t == typeof(DateTimeOffset) => typeof(DateTimeOffset),
-        var t when t == typeof(TimeSpan) => typeof(TimeSpan),
-        _ => null,
-    };
+    [return: DynamicallyAccessedMembers(
+        DynamicallyAccessedMemberTypes.PublicFields
+            | DynamicallyAccessedMemberTypes.PublicProperties
+    )]
+    static Type? NetType(ColumnContract column) =>
+        Flatten(column.ClrType) switch
+        {
+            var t when t == typeof(bool) => typeof(bool),
+            var t when t == typeof(byte) => typeof(byte),
+            var t when t == typeof(short) => typeof(short),
+            var t when t == typeof(int) => typeof(int),
+            var t when t == typeof(long) => typeof(long),
+            var t when t == typeof(float) => typeof(float),
+            var t when t == typeof(double) => typeof(double),
+            var t when t == typeof(decimal) => typeof(decimal),
+            var t when t == typeof(string) => typeof(string),
+            var t when t == typeof(byte[]) => typeof(byte[]),
+            var t when t == typeof(Guid) => typeof(Guid),
+            var t when t == typeof(DateTime) => typeof(DateTime),
+            var t when t == typeof(DateTimeOffset) => typeof(DateTimeOffset),
+            var t when t == typeof(TimeSpan) => typeof(TimeSpan),
+            _ => null,
+        };
 
     static Type Flatten(Type clrType)
     {
@@ -129,12 +149,15 @@ sealed class SqlServerBulkCopy : IBulkCopyChannel
     /// 宁缺毋滥的那一半是开关：少了 CheckConstraints 检查约束不验、少了 FireTriggers 插入触发器不跑，
     /// 两者都会让"批量"与"逐条"在库里不等价，而这一档的默认必须是等价的那一个。
     /// 数值一个都没写死：两个开关的位是从驱动的枚举上按名字读的。</summary>
-    [RequiresUnreferencedCode("按类型名在驱动程序集里找装载类与它的成员（TryResolve 本体），被裁剪的驱动会交回 null。")]
+    [RequiresUnreferencedCode(
+        "按类型名在驱动程序集里找装载类与它的成员（TryResolve 本体），被裁剪的驱动会交回 null。"
+    )]
     [RequiresDynamicCode("反射调用装载类需要运行时生成代码。")]
     internal static SqlServerBulkCopy? TryResolve(Assembly driver)
     {
-        var type = driver.GetType("Microsoft.Data.SqlClient.SqlBulkCopy", throwOnError: false)
-                ?? driver.GetType("System.Data.SqlClient.SqlBulkCopy", throwOnError: false);
+        var type =
+            driver.GetType("Microsoft.Data.SqlClient.SqlBulkCopy", throwOnError: false)
+            ?? driver.GetType("System.Data.SqlClient.SqlBulkCopy", throwOnError: false);
 
         if (type is null || type.Namespace is not { Length: > 0 } ns)
             return null;
@@ -149,14 +172,35 @@ sealed class SqlServerBulkCopy : IBulkCopyChannel
         var timeout = type.GetProperty("BulkCopyTimeout");
         var mappings = type.GetProperty("ColumnMappings");
         var rowsCopied = type.GetProperty("RowsCopied");
-        var write = type.GetMethod("WriteToServerAsync", [typeof(DataTable), typeof(CancellationToken)]);
+        var write = type.GetMethod(
+            "WriteToServerAsync",
+            [typeof(DataTable), typeof(CancellationToken)]
+        );
 
-        if (ctor is null || destination is null || timeout is null || mappings is null || rowsCopied is null || write is null)
+        if (
+            ctor is null
+            || destination is null
+            || timeout is null
+            || mappings is null
+            || rowsCopied is null
+            || write is null
+        )
             return null;
 
         var add = mappings.PropertyType.GetMethod("Add", [typeof(string), typeof(string)]);
 
-        return add is null ? null : new SqlServerBulkCopy(flags, ctor, destination, timeout, mappings, add, rowsCopied, write);
+        return add is null
+            ? null
+            : new SqlServerBulkCopy(
+                flags,
+                ctor,
+                destination,
+                timeout,
+                mappings,
+                add,
+                rowsCopied,
+                write
+            );
 
         // 那一颗「收连接、开关、外部事务」的构造子：按形状找，两家都能找到——
         // System.Data.SqlClient 收 (DbConnection, options, DbTransaction)，而 Microsoft.Data.SqlClient
@@ -169,10 +213,12 @@ sealed class SqlServerBulkCopy : IBulkCopyChannel
             {
                 var parameters = candidate.GetParameters();
 
-                if (parameters.Length == 3
+                if (
+                    parameters.Length == 3
                     && parameters[0].ParameterType.IsSubclassOf(typeof(DbConnection))
                     && parameters[1].ParameterType == options
-                    && parameters[2].ParameterType.IsSubclassOf(typeof(DbTransaction)))
+                    && parameters[2].ParameterType.IsSubclassOf(typeof(DbTransaction))
+                )
                     return candidate;
             }
 
@@ -188,9 +234,14 @@ sealed class SqlServerBulkCopy : IBulkCopyChannel
             // "两家、所有版本的位序相同"，而这个赌注没有复点可付。
             return check is null || fire is null
                 ? null
-                : Enum.ToObject(enumeration, Convert.ToInt64(check, CultureInfo.InvariantCulture) | Convert.ToInt64(fire, CultureInfo.InvariantCulture));
+                : Enum.ToObject(
+                    enumeration,
+                    Convert.ToInt64(check, CultureInfo.InvariantCulture)
+                        | Convert.ToInt64(fire, CultureInfo.InvariantCulture)
+                );
 
-            static object? Value(Type enumeration, string name) => enumeration.GetField(name)?.GetValue(null);
+            static object? Value(Type enumeration, string name) =>
+                enumeration.GetField(name)?.GetValue(null);
         }
     }
 }

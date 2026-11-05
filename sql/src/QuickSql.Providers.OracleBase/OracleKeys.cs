@@ -1,6 +1,5 @@
 using System.Text;
 using QuickSql.Metadata;
-using QuickSql.Providers;
 using QuickSql.Sql;
 
 namespace QuickSql.Providers.OracleBase;
@@ -21,12 +20,14 @@ public sealed class OracleKeys : IKeyStrategy
     /// <summary>抛，而不是发一条"看着像在回填"的语句。INSERT 与 UPDATE 两档、前置与后置两种位置共用同一条文案。
     /// 这一口刻意不是 virtual：能让它成立的唯一条件是"这家有了 OUT 绑定或语句后回读"，
     /// 而那一天要改的是 IKeyStrategy 本身，不是在这里留一颗没人覆写的虚函数。</summary>
-    public void EmitReturning(SqlWriter writer, IReadOnlyList<ColumnContract> returning)
-        => throw new QuickSqlException($"Oracle 血统没有可作为结果集发出的 OUTPUT/RETURNING，而本次请求要回填（{Columns(returning)}）。"
-            + "两条路各缺一个东西：RETURNING … INTO 要的是 OUT 绑定（AdoParameter 没有方向位，那一格照旧缺）；"
-            + "语句后回读那口子 v0.34 已经立在 IKeyStrategy 上，但这一家拿哪颗表达式回读（IDENTITYCURRVAL 那一档）"
-            + "从未被本仓库的任何一台实例问证过，所以这一位也声明不了。"
-            + "今天请自己生成主键（Guid/雪花）并直接用 ExecuteAffrowsAsync，或等那一颗表达式有出处（§14 记着重开条件）。");
+    public void EmitReturning(SqlWriter writer, IReadOnlyList<ColumnContract> returning) =>
+        throw new QuickSqlException(
+            $"Oracle 血统没有可作为结果集发出的 OUTPUT/RETURNING，而本次请求要回填（{Columns(returning)}）。"
+                + "两条路各缺一个东西：RETURNING … INTO 要的是 OUT 绑定（AdoParameter 没有方向位，那一格照旧缺）；"
+                + "语句后回读那口子 v0.34 已经立在 IKeyStrategy 上，但这一家拿哪颗表达式回读（IDENTITYCURRVAL 那一档）"
+                + "从未被本仓库的任何一台实例问证过，所以这一位也声明不了。"
+                + "今天请自己生成主键（Guid/雪花）并直接用 ExecuteAffrowsAsync，或等那一颗表达式有出处（§14 记着重开条件）。"
+        );
 
     static string Columns(IReadOnlyList<ColumnContract> returning)
     {
@@ -54,6 +55,8 @@ public sealed class OracleKeys : IKeyStrategy
 
     /// <summary>与 EmitReturning 同一立场：发不出一条有出处的回读句就抛。Core 只在
     /// SupportsPostStatementKeyRead 为 true 时才调这里，所以今天这一句不可达——留抛不留空体。</summary>
-    public void EmitPostStatementKeyRead(SqlWriter writer, ColumnContract key)
-        => throw new QuickSqlException("Oracle 血统的语句后回读表达式从未被本仓库问证过，这一位不可达（理由见 SupportsPostStatementKeyRead）。");
+    public void EmitPostStatementKeyRead(SqlWriter writer, ColumnContract key) =>
+        throw new QuickSqlException(
+            "Oracle 血统的语句后回读表达式从未被本仓库问证过，这一位不可达（理由见 SupportsPostStatementKeyRead）。"
+        );
 }

@@ -1,6 +1,5 @@
 using System.Collections.Frozen;
 using QuickSql.Metadata;
-using QuickSql.Providers;
 
 namespace QuickSql.Providers.PostgreSqlBase;
 
@@ -11,7 +10,9 @@ public sealed class PostgreSqlTypes : ITypeMap
 {
     public static PostgreSqlTypes Instance { get; } = new();
 
-    static readonly FrozenDictionary<string, Type> StoreToClr = new Dictionary<string, Type>(StringComparer.OrdinalIgnoreCase)
+    static readonly FrozenDictionary<string, Type> StoreToClr = new Dictionary<string, Type>(
+        StringComparer.OrdinalIgnoreCase
+    )
     {
         ["smallint"] = typeof(short),
         ["int2"] = typeof(short),
@@ -78,14 +79,17 @@ public sealed class PostgreSqlTypes : ITypeMap
             var t when t == typeof(ulong) => "NUMERIC(20,0)",
             var t when t == typeof(float) => "REAL",
             var t when t == typeof(double) => "DOUBLE PRECISION",
-            var t when t == typeof(decimal) => $"NUMERIC({column.Precision ?? 18},{column.Scale ?? 4})",
+            var t when t == typeof(decimal) =>
+                $"NUMERIC({column.Precision ?? 18},{column.Scale ?? 4})",
             var t when t == typeof(DateTime) => "TIMESTAMP(3)",
             var t when t == typeof(DateTimeOffset) => "TIMESTAMPTZ(3)",
             var t when t == typeof(DateOnly) => "DATE",
             var t when t == typeof(TimeOnly) || t == typeof(TimeSpan) => "TIME(3)",
             var t when t == typeof(Guid) => "UUID",
             var t when t == typeof(char) => "CHAR(1)",
-            _ => throw new QuickSqlException($"PG 系（金仓/openGauss/瀚高）未登记 CLR 类型 {clrType.Name} 的存储类型，请显式给 [Column(TypeName=...)]"),
+            _ => throw new QuickSqlException(
+                $"PG 系（金仓/openGauss/瀚高）未登记 CLR 类型 {clrType.Name} 的存储类型，请显式给 [Column(TypeName=...)]"
+            ),
         };
     }
 
@@ -110,7 +114,8 @@ public sealed class PostgreSqlTypes : ITypeMap
         };
     }
 
-    public bool TryGetClrType(string storeTypeName, out Type? clrType) => StoreToClr.TryGetValue(storeTypeName, out clrType);
+    public bool TryGetClrType(string storeTypeName, out Type? clrType) =>
+        StoreToClr.TryGetValue(storeTypeName, out clrType);
 
     /// <summary>恒 Char：varchar(n) 与 char(n) 的 n 都是字符数，
     /// 这一家没有"同一类型名在有的排序规则下是字节、在下一个是字符"那种分岔。</summary>

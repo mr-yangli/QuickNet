@@ -17,8 +17,15 @@ public static class Word
     {
         options ??= new WordOptions();
         var directory = Path.GetDirectoryName(Path.GetFullPath(path));
-        if (!string.IsNullOrEmpty(directory)) Directory.CreateDirectory(directory);
-        using var fs = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None, 1 << 16);
+        if (!string.IsNullOrEmpty(directory))
+            Directory.CreateDirectory(directory);
+        using var fs = new FileStream(
+            path,
+            FileMode.Create,
+            FileAccess.Write,
+            FileShare.None,
+            1 << 16
+        );
         new DocxWriter(options).Write(fs, value);
     }
 
@@ -30,8 +37,12 @@ public static class Word
     }
 
     /// <summary>Asynchronously writes <paramref name="value"/> to a .docx file.</summary>
-    public static Task SaveAsAsync(string path, object value, WordOptions? options = null, CancellationToken ct = default)
-        => Task.Run(() => SaveAs(path, value, options), ct);
+    public static Task SaveAsAsync(
+        string path,
+        object value,
+        WordOptions? options = null,
+        CancellationToken ct = default
+    ) => Task.Run(() => SaveAs(path, value, options), ct);
 
     /// <summary>Serialises <paramref name="value"/> and returns the .docx bytes.</summary>
     public static byte[] GetAsByteArray(object value, WordOptions? options = null)
@@ -42,17 +53,31 @@ public static class Word
     }
 
     /// <summary>Writes <paramref name="lines"/> as a prose .docx (one paragraph per line), replacing the file if it exists.</summary>
-    public static void SaveLines(string path, IEnumerable<string> lines, WordOptions? options = null)
+    public static void SaveLines(
+        string path,
+        IEnumerable<string> lines,
+        WordOptions? options = null
+    )
     {
         var directory = Path.GetDirectoryName(Path.GetFullPath(path));
-        if (!string.IsNullOrEmpty(directory)) Directory.CreateDirectory(directory);
-        using var fs = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None, 1 << 16);
+        if (!string.IsNullOrEmpty(directory))
+            Directory.CreateDirectory(directory);
+        using var fs = new FileStream(
+            path,
+            FileMode.Create,
+            FileAccess.Write,
+            FileShare.None,
+            1 << 16
+        );
         new DocxWriter(options ?? new WordOptions()).WriteLines(fs, lines);
     }
 
     /// <summary>Writes <paramref name="lines"/> as a prose .docx into a stream.</summary>
-    public static void SaveLines(Stream stream, IEnumerable<string> lines, WordOptions? options = null)
-        => new DocxWriter(options ?? new WordOptions()).WriteLines(stream, lines);
+    public static void SaveLines(
+        Stream stream,
+        IEnumerable<string> lines,
+        WordOptions? options = null
+    ) => new DocxWriter(options ?? new WordOptions()).WriteLines(stream, lines);
 
     /// <summary>Serialises <paramref name="lines"/> and returns the .docx bytes.</summary>
     public static byte[] GetLinesAsByteArray(IEnumerable<string> lines, WordOptions? options = null)
@@ -68,17 +93,26 @@ public static class Word
     /// </summary>
     public static WordDocument Read(string path, WordReadOptions? options = null)
     {
-        using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 1 << 16);
+        using var fs = new FileStream(
+            path,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read,
+            1 << 16
+        );
         return DocxReader.Read(fs, options ?? new WordReadOptions());
     }
 
     /// <summary>Reads a .docx package from a stream (non-seekable streams are buffered first).</summary>
-    public static WordDocument Read(Stream stream, WordReadOptions? options = null)
-        => DocxReader.Read(stream, options ?? new WordReadOptions());
+    public static WordDocument Read(Stream stream, WordReadOptions? options = null) =>
+        DocxReader.Read(stream, options ?? new WordReadOptions());
 
     /// <summary>Asynchronously reads a .docx file.</summary>
-    public static Task<WordDocument> ReadAsync(string path, WordReadOptions? options = null, CancellationToken ct = default)
-        => Task.Run(() => Read(path, options), ct);
+    public static Task<WordDocument> ReadAsync(
+        string path,
+        WordReadOptions? options = null,
+        CancellationToken ct = default
+    ) => Task.Run(() => Read(path, options), ct);
 
     // ---------------------------------------------------------------------------------------------
     // Templates
@@ -94,43 +128,89 @@ public static class Word
     /// <param name="templatePath">Template .docx path.</param>
     /// <param name="value">Placeholder values.</param>
     /// <param name="options">Template settings; null uses defaults.</param>
-    public static void SaveAsByTemplate(string outputPath, string templatePath, object value, TemplateOptions? options = null)
+    public static void SaveAsByTemplate(
+        string outputPath,
+        string templatePath,
+        object value,
+        TemplateOptions? options = null
+    )
     {
         options ??= new TemplateOptions();
         var directory = Path.GetDirectoryName(Path.GetFullPath(outputPath));
-        if (!string.IsNullOrEmpty(directory)) Directory.CreateDirectory(directory);
-        using var fs = new FileStream(outputPath, FileMode.Create, FileAccess.Write, FileShare.None, 1 << 16);
-        using var template = new FileStream(templatePath, FileMode.Open, FileAccess.Read, FileShare.Read, 1 << 16);
+        if (!string.IsNullOrEmpty(directory))
+            Directory.CreateDirectory(directory);
+        using var fs = new FileStream(
+            outputPath,
+            FileMode.Create,
+            FileAccess.Write,
+            FileShare.None,
+            1 << 16
+        );
+        using var template = new FileStream(
+            templatePath,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read,
+            1 << 16
+        );
         TemplateEngine.Render(template, fs, value, options);
     }
 
     /// <summary>Stream overload of <see cref="SaveAsByTemplate(string, string, object, TemplateOptions?)"/>; the template is read from a file.</summary>
-    public static void SaveAsByTemplate(Stream output, string templatePath, object value, TemplateOptions? options = null)
+    public static void SaveAsByTemplate(
+        Stream output,
+        string templatePath,
+        object value,
+        TemplateOptions? options = null
+    )
     {
         options ??= new TemplateOptions();
-        using var template = new FileStream(templatePath, FileMode.Open, FileAccess.Read, FileShare.Read, 1 << 16);
+        using var template = new FileStream(
+            templatePath,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read,
+            1 << 16
+        );
         TemplateEngine.Render(template, output, value, options);
     }
 
     /// <summary>Template overload taking the template as a stream; any seekability, since it is buffered first.</summary>
-    public static void SaveAsByTemplate(Stream output, Stream template, object value, TemplateOptions? options = null)
+    public static void SaveAsByTemplate(
+        Stream output,
+        Stream template,
+        object value,
+        TemplateOptions? options = null
+    )
     {
         options ??= new TemplateOptions();
         TemplateEngine.Render(template, output, value, options);
     }
 
     /// <summary>Asynchronously fills a .docx template into a file.</summary>
-    public static Task SaveAsByTemplateAsync(string outputPath, string templatePath, object value,
-        TemplateOptions? options = null, CancellationToken ct = default)
-        => Task.Run(() => SaveAsByTemplate(outputPath, templatePath, value, options), ct);
+    public static Task SaveAsByTemplateAsync(
+        string outputPath,
+        string templatePath,
+        object value,
+        TemplateOptions? options = null,
+        CancellationToken ct = default
+    ) => Task.Run(() => SaveAsByTemplate(outputPath, templatePath, value, options), ct);
 
     /// <summary>Asynchronously fills a .docx template into a stream — the shape an ASP.NET response wants.</summary>
-    public static Task SaveAsByTemplateAsync(Stream output, string templatePath, object value,
-        TemplateOptions? options = null, CancellationToken ct = default)
-        => Task.Run(() => SaveAsByTemplate(output, templatePath, value, options), ct);
+    public static Task SaveAsByTemplateAsync(
+        Stream output,
+        string templatePath,
+        object value,
+        TemplateOptions? options = null,
+        CancellationToken ct = default
+    ) => Task.Run(() => SaveAsByTemplate(output, templatePath, value, options), ct);
 
     /// <summary>Fills a .docx template and returns the resulting package bytes.</summary>
-    public static byte[] GetAsByteArrayByTemplate(string templatePath, object value, TemplateOptions? options = null)
+    public static byte[] GetAsByteArrayByTemplate(
+        string templatePath,
+        object value,
+        TemplateOptions? options = null
+    )
     {
         using var ms = new MemoryStream();
         SaveAsByTemplate(ms, templatePath, value, options);

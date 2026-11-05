@@ -1,5 +1,4 @@
 using System.Data.Common;
-using QuickSql.Providers;
 using QuickSql.Sql;
 using QuickSql.Values;
 
@@ -34,13 +33,18 @@ public abstract class PostgreSqlProviderBase : IDbProvider
 
     /// <summary>血统的第一道缝：DDL 缺省交给 PostgreSqlCodeFirst。叶子要换 DDL 文本在这一层覆写，
     /// 而不是在构造里拼一颗新的。types 缺省时就是血统自己那份类型表；参数可被覆写方忽略。</summary>
-    protected virtual ICodeFirstDialect CreateCodeFirst(PostgreSqlTypes types) => new PostgreSqlCodeFirst(types);
+    protected virtual ICodeFirstDialect CreateCodeFirst(PostgreSqlTypes types) =>
+        new PostgreSqlCodeFirst(types);
 
     /// <summary>血统的第二道缝：文本层缺省交给 PostgreSqlDialect。它存在的理由是方言构造的六个参数里
     /// 有四个是本类私有的共享实例（keys/values/expressions），叶子没有别的入口能拿到它们。</summary>
     protected virtual PostgreSqlDialect CreateDialect(
-        DbKind kind, PostgreSqlTypes types, PostgreSqlKeys keys, PostgreSqlValues values, PostgreSqlExpressions expressions)
-        => new(kind, types, keys, values, expressions);
+        DbKind kind,
+        PostgreSqlTypes types,
+        PostgreSqlKeys keys,
+        PostgreSqlValues values,
+        PostgreSqlExpressions expressions
+    ) => new(kind, types, keys, values, expressions);
 
     public DbKind Kind { get; }
 
@@ -51,12 +55,21 @@ public abstract class PostgreSqlProviderBase : IDbProvider
     /// 而反射装配这一格还没有集成册读数（活 PG 实例在场而 L1 路径未跑过，按"已接线、未见证"读）；
     /// 各叶子现场的驱动里到底有没有导入器，是 TryResolve 的当场答案不是掩码的承诺。</summary>
     protected static DbCapabilities FamilyCapabilities =>
-        DbCapabilities.Paging_LimitOffset | DbCapabilities.Returning | DbCapabilities.Upsert_OnConflict |
-        DbCapabilities.Cte | DbCapabilities.WindowFunctions | DbCapabilities.Count_Over_Window |
-        DbCapabilities.Boolean_Type | DbCapabilities.Guid_Raw16 | DbCapabilities.Schemas |
-        DbCapabilities.CaseSensitive_Identifiers | DbCapabilities.Comment_On_Column |
-        DbCapabilities.Alter_Column_Precision | DbCapabilities.TempTable | DbCapabilities.Bulk_Copy |
-        DbCapabilities.Transactions;
+        DbCapabilities.Paging_LimitOffset
+        | DbCapabilities.Returning
+        | DbCapabilities.Upsert_OnConflict
+        | DbCapabilities.Cte
+        | DbCapabilities.WindowFunctions
+        | DbCapabilities.Count_Over_Window
+        | DbCapabilities.Boolean_Type
+        | DbCapabilities.Guid_Raw16
+        | DbCapabilities.Schemas
+        | DbCapabilities.CaseSensitive_Identifiers
+        | DbCapabilities.Comment_On_Column
+        | DbCapabilities.Alter_Column_Precision
+        | DbCapabilities.TempTable
+        | DbCapabilities.Bulk_Copy
+        | DbCapabilities.Transactions;
 
     public IConnectorFactory Connectors { get; }
 
@@ -85,15 +98,19 @@ public abstract class PostgreSqlProviderBase : IDbProvider
     /// 外键的插入侧与删除侧同报 23503，分岔只在文案；DETAIL 在默认连接串上被驱动整段涂掉
     /// （"Specify 'Include Error Detail'"）——"从文案里取键列"在生产连接串上根本没有材料。
     /// 各叶子跟着这一份走依据的是自己声明继承本家，不等于验过；真库跑错就在叶子上覆写这一格（所以是 virtual）。</summary>
-    public virtual IntegrityViolation? ClassifyIntegrityError(DbException error) => error.SqlState switch
-    {
-        "23505" => new IntegrityViolation(IntegrityKind.Unique, PgConstraintName(error)),
-        "23502" => new IntegrityViolation(IntegrityKind.NotNull),
-        // 23001 是 ON DELETE RESTRICT 那一档的外键违例（restrict_violation），与 23503 同一处置。
-        "23503" or "23001" => new IntegrityViolation(IntegrityKind.ForeignKey, PgConstraintName(error)),
-        "23514" => new IntegrityViolation(IntegrityKind.Check, PgConstraintName(error)),
-        _ => null,
-    };
+    public virtual IntegrityViolation? ClassifyIntegrityError(DbException error) =>
+        error.SqlState switch
+        {
+            "23505" => new IntegrityViolation(IntegrityKind.Unique, PgConstraintName(error)),
+            "23502" => new IntegrityViolation(IntegrityKind.NotNull),
+            // 23001 是 ON DELETE RESTRICT 那一档的外键违例（restrict_violation），与 23503 同一处置。
+            "23503" or "23001" => new IntegrityViolation(
+                IntegrityKind.ForeignKey,
+                PgConstraintName(error)
+            ),
+            "23514" => new IntegrityViolation(IntegrityKind.Check, PgConstraintName(error)),
+            _ => null,
+        };
 
     /// <summary>PG 把约束名放在 ADO.NET 的 Data 字典里（实测键名就是 ConstraintName），
     /// 所以这一格不需要驱动类型。非空那一档没有这个键，取到 null 是正常形状而不是失败。</summary>
@@ -118,13 +135,17 @@ public abstract class PostgreSqlProviderBase : IDbProvider
     /// <summary>PG 系没有 CREATE DATABASE IF NOT EXISTS，先查 pg_database 再建：连到 postgres 库
     /// （每台服务器都有的默认库）执行检查与建库语句。目标库名从连接串按同义词读（Catalog），
     /// 与 MySQL 血统那格同一个坑：读不到就走"没库名、不建库"那一岔是静默的，候选键要一颗颗列全。</summary>
-    public virtual async Task EnsureDatabaseExistsAsync(string connectionString, CancellationToken ct = default)
+    public virtual async Task EnsureDatabaseExistsAsync(
+        string connectionString,
+        CancellationToken ct = default
+    )
     {
         var builder = new DbConnectionStringBuilder { ConnectionString = connectionString };
 
         var dbName = Catalog.Read(builder);
 
-        if (dbName is null) return;
+        if (dbName is null)
+            return;
 
         // 先把候选键全摘干净再写锚点库：只覆盖 Database 一颗的话，串里会同时留着
         // Database=postgres 与 dbname=原库，谁说了算交给驱动的解析顺序。
@@ -141,8 +162,10 @@ public abstract class PostgreSqlProviderBase : IDbProvider
         p.ParameterName = "@name";
         p.Value = dbName;
         checkCmd.Parameters.Add(p);
-        var exists = Convert.ToInt32(await checkCmd.ExecuteScalarAsync(ct).ConfigureAwait(false)) > 0;
-        if (exists) return;
+        var exists =
+            Convert.ToInt32(await checkCmd.ExecuteScalarAsync(ct).ConfigureAwait(false)) > 0;
+        if (exists)
+            return;
 
         await using var createCmd = Connectors.CreateCommand(connection);
         createCmd.CommandText = $"CREATE DATABASE \"{dbName.Replace("\"", "\"\"")}\"";

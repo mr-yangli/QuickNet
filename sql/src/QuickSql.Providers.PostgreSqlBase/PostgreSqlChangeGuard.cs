@@ -1,5 +1,4 @@
 using QuickSql.Metadata;
-using QuickSql.Providers;
 using QuickSql.Sql.Ast;
 
 namespace QuickSql.Providers.PostgreSqlBase;
@@ -17,8 +16,16 @@ public sealed class PostgreSqlChangeGuard : IChangeGuard
         return BaseType(column) != "json";
     }
 
-    public SqlExpression BuildDifference(ColumnContract column, SqlExpression stored, SqlExpression incoming)
-        => new SqlBinaryExpression(column.IsNullable ? BinaryOperator.IsDistinctFrom : BinaryOperator.NotEqual, stored, incoming);
+    public SqlExpression BuildDifference(
+        ColumnContract column,
+        SqlExpression stored,
+        SqlExpression incoming
+    ) =>
+        new SqlBinaryExpression(
+            column.IsNullable ? BinaryOperator.IsDistinctFrom : BinaryOperator.NotEqual,
+            stored,
+            incoming
+        );
 
     static string BaseType(ColumnContract column)
     {

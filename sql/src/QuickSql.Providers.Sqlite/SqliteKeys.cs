@@ -1,5 +1,4 @@
 using QuickSql.Metadata;
-using QuickSql.Providers;
 using QuickSql.Sql;
 
 namespace QuickSql.Providers.Sqlite;
@@ -45,9 +44,11 @@ public sealed class SqliteKeys : IKeyStrategy
 
     /// <summary>不可达（SupportsBulkKeyRetrieval 为 true 时 Core 不会走到这里）；留抛不留空体。
     /// 抛的话里多说一句"其实做得到"，因为这一条与 GBase 8s 那一条只差一颗开关的读法，容易抄错。</summary>
-    public void EmitPostStatementKeyRead(SqlWriter writer, ColumnContract key)
-        => throw new QuickSqlException("SQLite 走批量 RETURNING，语句后回读那一档在这一家没有入口"
-            + $"（本次要回填的是「{key.ColumnName}」）。这一家确实有 last_insert_rowid()、也支持一条文本里放两句"
-            + "（两处都有实测，见 SqliteKeys 类注释第四段），但 Core 只在批量回填位为 false 时才问这颗开关；"
-            + "真要退到那一条，注意它是连接级的、且多行插入只回最后一行的号。");
+    public void EmitPostStatementKeyRead(SqlWriter writer, ColumnContract key) =>
+        throw new QuickSqlException(
+            "SQLite 走批量 RETURNING，语句后回读那一档在这一家没有入口"
+                + $"（本次要回填的是「{key.ColumnName}」）。这一家确实有 last_insert_rowid()、也支持一条文本里放两句"
+                + "（两处都有实测，见 SqliteKeys 类注释第四段），但 Core 只在批量回填位为 false 时才问这颗开关；"
+                + "真要退到那一条，注意它是连接级的、且多行插入只回最后一行的号。"
+        );
 }

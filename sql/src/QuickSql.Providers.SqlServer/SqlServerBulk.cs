@@ -1,7 +1,6 @@
 using System.Data.Common;
 using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
-using QuickSql.Providers;
 
 namespace QuickSql.Providers.SqlServer;
 
@@ -24,8 +23,9 @@ public sealed class SqlServerBulk : IBulkStrategy
 
     public int ParameterBudget => 2100;
 
-    public string Describe => "L1 SqlBulkCopy（按名字映射，CheckConstraints|FireTriggers 两颗开关从驱动的枚举上读，" +
-                              "白名单之外的列整批退 L3）+ L3 多值 VALUES + L5 逐条；参数预算 2100（§12.3）";
+    public string Describe =>
+        "L1 SqlBulkCopy（按名字映射，CheckConstraints|FireTriggers 两颗开关从驱动的枚举上读，"
+        + "白名单之外的列整批退 L3）+ L3 多值 VALUES + L5 逐条；参数预算 2100（§12.3）";
 
     /// <summary>这一家的读数最硬：MultiStatement 是 SqlClient 分号批的公开契约，从第一天就声明。
     /// 注意 SupportsMergedStatements 答的是"这一家能不能并着发"，不是"并着发更快"——
@@ -35,7 +35,10 @@ public sealed class SqlServerBulk : IBulkStrategy
     /// <summary>没有锁，命中与落空都只查一次：装载类存在时结果进 _channel，之后全是字段读，
     /// 两个线程同时第一次取最多各查一次幂等纯查找。落空的那一种（驱动太老或已被裁剪）每次取都重查——
     /// 这条分支的下一步是退到文本层为同一批数据付 N 次往返，为它省一次类型查找没有意义。</summary>
-    [RequiresUnreferencedCode("取通道是一次按类型名的反射查找（SqlServerBulkCopy.TryResolve），裁剪后的驱动交回 null，阶梯因此从 L3 起。")]
+    [RequiresUnreferencedCode(
+        "取通道是一次按类型名的反射查找（SqlServerBulkCopy.TryResolve），裁剪后的驱动交回 null，阶梯因此从 L3 起。"
+    )]
     [RequiresDynamicCode("与 RequiresUnreferencedCode 同一条：反射解析装载类需要运行时生成代码。")]
-    public IBulkCopyChannel? ResolveCopyChannel() => _channel ??= SqlServerBulkCopy.TryResolve(_driver);
+    public IBulkCopyChannel? ResolveCopyChannel() =>
+        _channel ??= SqlServerBulkCopy.TryResolve(_driver);
 }

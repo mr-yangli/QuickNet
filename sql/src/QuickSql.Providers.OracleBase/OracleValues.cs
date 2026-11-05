@@ -23,21 +23,22 @@ public sealed class OracleValues : IValueBinder
         return new AdoParameter(name, Normalize(value), DbTypeOf(value, hint), SizeOf(value), hint);
     }
 
-    static object? Normalize(object? value) => value switch
-    {
-        null => DBNull.Value,
+    static object? Normalize(object? value) =>
+        value switch
+        {
+            null => DBNull.Value,
 
-        // 列上是 NUMBER(10)，传枚举实例过去会被当成字符串或报错。
-        { } typed when typed.GetType().IsEnum => EnumAsIntegral(typed),
+            // 列上是 NUMBER(10)，传枚举实例过去会被当成字符串或报错。
+            { } typed when typed.GetType().IsEnum => EnumAsIntegral(typed),
 
-        var typed => typed,
-    };
+            var typed => typed,
+        };
 
     /// <summary>枚举的底层类型由声明决定，所以按它取对应宽度：绑宽的尺子不许是"我觉得 int 够了"——
     /// byte 底被 widen 成 int 之后 DbType.Byte 与实参类型对不上，报错的是驱动而不是这里。</summary>
     static object EnumAsIntegral(object value)
     {
-        var convertible = (IConvertible) value;
+        var convertible = (IConvertible)value;
 
         return Type.GetTypeCode(Enum.GetUnderlyingType(value.GetType())) switch
         {
@@ -52,14 +53,15 @@ public sealed class OracleValues : IValueBinder
         };
     }
 
-    static int SizeOf(object? value) => value switch
-    {
-        string text => text.Length,
-        byte[] bytes => bytes.Length,
-        char => 1,
-        Guid => 36,
-        _ => 0,
-    };
+    static int SizeOf(object? value) =>
+        value switch
+        {
+            string text => text.Length,
+            byte[] bytes => bytes.Length,
+            char => 1,
+            Guid => 36,
+            _ => 0,
+        };
 
     static DbType DbTypeOf(object? value, ColumnContract? hint)
     {
@@ -119,11 +121,19 @@ public sealed class OracleValues : IValueBinder
                 sql = flag ? "1" : "0";
                 return true;
 
-            case byte or sbyte or short or ushort or int or uint or long or ulong:
+            case byte
+            or sbyte
+            or short
+            or ushort
+            or int
+            or uint
+            or long
+            or ulong:
                 sql = Invariant(value);
                 return true;
 
-            case float or double:
+            case float
+            or double:
                 sql = InlineNumber(Invariant(value));
 
                 // 空串 = 这一格拒了（非有限值）。NaN 与无穷只有"带引号再 cast"那一种写法，
@@ -140,17 +150,20 @@ public sealed class OracleValues : IValueBinder
                 return true;
 
             case DateTime moment:
-                sql = $"TO_TIMESTAMP({Literal(moment.ToString("yyyy-MM-dd HH:mm:ss.fff", CultureInfo.InvariantCulture))},'YYYY-MM-DD HH24:MI:SS.FF3')";
+                sql =
+                    $"TO_TIMESTAMP({Literal(moment.ToString("yyyy-MM-dd HH:mm:ss.fff", CultureInfo.InvariantCulture))},'YYYY-MM-DD HH24:MI:SS.FF3')";
                 return true;
 
             case DateTimeOffset withOffset:
                 // 文本里的 "+08:00" 与格式串里的 TZH:TZM 是一对：这一族读带时区的时间戳
                 // 没有"按会话时区解释一个裸串"那一条退路，偏移量必须写在文本里。
-                sql = $"TO_TIMESTAMP_TZ({Literal(withOffset.ToString("yyyy-MM-dd HH:mm:ss.fff zzz", CultureInfo.InvariantCulture))},'YYYY-MM-DD HH24:MI:SS.FF3 TZH:TZM')";
+                sql =
+                    $"TO_TIMESTAMP_TZ({Literal(withOffset.ToString("yyyy-MM-dd HH:mm:ss.fff zzz", CultureInfo.InvariantCulture))},'YYYY-MM-DD HH24:MI:SS.FF3 TZH:TZM')";
                 return true;
 
             case DateOnly day:
-                sql = $"TO_DATE({Literal(day.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture))},'YYYY-MM-DD')";
+                sql =
+                    $"TO_DATE({Literal(day.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture))},'YYYY-MM-DD')";
                 return true;
 
             case byte[] bytes:
@@ -165,8 +178,8 @@ public sealed class OracleValues : IValueBinder
         }
     }
 
-    static string Invariant(object? value)
-        => value is IFormattable formattable
+    static string Invariant(object? value) =>
+        value is IFormattable formattable
             ? formattable.ToString(null, CultureInfo.InvariantCulture)
             : value?.ToString() ?? string.Empty;
 

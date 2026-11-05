@@ -2,7 +2,6 @@ using System.Data.Common;
 using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
 using System.Text;
-using QuickSql.Providers;
 
 namespace QuickSql.Providers.PostgreSqlBase;
 
@@ -28,17 +27,21 @@ public sealed class PostgreSqlBulk : IBulkStrategy
     /// 接上活库后要重测。L1 通道不吃这颗预算（逐行推、没有参数表），它管退回 L3 之后的分块。</summary>
     public int ParameterBudget => 32_767;
 
-    public string Describe => "L1 二进制 COPY（BeginBinaryImportAsync → NpgsqlBinaryImporter 逐行推，列清单由装载语句点名，" +
-                              "白名单之外的列整批退 L3；不欠连接串开关）+ L3 多值 VALUES + L5 逐条；" +
-                              "参数预算 32767（协议 int16 上限，未实测）；Merged 档不表态（扩展协议多语句为 §9.4 点名的禁止面）；" +
-                              "Upsert 档已接（一句 INSERT … ON CONFLICT 主键 DO UPDATE SET … = EXCLUDED.…，本尊授权实例量过——那是一句，不欠上面那颗表态）";
+    public string Describe =>
+        "L1 二进制 COPY（BeginBinaryImportAsync → NpgsqlBinaryImporter 逐行推，列清单由装载语句点名，"
+        + "白名单之外的列整批退 L3；不欠连接串开关）+ L3 多值 VALUES + L5 逐条；"
+        + "参数预算 32767（协议 int16 上限，未实测）；Merged 档不表态（扩展协议多语句为 §9.4 点名的禁止面）；"
+        + "Upsert 档已接（一句 INSERT … ON CONFLICT 主键 DO UPDATE SET … = EXCLUDED.…，本尊授权实例量过——那是一句，不欠上面那颗表态）";
 
     /// <summary>惰性形状与另两家同一条：无锁，命中进字段，落空每次重查。本家落空概率结构上更高
     /// （借邻家臂的叶子装的可能是没有导入器的 fork），而落空的下一步是退文本层付 N 次往返——
     /// 为它省一次类型查找没有意义。</summary>
-    [RequiresUnreferencedCode("取通道是一次按类型名与形状的反射查找（PostgreSqlBulkCopyChannel.TryResolve），裁剪后的驱动交回 null，阶梯因此从 L3 起。")]
+    [RequiresUnreferencedCode(
+        "取通道是一次按类型名与形状的反射查找（PostgreSqlBulkCopyChannel.TryResolve），裁剪后的驱动交回 null，阶梯因此从 L3 起。"
+    )]
     [RequiresDynamicCode("与 RequiresUnreferencedCode 同一条：反射解析导入器需要运行时生成代码。")]
-    public IBulkCopyChannel? ResolveCopyChannel() => _channel ??= PostgreSqlBulkCopyChannel.TryResolve(_driver);
+    public IBulkCopyChannel? ResolveCopyChannel() =>
+        _channel ??= PostgreSqlBulkCopyChannel.TryResolve(_driver);
 
     /// <summary>一句 upsert 的句尾：ON CONFLICT (键) DO UPDATE SET 列 = EXCLUDED.列。PG 血统六家一起领同一颗。
     /// 这一档是一条语句，不欠 Merged 档那颗"多语句批收不收"的表态。冲突目标点的是主键列清单：
@@ -64,7 +67,10 @@ public sealed class PostgreSqlBulk : IBulkStrategy
             if (column > 0)
                 builder.Append(", ");
 
-            builder.Append(columns.Settable[column]).Append(" = EXCLUDED.").Append(columns.Settable[column]);
+            builder
+                .Append(columns.Settable[column])
+                .Append(" = EXCLUDED.")
+                .Append(columns.Settable[column]);
         }
 
         return builder.ToString();

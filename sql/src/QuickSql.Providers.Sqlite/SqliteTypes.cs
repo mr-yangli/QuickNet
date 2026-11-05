@@ -1,6 +1,5 @@
 using System.Collections.Frozen;
 using QuickSql.Metadata;
-using QuickSql.Providers;
 
 namespace QuickSql.Providers.Sqlite;
 
@@ -26,7 +25,9 @@ public sealed class SqliteTypes : ITypeMap
     /// 是给 doctor 对账用的（本家的存储只有一颗 64 位整数，声明名窄而存储宽是这一族的常态）；
     /// boolean/bool/bit 三行认而不发——认它是读别人的表，不发它是自己的表。这张表今天在仓库里
     /// 零调用，是给 doctor 预备的读侧知识而不是现状。</summary>
-    static readonly FrozenDictionary<string, Type> StoreToClr = new Dictionary<string, Type>(StringComparer.OrdinalIgnoreCase)
+    static readonly FrozenDictionary<string, Type> StoreToClr = new Dictionary<string, Type>(
+        StringComparer.OrdinalIgnoreCase
+    )
     {
         // 字符与文本：本家自己发的三形（TEXT / VARCHAR / CHAR）加上大对象那一形。
         ["text"] = typeof(string),
@@ -145,9 +146,11 @@ public sealed class SqliteTypes : ITypeMap
 
             // 本家的兜底话术与另六家不同一条：这里未登记的型多半也能建（affinity 认任何字形），
             // 报的不是"这一族没有那一型"而是"本仓库不知道往哪一臂绑值"。
-            _ => throw new QuickSqlException($"SQLite 未登记 CLR 类型 {clrType.Name} 的存储类型：这一族没有"
-                + "「库里不存在这一型」那种缺（声明任何字形都会被接受），所以缺的是本仓库的绑定臂。"
-                + "请显式给 [Column(TypeName=...)]，并注意声明名在这家决定的是 affinity 而不是存储。"),
+            _ => throw new QuickSqlException(
+                $"SQLite 未登记 CLR 类型 {clrType.Name} 的存储类型：这一族没有"
+                    + "「库里不存在这一型」那种缺（声明任何字形都会被接受），所以缺的是本仓库的绑定臂。"
+                    + "请显式给 [Column(TypeName=...)]，并注意声明名在这家决定的是 affinity 而不是存储。"
+            ),
         };
     }
 
@@ -156,8 +159,8 @@ public sealed class SqliteTypes : ITypeMap
     /// doctor 能把"契约说 200 字符"与"库声明 200"对上——另六家这一格对的是库的容量，
     /// 本家对的是库的自述。它同时是一颗风险：建侧的宽度不会替你挡超长值——挡它的是
     /// FitsChars 那道闸，而那道闸只在本仓库负责写入的路径上生效，换一条手写 SQL 就没有闸门了。</summary>
-    static string String(ColumnContract column)
-        => column.MaxChars is { } chars ? $"VARCHAR({chars})" : "TEXT";
+    static string String(ColumnContract column) =>
+        column.MaxChars is { } chars ? $"VARCHAR({chars})" : "TEXT";
 
     public ColumnContract ApplyStorageDefaults(ColumnContract column)
     {
@@ -183,7 +186,8 @@ public sealed class SqliteTypes : ITypeMap
         };
     }
 
-    public bool TryGetClrType(string storeTypeName, out Type? clrType) => StoreToClr.TryGetValue(storeTypeName, out clrType);
+    public bool TryGetClrType(string storeTypeName, out Type? clrType) =>
+        StoreToClr.TryGetValue(storeTypeName, out clrType);
 
     /// <summary>恒 Char，与 PG 血统那两家同值。差别在这一家连"第二个数"都不存在：
     /// n 是字符而它从不被强制，所以取 Char 不是"问到了字符那一把"，而是"契约里那一格

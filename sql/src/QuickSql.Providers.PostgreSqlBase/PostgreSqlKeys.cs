@@ -1,5 +1,4 @@
 using QuickSql.Metadata;
-using QuickSql.Providers;
 using QuickSql.Sql;
 
 namespace QuickSql.Providers.PostgreSqlBase;
@@ -36,6 +35,6 @@ public sealed class PostgreSqlKeys : IKeyStrategy
     public bool SupportsPostStatementKeyRead => false;
 
     /// <summary>不可达（SupportsBulkKeyRetrieval 为 true 时 Core 不会走到这里）；留抛不留空体。</summary>
-    public void EmitPostStatementKeyRead(SqlWriter writer, ColumnContract key)
-        => throw new QuickSqlException("PG 系走批量 RETURNING，语句后回读那一档在这一家不可达。");
+    public void EmitPostStatementKeyRead(SqlWriter writer, ColumnContract key) =>
+        throw new QuickSqlException("PG 系走批量 RETURNING，语句后回读那一档在这一家不可达。");
 }

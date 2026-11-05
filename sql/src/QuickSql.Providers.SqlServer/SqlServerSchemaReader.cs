@@ -1,6 +1,5 @@
 using System.Data.Common;
 using QuickSql.Metadata;
-using QuickSql.Providers;
 
 namespace QuickSql.Providers.SqlServer;
 
@@ -50,7 +49,11 @@ public sealed class SqlServerSchemaReader : ISchemaReader
         WHERE c.object_id = OBJECT_ID(@table) AND c.name = @column
         """;
 
-    public async Task<SchemaTable?> ReadTableAsync(DbConnection connection, TableInfo table, CancellationToken ct = default)
+    public async Task<SchemaTable?> ReadTableAsync(
+        DbConnection connection,
+        TableInfo table,
+        CancellationToken ct = default
+    )
     {
         var columns = new List<SchemaColumn>();
         string? tableComment = null;
@@ -69,24 +72,26 @@ public sealed class SqlServerSchemaReader : ISchemaReader
                 var storeType = reader.GetString(2);
                 var byteLength = reader.GetInt16(3);
 
-                columns.Add(new SchemaColumn(
-                    name,
-                    StoreType(storeType, byteLength, reader.GetByte(4), reader.GetByte(5)),
-                    MaxChars(storeType, byteLength),
-                    MaxBytes(storeType, byteLength),
-                    reader.GetBoolean(6),
-                    reader.GetInt32(0))
-                {
-                    // 与表备注那一格同一个折法：LEFT JOIN 没配上行 = 这一列没写备注，交回空串。
-                    // 交 null 说的是"这一家没有列注释这个概念"，那会把"库里备注被删掉"读成"判不了"，
-                    // 被删的那一条再也补不回去。
-                    Comment = reader.IsDBNull(8) ? string.Empty : reader.GetString(8),
-                    IsIdentity = reader.GetBoolean(7),
-                    IsPrimaryKey = false,
-                    Scale = reader.GetByte(5),
-                });
-            }
-            while (await reader.ReadAsync(ct).ConfigureAwait(false));
+                columns.Add(
+                    new SchemaColumn(
+                        name,
+                        StoreType(storeType, byteLength, reader.GetByte(4), reader.GetByte(5)),
+                        MaxChars(storeType, byteLength),
+                        MaxBytes(storeType, byteLength),
+                        reader.GetBoolean(6),
+                        reader.GetInt32(0)
+                    )
+                    {
+                        // 与表备注那一格同一个折法：LEFT JOIN 没配上行 = 这一列没写备注，交回空串。
+                        // 交 null 说的是"这一家没有列注释这个概念"，那会把"库里备注被删掉"读成"判不了"，
+                        // 被删的那一条再也补不回去。
+                        Comment = reader.IsDBNull(8) ? string.Empty : reader.GetString(8),
+                        IsIdentity = reader.GetBoolean(7),
+                        IsPrimaryKey = false,
+                        Scale = reader.GetByte(5),
+                    }
+                );
+            } while (await reader.ReadAsync(ct).ConfigureAwait(false));
         }
 
         await using (var command = Command(connection, TableCommentSql))
@@ -97,7 +102,10 @@ public sealed class SqlServerSchemaReader : ISchemaReader
 
             // 读不到那一行 = 这张表没有表备注扩展属性，交回空串而不是 null：null 说的是
             // "这一家没有表备注这个概念"，而那会把补备注那一档整格关掉。
-            tableComment = await reader.ReadAsync(ct).ConfigureAwait(false) && !reader.IsDBNull(0) ? reader.GetString(0) : string.Empty;
+            tableComment =
+                await reader.ReadAsync(ct).ConfigureAwait(false) && !reader.IsDBNull(0)
+                    ? reader.GetString(0)
+                    : string.Empty;
         }
 
         var indexes = await ReadIndexesAsync(connection, table, columns, ct).ConfigureAwait(false);
@@ -111,9 +119,17 @@ public sealed class SqlServerSchemaReader : ISchemaReader
         DbConnection connection,
         TableInfo table,
         List<SchemaColumn> columns,
-        CancellationToken ct)
+        CancellationToken ct
+    )
     {
-        var read = new List<(string Name, bool Unique, bool Primary, bool Constraint, List<string> Columns)>();
+        var read =
+            new List<(
+                string Name,
+                bool Unique,
+                bool Primary,
+                bool Constraint,
+                List<string> Columns
+            )>();
 
         await using (var command = Command(connection, IndexesSql))
         {
@@ -139,17 +155,31 @@ public sealed class SqlServerSchemaReader : ISchemaReader
             }
         }
 
-        var keys = new HashSet<string>(read.Where(static x => x.Primary).SelectMany(static x => x.Columns), StringComparer.OrdinalIgnoreCase);
+        var keys = new HashSet<string>(
+            read.Where(static x => x.Primary).SelectMany(static x => x.Columns),
+            StringComparer.OrdinalIgnoreCase
+        );
 
         for (var i = 0; i < columns.Count; i++)
             if (keys.Contains(columns[i].Name))
                 columns[i] = columns[i] with { IsPrimaryKey = true };
 
-        return [.. read.Where(static x => !x.Primary)
-            .Select(x => new SchemaIndex(x.Name, x.Unique, [.. x.Columns]) { IsConstraint = x.Constraint })];
+        return
+        [
+            .. read.Where(static x => !x.Primary)
+                .Select(x => new SchemaIndex(x.Name, x.Unique, [.. x.Columns])
+                {
+                    IsConstraint = x.Constraint,
+                }),
+        ];
     }
 
-    public async Task<LengthSemanticsReading?> ProbeLengthSemanticsAsync(DbConnection connection, TableInfo table, string columnName, CancellationToken ct = default)
+    public async Task<LengthSemanticsReading?> ProbeLengthSemanticsAsync(
+        DbConnection connection,
+        TableInfo table,
+        string columnName,
+        CancellationToken ct = default
+    )
     {
         using var command = Command(connection, ProbeSql);
 
@@ -169,7 +199,10 @@ public sealed class SqlServerSchemaReader : ISchemaReader
         // varchar/char 的 n 就是字节数，排序规则只决定"一个字节能装哪个字符"。
         // 所以量纲只看类型名，不看排序规则；UTF-8 与否从 collation_name 自己的后缀读得出。
         var charSemantics = storeType is "nvarchar" or "nchar";
-        var declared = definitionBytes < 0 ? -1 : charSemantics ? definitionBytes / 2 : definitionBytes;
+        var declared =
+            definitionBytes < 0 ? -1
+            : charSemantics ? definitionBytes / 2
+            : definitionBytes;
 
         return new LengthSemanticsReading(collation, declared, definitionBytes, charSemantics);
     }
@@ -178,8 +211,12 @@ public sealed class SqlServerSchemaReader : ISchemaReader
     /// 发射侧一律大写而目录一律小写；DATETIME2(3) 发出去而目录把标度单存一格；
     /// 手工建的表上 DECIMAL 读回 numeric；rowversion 在目录里干脆就叫 binary(8)。
     /// 这四折全在这一个私有归一口里，所以建侧与读侧不可能各自折成两个样子。</summary>
-    public bool? ColumnShapeMatches(ColumnContract expected, SchemaColumn actual)
-        => string.Equals(Normalize(SqlServerTypes.Instance.GetStoreType(expected)), Normalize(actual.StoreType), StringComparison.Ordinal);
+    public bool? ColumnShapeMatches(ColumnContract expected, SchemaColumn actual) =>
+        string.Equals(
+            Normalize(SqlServerTypes.Instance.GetStoreType(expected)),
+            Normalize(actual.StoreType),
+            StringComparison.Ordinal
+        );
 
     static string Normalize(string storeType)
     {
@@ -192,23 +229,29 @@ public sealed class SqlServerSchemaReader : ISchemaReader
         return lower.Replace("numeric", "decimal", StringComparison.Ordinal);
     }
 
-    static string StoreType(string storeType, int byteLength, byte precision, byte scale) => storeType switch
-    {
-        "nvarchar" or "nchar" or "varchar" or "char" or "varbinary" or "binary" => byteLength < 0
-            ? $"{storeType}(max)"
-            : $"{storeType}({(storeType.StartsWith('n') ? byteLength / 2 : byteLength)})",
-        "decimal" or "numeric" => $"{storeType}({precision},{scale})",
-        // 发射侧写的是 DATETIME2(3) 而目录把标度单存一格（不写精度时它是 7），
-        // 不带出来就成了"每颗时间列都判不出差"。
-        "datetime2" or "datetimeoffset" or "time" => $"{storeType}({scale})",
-        _ => storeType,
-    };
+    static string StoreType(string storeType, int byteLength, byte precision, byte scale) =>
+        storeType switch
+        {
+            "nvarchar" or "nchar" or "varchar" or "char" or "varbinary" or "binary" => byteLength
+            < 0
+                ? $"{storeType}(max)"
+                : $"{storeType}({(storeType.StartsWith('n') ? byteLength / 2 : byteLength)})",
+            "decimal" or "numeric" => $"{storeType}({precision},{scale})",
+            // 发射侧写的是 DATETIME2(3) 而目录把标度单存一格（不写精度时它是 7），
+            // 不带出来就成了"每颗时间列都判不出差"。
+            "datetime2" or "datetimeoffset" or "time" => $"{storeType}({scale})",
+            _ => storeType,
+        };
 
-    static int? MaxChars(string storeType, int byteLength)
-        => byteLength < 0 ? null : storeType is "nvarchar" or "nchar" ? byteLength / 2 : byteLength;
+    static int? MaxChars(string storeType, int byteLength) =>
+        byteLength < 0 ? null
+        : storeType is "nvarchar" or "nchar" ? byteLength / 2
+        : byteLength;
 
-    static int? MaxBytes(string storeType, int byteLength)
-        => byteLength < 0 ? null : storeType is "nvarchar" or "nchar" ? byteLength : byteLength;
+    static int? MaxBytes(string storeType, int byteLength) =>
+        byteLength < 0 ? null
+        : storeType is "nvarchar" or "nchar" ? byteLength
+        : byteLength;
 
     static DbCommand Command(DbConnection connection, string sql)
     {
@@ -231,8 +274,8 @@ public sealed class SqlServerSchemaReader : ISchemaReader
 
     /// <summary>OBJECT_ID 吃的是带引号的两段名，所以这里必须与查询层用同一套标识符策略，
     /// 否则混合大小写的表在 doctor 里会读成"表不存在"。</summary>
-    static string Qualified(TableInfo table)
-        => table.Schema is { Length: > 0 } schema
+    static string Qualified(TableInfo table) =>
+        table.Schema is { Length: > 0 } schema
             ? $"{IdentifierPolicy.SqlServer.Quote(schema)}.{IdentifierPolicy.SqlServer.Quote(table.Name)}"
             : IdentifierPolicy.SqlServer.Quote(table.Name);
 }

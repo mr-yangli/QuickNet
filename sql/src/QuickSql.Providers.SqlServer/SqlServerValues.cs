@@ -15,7 +15,8 @@ public sealed class SqlServerValues : IValueBinder
 {
     public static SqlServerValues Instance { get; } = new();
 
-    public BindingProfile Profile { get; } = new(StringsAsUnicode: true, GuidAsText: false, DateAsUtc: false, DecimalAsDouble: false);
+    public BindingProfile Profile { get; } =
+        new(StringsAsUnicode: true, GuidAsText: false, DateAsUtc: false, DecimalAsDouble: false);
 
     public AdoParameter CreateParameter(string name, object? value, ColumnContract? hint)
     {
@@ -26,23 +27,29 @@ public sealed class SqlServerValues : IValueBinder
         return new AdoParameter(name, Normalize(value), dbType, SizeOf(value), hint);
     }
 
-    static object? Normalize(object? value) => value switch
-    {
-        null => DBNull.Value,
+    static object? Normalize(object? value) =>
+        value switch
+        {
+            null => DBNull.Value,
 
-        // enum 存 INT 是既定映射，而驱动不会替我们转：直接传枚举实例会被当成字符串或报错。
-        { } typed when typed.GetType().IsEnum => Convert.ChangeType(typed, Enum.GetUnderlyingType(typed.GetType()), CultureInfo.InvariantCulture),
+            // enum 存 INT 是既定映射，而驱动不会替我们转：直接传枚举实例会被当成字符串或报错。
+            { } typed when typed.GetType().IsEnum => Convert.ChangeType(
+                typed,
+                Enum.GetUnderlyingType(typed.GetType()),
+                CultureInfo.InvariantCulture
+            ),
 
-        var typed => typed,
-    };
+            var typed => typed,
+        };
 
-    static int SizeOf(object? value) => value switch
-    {
-        string text => text.Length,
-        byte[] bytes => bytes.Length,
-        char => 1,
-        _ => 0,
-    };
+    static int SizeOf(object? value) =>
+        value switch
+        {
+            string text => text.Length,
+            byte[] bytes => bytes.Length,
+            char => 1,
+            _ => 0,
+        };
 
     static DbType DbTypeOf(object? value, ColumnContract? hint)
     {
@@ -105,11 +112,19 @@ public sealed class SqlServerValues : IValueBinder
                 sql = flag ? "1" : "0";
                 return true;
 
-            case byte or sbyte or short or ushort or int or uint or long or ulong:
+            case byte
+            or sbyte
+            or short
+            or ushort
+            or int
+            or uint
+            or long
+            or ulong:
                 sql = Convert.ToString(value, CultureInfo.InvariantCulture)!;
                 return true;
 
-            case float or double:
+            case float
+            or double:
                 sql = InlineNumber(value);
 
                 // 空串 = 这一格拒了（非有限值）。T-SQL 的 float 类型压根存不下 NaN 与无穷（实测：TRY_CAST('NaN' AS float) 为 NULL），
@@ -126,15 +141,24 @@ public sealed class SqlServerValues : IValueBinder
                 return true;
 
             case DateTime moment:
-                sql = Literal(moment.ToString("yyyy-MM-ddTHH:mm:ss.fff", CultureInfo.InvariantCulture), unicode: false);
+                sql = Literal(
+                    moment.ToString("yyyy-MM-ddTHH:mm:ss.fff", CultureInfo.InvariantCulture),
+                    unicode: false
+                );
                 return true;
 
             case DateTimeOffset withOffset:
-                sql = Literal(withOffset.ToString("yyyy-MM-ddTHH:mm:ss.fffzzz", CultureInfo.InvariantCulture), unicode: false);
+                sql = Literal(
+                    withOffset.ToString("yyyy-MM-ddTHH:mm:ss.fffzzz", CultureInfo.InvariantCulture),
+                    unicode: false
+                );
                 return true;
 
             case DateOnly day:
-                sql = Literal(day.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), unicode: false);
+                sql = Literal(
+                    day.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+                    unicode: false
+                );
                 return true;
 
             case byte[] raw:

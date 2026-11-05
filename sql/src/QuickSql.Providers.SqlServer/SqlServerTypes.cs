@@ -1,6 +1,5 @@
 using System.Collections.Frozen;
 using QuickSql.Metadata;
-using QuickSql.Providers;
 
 namespace QuickSql.Providers.SqlServer;
 
@@ -12,7 +11,9 @@ public sealed class SqlServerTypes : ITypeMap
 {
     public static SqlServerTypes Instance { get; } = new();
 
-    static readonly FrozenDictionary<string, Type> StoreToClr = new Dictionary<string, Type>(StringComparer.OrdinalIgnoreCase)
+    static readonly FrozenDictionary<string, Type> StoreToClr = new Dictionary<string, Type>(
+        StringComparer.OrdinalIgnoreCase
+    )
     {
         ["bigint"] = typeof(long),
         ["binary"] = typeof(byte[]),
@@ -78,7 +79,8 @@ public sealed class SqlServerTypes : ITypeMap
             var t when t == typeof(ulong) => "NUMERIC(20,0)",
             var t when t == typeof(float) => "REAL",
             var t when t == typeof(double) => "FLOAT",
-            var t when t == typeof(decimal) => $"DECIMAL({column.Precision ?? 18},{column.Scale ?? 4})",
+            var t when t == typeof(decimal) =>
+                $"DECIMAL({column.Precision ?? 18},{column.Scale ?? 4})",
             var t when t == typeof(DateTime) => "DATETIME2(3)",
             var t when t == typeof(DateTimeOffset) => "DATETIMEOFFSET(3)",
             var t when t == typeof(DateOnly) => "DATE",
@@ -86,7 +88,9 @@ public sealed class SqlServerTypes : ITypeMap
             var t when t == typeof(TimeSpan) => "TIME(3)",
             var t when t == typeof(Guid) => "UNIQUEIDENTIFIER",
             var t when t == typeof(char) => "NCHAR(1)",
-            _ => throw new QuickSqlException($"SQL Server 未登记 CLR 类型 {clrType.Name} 的存储类型，请显式给 [Column(TypeName=...)]"),
+            _ => throw new QuickSqlException(
+                $"SQL Server 未登记 CLR 类型 {clrType.Name} 的存储类型，请显式给 [Column(TypeName=...)]"
+            ),
         };
     }
 
@@ -99,8 +103,8 @@ public sealed class SqlServerTypes : ITypeMap
         return column.Unicode ? $"NVARCHAR({chars})" : $"VARCHAR({chars})";
     }
 
-    static string Bytes(ColumnContract column)
-        => column.MaxBytes is { } bytes && bytes <= 8000 ? $"VARBINARY({bytes})" : "VARBINARY(MAX)";
+    static string Bytes(ColumnContract column) =>
+        column.MaxBytes is { } bytes && bytes <= 8000 ? $"VARBINARY({bytes})" : "VARBINARY(MAX)";
 
     /// <summary>两次调用得同一个结果（SqlServerCodeFirst 会对已经算过的契约再调一次），所以这里的
     /// 规则只看算完之后的那几格，不看"这一格是不是我第一次见"。</summary>
@@ -111,10 +115,20 @@ public sealed class SqlServerTypes : ITypeMap
         // 「值归库给」是存储类型的事实，只有本家认得：共用层猜不到哪一型算"库自己递增"，
         // 而猜得到的那一半（整型主键）已经另有 IsIdentity。判据取 StoreTypeName 而不是 ClrType：
         // byte[] 在本家默认是 VARBINARY，那里头值归调用方给。
-        if (!resolved.IsConcurrencyToken || !string.Equals(resolved.StoreTypeName, "rowversion", StringComparison.OrdinalIgnoreCase))
+        if (
+            !resolved.IsConcurrencyToken
+            || !string.Equals(
+                resolved.StoreTypeName,
+                "rowversion",
+                StringComparison.OrdinalIgnoreCase
+            )
+        )
             return resolved;
 
-        return resolved with { StoreFillsValue = true };
+        return resolved with
+        {
+            StoreFillsValue = true,
+        };
     }
 
     ColumnContract Resolve(ColumnContract column)
@@ -138,10 +152,11 @@ public sealed class SqlServerTypes : ITypeMap
         };
     }
 
-    public bool TryGetClrType(string storeTypeName, out Type? clrType) => StoreToClr.TryGetValue(storeTypeName, out clrType);
+    public bool TryGetClrType(string storeTypeName, out Type? clrType) =>
+        StoreToClr.TryGetValue(storeTypeName, out clrType);
 
     /// <summary>SQL Server 是"看类型不看库"的那一家：nvarchar 是字符、varchar 是字节，
     /// 所以量纲直接跟着 ColumnContract.Unicode 走，而不是给一个库级常量。</summary>
-    public LengthSemantics GetLengthSemantics(ColumnContract column)
-        => column.Unicode ? LengthSemantics.Char : LengthSemantics.Byte;
+    public LengthSemantics GetLengthSemantics(ColumnContract column) =>
+        column.Unicode ? LengthSemantics.Char : LengthSemantics.Byte;
 }

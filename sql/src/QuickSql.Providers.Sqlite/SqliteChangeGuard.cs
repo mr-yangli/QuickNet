@@ -1,5 +1,4 @@
 using QuickSql.Metadata;
-using QuickSql.Providers;
 using QuickSql.Sql;
 using QuickSql.Sql.Ast;
 
@@ -19,7 +18,11 @@ public sealed class SqliteChangeGuard : IChangeGuard
     /// 因为一颗空集合会把"为什么没有"这件事读成"还没填"。</summary>
     public bool Compares(ColumnContract column) => true;
 
-    public SqlExpression BuildDifference(ColumnContract column, SqlExpression stored, SqlExpression incoming)
+    public SqlExpression BuildDifference(
+        ColumnContract column,
+        SqlExpression stored,
+        SqlExpression incoming
+    )
     {
         // NOT NULL 列上一句 <> 就够：两侧都不可能是 NULL，而多出来的两段 OR 只会让谓词更难走索引（七家同判）。
         if (!column.IsNullable)

@@ -1,5 +1,4 @@
 using QuickSql.Metadata;
-using QuickSql.Providers;
 using QuickSql.Sql;
 
 namespace QuickSql.Providers.SqlServer;
@@ -24,9 +23,14 @@ public sealed class SqlServerCodeFirst(SqlServerTypes types) : ICodeFirstDialect
 
         if (contract.PrimaryKey.Length > 0)
         {
-            var key = string.Join(", ", contract.PrimaryKey.Select(c => Identifiers.Quote(c.ColumnName)));
+            var key = string.Join(
+                ", ",
+                contract.PrimaryKey.Select(c => Identifiers.Quote(c.ColumnName))
+            );
 
-            parts.Add($"CONSTRAINT {Identifiers.Quote("PK_" + contract.Table.Name)} PRIMARY KEY CLUSTERED ({key})");
+            parts.Add(
+                $"CONSTRAINT {Identifiers.Quote("PK_" + contract.Table.Name)} PRIMARY KEY CLUSTERED ({key})"
+            );
         }
 
         // 括号在上面已经开了：这里再开一层就成了 CREATE TABLE X ((...))，T-SQL 直接语法错。
@@ -78,7 +82,9 @@ public sealed class SqlServerCodeFirst(SqlServerTypes types) : ICodeFirstDialect
 
     void EmitComment(SqlWriter writer, TableInfo table, string? columnName, string? comment)
     {
-        writer.Append("IF EXISTS (SELECT 1 FROM sys.extended_properties WHERE class=1 AND major_id=");
+        writer.Append(
+            "IF EXISTS (SELECT 1 FROM sys.extended_properties WHERE class=1 AND major_id="
+        );
         ObjectId(writer, table);
 
         if (columnName is null)
@@ -99,7 +105,13 @@ public sealed class SqlServerCodeFirst(SqlServerTypes types) : ICodeFirstDialect
         EmitExtendedProperty(writer, "sp_addextendedproperty", table, columnName, comment);
     }
 
-    static void EmitExtendedProperty(SqlWriter writer, string procedure, TableInfo table, string? columnName, string? comment)
+    static void EmitExtendedProperty(
+        SqlWriter writer,
+        string procedure,
+        TableInfo table,
+        string? columnName,
+        string? comment
+    )
     {
         writer.Append("EXEC sys.").Append(procedure).Append(" @name=N'MS_Description', @value=");
         writer.AppendStringLiteral(comment ?? string.Empty, unicode: true);
@@ -176,7 +188,10 @@ public sealed class SqlServerCodeFirst(SqlServerTypes types) : ICodeFirstDialect
     {
         var stored = types.ApplyStorageDefaults(column);
 
-        writer.Append(Identifiers.Quote(column.ColumnName)).Append(' ').Append(types.GetStoreType(stored));
+        writer
+            .Append(Identifiers.Quote(column.ColumnName))
+            .Append(' ')
+            .Append(types.GetStoreType(stored));
 
         if (column.IsIdentity)
             writer.Append(" IDENTITY(1,1)");

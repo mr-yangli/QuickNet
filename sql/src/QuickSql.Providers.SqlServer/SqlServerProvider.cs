@@ -36,12 +36,23 @@ public sealed class SqlServerProvider : IDbProvider
     /// <summary>有 OUTPUT、有 MERGE、有原生 BIT 与 uniqueidentifier；没有 SKIP LOCKED
     /// （T-SQL 只有 READPAST 提示，语义不等价），也没有 Truncate_Cascade。别为了让代码跑得过去而往上加位。</summary>
     public DbCapabilities Capabilities =>
-        DbCapabilities.Paging_OffsetFetch | DbCapabilities.Returning | DbCapabilities.Upsert_MergeInto |
-        DbCapabilities.Boolean_Type | DbCapabilities.Guid_Raw16 | DbCapabilities.Identity_ExplicitInsert |
-        DbCapabilities.Schemas | DbCapabilities.Cte | DbCapabilities.WindowFunctions |
-        DbCapabilities.Bulk_Copy | DbCapabilities.MultiStatement | DbCapabilities.MultiResultSets |
-        DbCapabilities.Count_Over_Window | DbCapabilities.Comment_On_Column | DbCapabilities.Alter_Column_Precision |
-        DbCapabilities.TempTable | DbCapabilities.Transactions;
+        DbCapabilities.Paging_OffsetFetch
+        | DbCapabilities.Returning
+        | DbCapabilities.Upsert_MergeInto
+        | DbCapabilities.Boolean_Type
+        | DbCapabilities.Guid_Raw16
+        | DbCapabilities.Identity_ExplicitInsert
+        | DbCapabilities.Schemas
+        | DbCapabilities.Cte
+        | DbCapabilities.WindowFunctions
+        | DbCapabilities.Bulk_Copy
+        | DbCapabilities.MultiStatement
+        | DbCapabilities.MultiResultSets
+        | DbCapabilities.Count_Over_Window
+        | DbCapabilities.Comment_On_Column
+        | DbCapabilities.Alter_Column_Precision
+        | DbCapabilities.TempTable
+        | DbCapabilities.Transactions;
 
     public IConnectorFactory Connectors { get; }
 
@@ -71,7 +82,13 @@ public sealed class SqlServerProvider : IDbProvider
     {
         // EvtSrc 那一格不是装饰：这根字典槽位是 ADO.NET 给"帮助链接"用的，别家驱动也可能填，
         // 所以按它点名的来源收口，认错了家就什么都别翻。
-        if (!string.Equals(error.Data["HelpLink.EvtSrc"] as string, "MSSQLServer", StringComparison.Ordinal))
+        if (
+            !string.Equals(
+                error.Data["HelpLink.EvtSrc"] as string,
+                "MSSQLServer",
+                StringComparison.Ordinal
+            )
+        )
             return null;
 
         return error.Data["HelpLink.EvtID"] switch
@@ -92,17 +109,25 @@ public sealed class SqlServerProvider : IDbProvider
     /// <summary>这一家认的库名键，三颗都列：SqlClient 认 Database、Initial Catalog 与不带空格的同一种写法，
     /// 而裸 DbConnectionStringBuilder 不做同义词归一（实测只按字面键比，仅忽略大小写），
     /// 候选表少列一颗就静默少读一颗。</summary>
-    static readonly ConnectionStringCatalog Catalog = new("Database", "Initial Catalog", "InitialCatalog");
+    static readonly ConnectionStringCatalog Catalog = new(
+        "Database",
+        "Initial Catalog",
+        "InitialCatalog"
+    );
 
     /// <summary>连到 master 库，查 sys.databases；不存在则 CREATE DATABASE。
     /// 目标库名按 Catalog 读，读不到就按原样跳过建库。</summary>
-    public async Task EnsureDatabaseExistsAsync(string connectionString, CancellationToken ct = default)
+    public async Task EnsureDatabaseExistsAsync(
+        string connectionString,
+        CancellationToken ct = default
+    )
     {
         var builder = new DbConnectionStringBuilder { ConnectionString = connectionString };
 
         var catalog = Catalog.Read(builder);
 
-        if (catalog is null) return;
+        if (catalog is null)
+            return;
 
         // 几颗同义词一起摘、改完只留一份：留两颗互相矛盾的键等于把"哪一颗说了算"交给解析顺序。
         Catalog.Clear(builder);
@@ -117,8 +142,10 @@ public sealed class SqlServerProvider : IDbProvider
         p.ParameterName = "@name";
         p.Value = catalog;
         checkCmd.Parameters.Add(p);
-        var exists = Convert.ToInt32(await checkCmd.ExecuteScalarAsync(ct).ConfigureAwait(false)) > 0;
-        if (exists) return;
+        var exists =
+            Convert.ToInt32(await checkCmd.ExecuteScalarAsync(ct).ConfigureAwait(false)) > 0;
+        if (exists)
+            return;
 
         await using var createCmd = Connectors.CreateCommand(connection);
         createCmd.CommandText = $"CREATE DATABASE [{catalog.Replace("]", "]]")}]";

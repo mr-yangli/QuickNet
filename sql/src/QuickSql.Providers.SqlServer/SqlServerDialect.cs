@@ -8,8 +8,12 @@ namespace QuickSql.Providers.SqlServer;
 /// （PagingRequiresOrdering 为 true，编译器不管、写错就报错的硬约束）；标识符用方括号，且目标别名只能出现在
 /// UPDATE alias FROM table AS alias 这种写法里，所以 UPDATE/DELETE 整个覆写；OUTPUT inserted.* 位于
 /// 列清单与 VALUES 之间（PG 系的 RETURNING 在语句末尾）；字符串字面量要带 N 前缀。</summary>
-public sealed class SqlServerDialect(SqlServerTypes types, SqlServerKeys keys, SqlServerValues values, SqlServerExpressions expressions)
-    : DialectBase(IdentifierPolicy.SqlServer, values, expressions)
+public sealed class SqlServerDialect(
+    SqlServerTypes types,
+    SqlServerKeys keys,
+    SqlServerValues values,
+    SqlServerExpressions expressions
+) : DialectBase(IdentifierPolicy.SqlServer, values, expressions)
 {
     public override DbKind Kind => DbKind.SqlServer;
 
@@ -27,7 +31,10 @@ public sealed class SqlServerDialect(SqlServerTypes types, SqlServerKeys keys, S
 
     protected override bool ReturningPrecedesValues => true;
 
-    protected override void EmitReturning(SqlWriter writer, IReadOnlyList<ColumnContract> returning) => keys.EmitReturning(writer, returning);
+    protected override void EmitReturning(
+        SqlWriter writer,
+        IReadOnlyList<ColumnContract> returning
+    ) => keys.EmitReturning(writer, returning);
 
     protected override void EmitPaging(SqlWriter writer, SelectStatement select)
     {
@@ -130,7 +137,9 @@ public sealed class SqlServerDialect(SqlServerTypes types, SqlServerKeys keys, S
         var identityKey = upsert.Keys.Any(static k => k.IsIdentity);
 
         if (identityKey)
-            writer.Append(keys.IdentityInsertToggle(writer, upsert.Table.Table, true)!).Append("; ");
+            writer
+                .Append(keys.IdentityInsertToggle(writer, upsert.Table.Table, true)!)
+                .Append("; ");
 
         var target = upsert.Table.Alias;
 
@@ -172,6 +181,8 @@ public sealed class SqlServerDialect(SqlServerTypes types, SqlServerKeys keys, S
         EmitMergeTail(writer, target, MergeSource, upsert, semicolon: true);
 
         if (identityKey)
-            writer.Append(' ').Append(keys.IdentityInsertToggle(writer, upsert.Table.Table, false)!);
+            writer
+                .Append(' ')
+                .Append(keys.IdentityInsertToggle(writer, upsert.Table.Table, false)!);
     }
 }

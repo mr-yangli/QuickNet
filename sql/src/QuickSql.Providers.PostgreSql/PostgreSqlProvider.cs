@@ -9,14 +9,10 @@ namespace QuickSql.Providers.PostgreSql;
 /// 同一份产出切成三段（本仓库自己算的推断）：PG 10 之前建表语法错、10~13 恰合、14 起多一层不再必要的 CAST。
 /// 真实例第一问因此不是"认不认这句"而是"现场那台是几"（本机没有任何一台 PostgreSQL，整行未实测）。</summary>
 [QuickSqlProvider(DbKind.PostgreSql)]
-public sealed class PostgreSqlProvider : PostgreSqlProviderBase
+public sealed class PostgreSqlProvider(DbProviderFactory driverFactory)
+    : PostgreSqlProviderBase(DbKind.PostgreSql, driverFactory)
 {
     /// <summary>内建表里的 key。assembly 填 Npgsql——本行走的是正路（线协议就是 Npgsql 实现的那一个），不借邻家的臂也不靠行内直称；
     /// 照旧刻意不写 factoryType。这颗名字从未解析成功过、整行未实测。</summary>
     public const string DriverKey = "postgresql";
-
-    public PostgreSqlProvider(DbProviderFactory driverFactory)
-        : base(DbKind.PostgreSql, driverFactory)
-    {
-    }
 }

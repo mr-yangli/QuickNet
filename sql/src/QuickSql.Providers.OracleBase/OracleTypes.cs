@@ -1,6 +1,5 @@
-using System.Collections.Frozen;
 using QuickSql.Metadata;
-using QuickSql.Providers;
+using System.Collections.Frozen;
 
 namespace QuickSql.Providers.OracleBase;
 
@@ -15,7 +14,9 @@ public class OracleTypes : ITypeMap
 {
     public static OracleTypes Instance { get; } = new();
 
-    static readonly FrozenDictionary<string, Type> StoreToClr = new Dictionary<string, Type>(StringComparer.OrdinalIgnoreCase)
+    static readonly FrozenDictionary<string, Type> StoreToClr = new Dictionary<string, Type>(
+        StringComparer.OrdinalIgnoreCase
+    )
     {
         ["varchar2"] = typeof(string),
         ["nvarchar2"] = typeof(string),
@@ -71,14 +72,18 @@ public class OracleTypes : ITypeMap
             var t when t == typeof(long) || t == typeof(ulong) => "NUMBER(19)",
             var t when t == typeof(float) => "BINARY_FLOAT",
             var t when t == typeof(double) => "BINARY_DOUBLE",
-            var t when t == typeof(decimal) => $"NUMBER({column.Precision ?? 18},{column.Scale ?? 4})",
+            var t when t == typeof(decimal) =>
+                $"NUMBER({column.Precision ?? 18},{column.Scale ?? 4})",
             var t when t == typeof(DateTime) => "TIMESTAMP(3)",
             var t when t == typeof(DateTimeOffset) => "TIMESTAMP(3) WITH TIME ZONE",
             var t when t == typeof(DateOnly) => "DATE",
-            var t when t == typeof(TimeOnly) || t == typeof(TimeSpan) => "INTERVAL DAY(0) TO SECOND(3)",
+            var t when t == typeof(TimeOnly) || t == typeof(TimeSpan) =>
+                "INTERVAL DAY(0) TO SECOND(3)",
             var t when t == typeof(Guid) => "CHAR(36)",
             var t when t == typeof(char) => "CHAR(1)",
-            _ => throw new QuickSqlException($"Oracle 血统（达梦/神通）未登记 CLR 类型 {clrType.Name} 的存储类型，请显式给 [Column(TypeName=...)]"),
+            _ => throw new QuickSqlException(
+                $"Oracle 血统（达梦/神通）未登记 CLR 类型 {clrType.Name} 的存储类型，请显式给 [Column(TypeName=...)]"
+            ),
         };
     }
 
@@ -136,7 +141,8 @@ public class OracleTypes : ITypeMap
         return false;
     }
 
-    bool TryLookup(string baseName, out Type? clrType) => StoreToClr.TryGetValue(baseName, out clrType);
+    bool TryLookup(string baseName, out Type? clrType) =>
+        StoreToClr.TryGetValue(baseName, out clrType);
 
     /// <summary>这一族有两个答案（VARCHAR2(n) 看会话、VARCHAR2(n CHAR) 看写法），VarCharType 选了把答案写在列上那一种。
     /// 真正的判据在 ISchemaReader.ProbeLengthSemanticsAsync 的读数里——那里量的才是库里那一列实际是字节还是字符。</summary>
@@ -148,7 +154,10 @@ public class OracleTypes : ITypeMap
         var paren = name.IndexOf('(');
         var space = name.IndexOf(' ');
 
-        var cut = paren < 0 ? space : space < 0 ? paren : Math.Min(paren, space);
+        var cut =
+            paren < 0 ? space
+            : space < 0 ? paren
+            : Math.Min(paren, space);
 
         // INTERVAL DAY(0) TO SECOND(3) 的基名跨两个词，所以它单独立一条而不是按第一个空格切。
         if (name.StartsWith("interval ", StringComparison.OrdinalIgnoreCase))
@@ -167,7 +176,9 @@ public class OracleTypes : ITypeMap
 
         var close = storeTypeName.IndexOf(')', comma);
 
-        return close > comma + 1 && int.TryParse(storeTypeName.AsSpan(comma + 1, close - comma - 1), out var scale)
+        return
+            close > comma + 1
+            && int.TryParse(storeTypeName.AsSpan(comma + 1, close - comma - 1), out var scale)
             ? scale
             : null;
     }

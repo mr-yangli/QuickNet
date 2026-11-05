@@ -29,21 +29,23 @@ public sealed class PostgreSqlValues : IValueBinder
             shaped,
             DbTypeOf(value is DateTime ? shaped : value, hint),
             SizeOf(value),
-            hint);
+            hint
+        );
     }
 
-    static object? Normalize(object? value, ColumnContract? hint) => value switch
-    {
-        null => DBNull.Value,
+    static object? Normalize(object? value, ColumnContract? hint) =>
+        value switch
+        {
+            null => DBNull.Value,
 
-        // 驱动不会替我们转：直接传枚举实例会被当成字符串或报错，而列上是 INTEGER。
-        { } typed when typed.GetType().IsEnum => EnumAsIntegral(typed),
+            // 驱动不会替我们转：直接传枚举实例会被当成字符串或报错，而列上是 INTEGER。
+            { } typed when typed.GetType().IsEnum => EnumAsIntegral(typed),
 
-        // 带偏移的时刻要与列同型（下面那一句），裸时刻要与列同型（同一句的返）。
-        DateTime moment => BareOrOffset(moment, hint),
+            // 带偏移的时刻要与列同型（下面那一句），裸时刻要与列同型（同一句的返）。
+            DateTime moment => BareOrOffset(moment, hint),
 
-        var typed => typed,
-    };
+            var typed => typed,
+        };
 
     /// <summary>只改交出去的那一形的说法，不改它表示的时刻。Npgsql 6 起按 DateTime.Kind 分型：
     /// Kind=Utc 只肯进带时区那一型，写进裸 timestamp 在绑定当场抛（Cannot write DateTime with Kind=UTC）。
@@ -54,18 +56,29 @@ public sealed class PostgreSqlValues : IValueBinder
     {
         var store = hint?.StoreTypeName;
 
-        var wantsOffset = store is not null
-                          && (store.Contains("timestamptz", StringComparison.OrdinalIgnoreCase)
-                              || store.Contains("with time zone", StringComparison.OrdinalIgnoreCase));
+        var wantsOffset =
+            store is not null
+            && (
+                store.Contains("timestamptz", StringComparison.OrdinalIgnoreCase)
+                || store.Contains("with time zone", StringComparison.OrdinalIgnoreCase)
+            );
 
         if (!wantsOffset)
-            return moment.Kind == DateTimeKind.Utc ? DateTime.SpecifyKind(moment, DateTimeKind.Unspecified) : moment;
+            return moment.Kind == DateTimeKind.Utc
+                ? DateTime.SpecifyKind(moment, DateTimeKind.Unspecified)
+                : moment;
 
         return moment.Kind switch
         {
             DateTimeKind.Utc => new DateTimeOffset(moment.Ticks, TimeSpan.Zero),
-            DateTimeKind.Local => new DateTimeOffset(moment.Ticks, TimeZoneInfo.Local.GetUtcOffset(moment)),
-            _ => new DateTimeOffset(DateTime.SpecifyKind(moment, DateTimeKind.Utc).Ticks, TimeSpan.Zero),
+            DateTimeKind.Local => new DateTimeOffset(
+                moment.Ticks,
+                TimeZoneInfo.Local.GetUtcOffset(moment)
+            ),
+            _ => new DateTimeOffset(
+                DateTime.SpecifyKind(moment, DateTimeKind.Utc).Ticks,
+                TimeSpan.Zero
+            ),
         };
     }
 
@@ -73,7 +86,7 @@ public sealed class PostgreSqlValues : IValueBinder
     /// 否则 DbType.Byte 与实参类型对不上，报错的是驱动而不是这里。</summary>
     static object EnumAsIntegral(object value)
     {
-        var convertible = (IConvertible) value;
+        var convertible = (IConvertible)value;
 
         return Type.GetTypeCode(Enum.GetUnderlyingType(value.GetType())) switch
         {
@@ -88,13 +101,14 @@ public sealed class PostgreSqlValues : IValueBinder
         };
     }
 
-    static int SizeOf(object? value) => value switch
-    {
-        string text => text.Length,
-        byte[] bytes => bytes.Length,
-        char => 1,
-        _ => 0,
-    };
+    static int SizeOf(object? value) =>
+        value switch
+        {
+            string text => text.Length,
+            byte[] bytes => bytes.Length,
+            char => 1,
+            _ => 0,
+        };
 
     static DbType DbTypeOf(object? value, ColumnContract? hint)
     {
@@ -152,11 +166,19 @@ public sealed class PostgreSqlValues : IValueBinder
                 sql = flag ? "TRUE" : "FALSE";
                 return true;
 
-            case byte or sbyte or short or ushort or int or uint or long or ulong:
+            case byte
+            or sbyte
+            or short
+            or ushort
+            or int
+            or uint
+            or long
+            or ulong:
                 sql = Invariant(value);
                 return true;
 
-            case float or double:
+            case float
+            or double:
                 sql = InlineNumber(Invariant(value));
 
                 // 空串 = 这一格拒了（非有限值）。这一家有 'NaN'::double precision 的写法，但它是
@@ -172,11 +194,15 @@ public sealed class PostgreSqlValues : IValueBinder
                 return true;
 
             case DateTime moment:
-                sql = Literal(moment.ToString("yyyy-MM-ddTHH:mm:ss.fff", CultureInfo.InvariantCulture));
+                sql = Literal(
+                    moment.ToString("yyyy-MM-ddTHH:mm:ss.fff", CultureInfo.InvariantCulture)
+                );
                 return true;
 
             case DateTimeOffset withOffset:
-                sql = Literal(withOffset.ToString("yyyy-MM-ddTHH:mm:ss.fffzzz", CultureInfo.InvariantCulture));
+                sql = Literal(
+                    withOffset.ToString("yyyy-MM-ddTHH:mm:ss.fffzzz", CultureInfo.InvariantCulture)
+                );
                 return true;
 
             case DateOnly day:
@@ -190,8 +216,8 @@ public sealed class PostgreSqlValues : IValueBinder
         }
     }
 
-    static string Invariant(object? value)
-        => value is IFormattable formattable
+    static string Invariant(object? value) =>
+        value is IFormattable formattable
             ? formattable.ToString(null, CultureInfo.InvariantCulture)
             : value?.ToString() ?? string.Empty;
 

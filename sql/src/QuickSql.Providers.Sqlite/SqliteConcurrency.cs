@@ -1,5 +1,4 @@
 using QuickSql.Metadata;
-using QuickSql.Providers;
 using QuickSql.Sql.Ast;
 
 namespace QuickSql.Providers.Sqlite;
@@ -20,6 +19,14 @@ public sealed class SqliteConcurrency : IConcurrencyStrategy
     /// 空值那一档由调用方先折成 IS NULL 再下来："col" = :p 在 NULL 上恒为 UNKNOWN——
     /// 不折的话那一行每次保存都成一次"冲突"。本家多一处要小心的：版本列是文本时，
     /// 比较的是写法而不是时刻，所以"这一列能不能当版本列"取决于它是否只由本仓库写过。</summary>
-    public SqlExpression BuildPredicate(SqlExpression target, ColumnContract column, object? originalValue)
-        => new SqlBinaryExpression(BinaryOperator.Equal, target, new ParameterValue(originalValue, column));
+    public SqlExpression BuildPredicate(
+        SqlExpression target,
+        ColumnContract column,
+        object? originalValue
+    ) =>
+        new SqlBinaryExpression(
+            BinaryOperator.Equal,
+            target,
+            new ParameterValue(originalValue, column)
+        );
 }
