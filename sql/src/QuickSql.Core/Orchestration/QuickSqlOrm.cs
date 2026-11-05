@@ -41,6 +41,13 @@ public sealed class QuickSqlOrmOptions
     /// <summary>Fluent 配置（优先级最高的配置面）。null 表示只用 DataAnnotations。</summary>
     public ModelConfiguration? Model { get; init; }
 
+    /// <summary>字符串列没声明宽度时的缺省宽度。null（缺省）= 维持旧行为，交给 provider 的大文本型
+    /// （SQL Server 落 NVARCHAR(MAX)）。正数 = 未声明的 string 列按这个宽度落 DDL，写侧长度尺子也按它量。
+    /// 三档不吃这一格：显式宽度（注解 / Fluent）赢过它；显式非正数（[QuickColumn(Length = -1)]、
+    /// Fluent HasMaxLength(-1)）表示"这一列明确不要上限"；点名了存储型的列（HasDbType / [Column(TypeName)])
+    /// 也不吃——那一列的形状已经由声明者自己钉死。0 与负数是配置错误，构造 orm 时当场抛。</summary>
+    public int? DefaultStringLength { get; init; }
+
     public int CommandTimeoutSeconds { get; init; } = 30;
 
     /// <summary>默认 Throw：宁可少跑一条 SQL，也不要一个"数据库不保证的行序"被当成稳定的分页结果。</summary>
@@ -82,7 +89,8 @@ public sealed class QuickSqlOrm
     [RequiresUnreferencedCode("G2 兜底注册表按 Type 反射解析实体与注解。")]
     [RequiresDynamicCode("G2 兜底注册表编译读写委托。")]
     public QuickSqlOrm(QuickSqlOrmOptions options)
-        : this(options, new EntitySchemaRegistry(new ContractResolver(options.Provider, options.Model)))
+        : this(options, new EntitySchemaRegistry(new ContractResolver(options.Provider, options.Model,
+            defaultStringLength: options.DefaultStringLength)))
     {
     }
 
@@ -98,6 +106,7 @@ public sealed class QuickSqlOrm
         Schemas = schemas;
         Aop = options.Aop;
         PagingOrdering = options.PagingOrdering;
+        DefaultStringLength = options.DefaultStringLength;
         Sources = new ConnectionSources(options.ConnectionString, options.Replicas, options.Clusters);
         Compiler = new QueryCompiler(Provider);
         Ado = new AdoExecutor(Provider, Sources, options.Aop, options.CommandTimeoutSeconds, ContractByTableName);
@@ -169,6 +178,10 @@ public sealed class QuickSqlOrm
     public ConnectionSources Sources { get; }
 
     public PagingOrderingPolicy PagingOrdering { get; }
+
+    /// <summary>Options.DefaultStringLength 的回读口：DbContext 自建注册表时要把同一颗缺省宽度带过去，
+    /// 否则同一个 orm 的两种注册路径会建出两种宽度的表。</summary>
+    public int? DefaultStringLength { get; }
 
     /// <summary>全局过滤器（软删 / 多租户）。一个 orm 实例一份，注册在启动期做完，
     /// 之后读路径与 Update / Delete 两条链都会带上它。它与 Aop 的分工：CudBuilding 是"整句文本改写的地方"，

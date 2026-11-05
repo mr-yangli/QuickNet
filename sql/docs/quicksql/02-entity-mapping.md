@@ -62,10 +62,41 @@ ClickHouse 专属：`[ClickHouseSkipIndex(SkipIndexKind.MinMax, ...)]`，属性�
 | --- | --- |
 | 整型主键 `Id` | 主键 + 自增（`[Key]` 在不在都认；客户端生成主键见 §3.4） |
 | C# 可空性 | `string?` ⇒ 可空列；非空 ⇒ `NOT NULL`。可空上下文之外（`#nullable disable`、无元数据的外部程序集）按"未表态"处理，**不**强行当非空 |
-| 无长度字符串 | 用 provider 默认（SQL Server 落 `NVARCHAR(MAX)`） |
+| 无长度字符串 | 用 provider 默认（SQL Server 落 `NVARCHAR(MAX)`）；配了 `DefaultStringLength` 时按它落宽度 |
 | 导航属性 | 不成列（引用类型 + 集合属性被识别为关系，见 §5） |
 | 只有 getter 的成员 | 不是列（判据是"有没有写口"：`{ get; protected set; }`、`{ get; init; }` 都算有写口，照常映射） |
 | 无参构造器 | 物化用，**不问可见性**——`protected X()` 的 ABP/DDD 实体直接可用；带参构造器只有 record/构造器 DTO 投影走公共那一颗 |
+
+### 2.1 字符串宽度的四态
+
+宽度只有"声明得出来"和"没声明"两档时，一张没写注解的实体在 SQL Server 上全是 `NVARCHAR(MAX)`。
+想让"没写长度的列"统一落一个宽度、又不想逐列打注解时，配 orm 级的缺省宽度：
+
+```csharp
+var orm = new QuickSqlOrm(new QuickSqlOrmOptions
+{
+    Provider = provider,
+    ConnectionString = connectionString,
+    DefaultStringLength = 255,     // null（缺省）= 维持旧行为
+});
+
+// DI 同一颗（注册表是 Singleton，注册时定好）
+services.AddQuickSqlOrm(DbKind.SqlServer, connectionString, o => o.DefaultStringLength = 255);
+```
+
+四态的分界（与 `[StringLength]` / `[MaxLength]` / `[QuickColumn(Length)]` / Fluent `HasMaxLength` 都按这条走）：
+
+| 声明 | 落什么 | 吃 `DefaultStringLength` 吗 |
+| --- | --- | --- |
+| 什么都不写 | provider 大文本型（SQL Server `NVARCHAR(MAX)`、PG `text`、**虚谷 `CLOB`**）/ 或配置的宽度 | 吃 |
+| `[StringLength(50)]`、`HasMaxLength(50)`、`[QuickColumn(Length = 50)]` | `NVARCHAR(50)` | 不吃（显式赢） |
+| `[QuickColumn(Length = -1)]`、Fluent `HasMaxLength(-1)`、`[StringLength(-1)]` | 大文本型 | 不吃（显式无宽度） |
+| `HasDbType("nvarchar(max)")`、`[Column(TypeName = "nvarchar(max)")]` | 原样点名的那一型 | 不吃（形状已由声明者钉死） |
+
+两点要说清：① 非正数这一态是"这一列明确不要上限"，公告内容、合同正文这类列在配了全局宽度后必须显式标它
+（DA 的 `[StringLength(-1)]` 构造得出来，但它自己的 `IsValid` 会抛——实体要过 DataAnnotations 校验管线时
+用 `[QuickColumn(Length = -1)]`）；② `0` 与负数是**配置侧**的错误，构造 orm 时抛 `ArgumentOutOfRangeException`
+（关掉默认就是不设这一格，而不是设 0）。
 
 ## 3. 主键与自增
 

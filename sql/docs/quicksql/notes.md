@@ -10,6 +10,7 @@
 - `NullableInStore` 是五族 EmitColumnDefinition 的唯一可空判据——"改一处注解就让两条 DDL 对上"的修法在这一格无处遁形。
 - `Comment` 的 null 与空串语义不同：结构同步按这一格决定要不要重发 COMMENT ON COLUMN。
 - `MaxLength` 解析链上 StringLength 与 MaxLength 同层互斥，取严格者会藏"建表按 20、校验按 50"三个月的 bug，所以直接抛 MetadataConflictException。
+- `ColumnFacts.MaxChars` 的三态（`DefaultStringLength` 落地后）：null = 未表态（吃 orm 默认）、> 0 = 声明宽度、<= 0 = 显式"无宽度"（不吃默认）。两条注册路径各自只负责"写了的原样进事实、没写的给 null"，收口在 `ColumnFacts.ToProvisional`；点名了存储型（`StoreTypeName`）的列额外跳过默认——否则契约宽度会小于列的实宽，`FitsChars` 会拒掉列明明装得下的值。DA 的 `[StringLength(-1)]` 也走这一态，代价是它自己的 `IsValid` 会抛（"maximum length must be a nonnegative integer"），实体要过 DA 校验管线时改用 `[QuickColumn(Length = -1)]`。
 
 ---
 
@@ -535,7 +536,8 @@
 ### QuickSql.Providers.Xugu
 
 - `src/QuickSql.Providers.Xugu/XuguChangeGuard.cs + XuguChangeGuard`：三段式理由的完整版——本家没有 IS DISTINCT FROM / IS NOT DISTINCT FROM（交 E19260 syntax error, unexpected DISTINCT，期望集 expecting _FALSE or _NULL or _TRUE or _UNKNOWN，即 IS 后只接这四颗）与 NULL 安全等号（E19260 unexpected '>'），三形都是活库正问出的语法错；"布尔不是一等值"那条理由落不到本家头上——三段近似式在真行上双向数得清（BOOL_VALUE=0 ∶ BOOL_INVERSE=2，相加等于靶表两行，两颗列均不可空），F-22/F-23 各交 D=1 与 D=True。三段式按调用点是 4 家三段 ∶ 1 家一句（金仓 IS DISTINCT FROM）。
-- `src/QuickSql.Providers.Xugu/XuguChangeGuard.cs + XuguChangeGuard`：Compares 关两颗的改判史——上一版关 text/clob/blob 三颗，按厂商文档改判两颗（TEXT 是 VARCHAR 同义字、带宽度、可比）；"问不出答案"档与 MySqlChangeGuard 的 json 同级，但可达性相反：byte[] → BLOB 与超 60000 字符 string → CLOB 都是默认路径，false 会被真实实体读到。
+- `src/QuickSql.Providers.Xugu/XuguChangeGuard.cs + XuguChangeGuard`：Compares 关两颗的改判史——上一版关 text/clob/blob 三颗，按厂商文档改判两颗（TEXT 是 VARCHAR 同义字、带宽度、可比）；"问不出答案"档与 MySqlChangeGuard 的 json 同级。**可达性 2026-11-05 再改判**：建侧无宽度已改发 CLOB（见 XuguTypes 那条），于是"不可比"从"要显式点名才踩到"变成"未声明宽度的 string 默认就踩到"；byte[] → BLOB 与 >60000 字符 string → CLOB 仍是默认路径。
+- `src/QuickSql.Providers.Xugu/XuguTypes.cs + GetStoreType`：无宽度档 2026-11-05 由 TEXT 改 CLOB——厂商文档明写 TEXT/VARCHAR2/NVARCHAR/NVARCHAR2 是 VARCHAR 的映射类型、效果等同；不写长度只吃行记录剩余空间（行 64K），活库实测（TESTDB）：10,000 字符过，60,000 / 60,001 / 100,000 全拒；CLOB 10 万与 100 万字符写入、回读一致，`= / > / LIKE` 能用，但 `ORDER BY` 与 `CREATE INDEX` 都报 E10008（无比较函数）。tracking 不受影响：Compares 只在"同掩码多行合并成一条 UPDATE"那一支被读（EntityTracker.Mergeable），而虚谷 `SupportsJoinedWrites=false`，那条路本来就不走；变更检测是客户端快照逐列 Equals。迁移注意：旧表上的 TEXT 列与新契约的 CLOB 形状不同，结构同步会把它判成待改列。
 - `src/QuickSql.Providers.Xugu/XuguChangeGuard.cs + XuguChangeGuard`：守卫关列的后果今天为零——EntityTracker.Mergeable 先问 Dialect.SupportsJoinedWrites（EntityTracker.cs:860），逐列问 Compares 排在后面（:869）；"守卫关一列 ⇒ 整批退回一句一实体"由方言闸门代跑，守卫自己的 false 只被离线手工构造 AST 的用例量到。这是"不该写成 if (是达梦)"的第三个实例。
 - `src/QuickSql.Providers.Xugu/XuguChangeGuard.cs + XuguChangeGuard`：去尾空格不对称账——厂商文档明写 CHAR/VARCHAR 存入去尾，"库里 abc、新值 abc␣"在参数比较上不等（比较发生在写入之前），守卫判"变了"发 UPDATE，写回的规范化值与库里逐字相同——多写一行不丢写。MySQL 那档（CI 排序规则）是丢写，两行都在跨库差异表、优先级不同。本条不在黄金样本里：没有真库能证"去尾发生在参数比较之前"，是从"存入时"三个字读的。
 - `src/QuickSql.Providers.Xugu/XuguConcurrency.cs + XuguConcurrency`：rowversion 全账【实测】——CREATE TABLE … ("ID" INT, "V" ROWVERSION) 建得成（TYPE_NAME="ROWVERSION"、SCALE=-1，小写同绿，RV-01a/b/c）；真的会自增（RV-11b…h 链：灌行不带 V → 快照抄 V → 改前两表 V 相等数到 1 → 改一次别列 → 比数到 0 → 二改仍 0）；但值取不回：带它的投影一取行抛 System.DataOutOfBindException（RV-08b/08d/09e 三场同一颗红）；SET "V" = 5 被 E16010 拒、LENGTHB("V") 被 E10049 拒（两号厂商中文文本在裸连日志里是残字，判读不建在文本上）。对照排错：不带 V 的 COUNT(*) 绿（RV-09a=1）、带 V 零行绿（RV-09b，FIELDS=2 ROWS_SHOWN=0）、V 只进 COUNT("V") 绿（RV-09c=1，值非 NULL）。分布改读成"2 家库会给值，其中这一家读不回"；卡点在 SPI 不在 provider。

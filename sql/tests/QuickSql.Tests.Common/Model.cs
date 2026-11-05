@@ -452,3 +452,26 @@ public class DefaultsRow
 
     public string? Bare { get; set; }
 }
+
+/// <summary>字符串宽度的四态靶实体（2026-11-05）：未声明 / 显式宽度 / 显式无宽度 / 点名存储型。
+/// 归 <c>DefaultStringLengthTests</c>：G1 与 G2 两侧必须给出同一份宽度结论，而 orm 默认只吃第一态。</summary>
+[Table("QuickSqlWidthProbe")]
+public class WidthProbeRow
+{
+    public int Id { get; set; }
+
+    /// <summary>未声明：吃 orm 的 DefaultStringLength；不配这一格时仍旧落 provider 的大文本型。</summary>
+    public string? Bare { get; set; }
+
+    /// <summary>显式宽度：永远赢过 orm 默认。</summary>
+    [QuickColumn(Length = 32)]
+    public string? Narrow { get; set; }
+
+    /// <summary>显式无宽度：非正数 = 声明者明确不要上限，因此不吃 orm 默认。</summary>
+    [QuickColumn(Length = -1)]
+    public string? Unlimited { get; set; }
+
+    /// <summary>点名了存储型：宽度已由声明者钉死，不吃 orm 默认（否则写侧长度尺子会拒掉列装得下的值）。</summary>
+    [Column(TypeName = "nvarchar(max)")]
+    public string? Named { get; set; }
+}

@@ -36,9 +36,10 @@ public sealed class GeneratedEntitySchemaRegistry : IEntitySchemaRegistry
             ? _fallback.RegisteredTypes
             : [.. _g1Types.Keys, .. _fallback.RegisteredTypes];
     readonly bool _integralPrimaryKeyAutoIncrement;
+    readonly int? _defaultStringLength;
 
     public GeneratedEntitySchemaRegistry(IDbProvider provider, GeneratedEntityLookup lookup, EntitySchemaOptions? options = null, ModelConfiguration? model = null,
-        bool integralPrimaryKeyAutoIncrement = true)
+        bool integralPrimaryKeyAutoIncrement = true, int? defaultStringLength = null)
     {
         ArgumentNullException.ThrowIfNull(provider);
         ArgumentNullException.ThrowIfNull(lookup);
@@ -47,7 +48,8 @@ public sealed class GeneratedEntitySchemaRegistry : IEntitySchemaRegistry
         _lookup = lookup;
         Options = options ?? new EntitySchemaOptions();
         _integralPrimaryKeyAutoIncrement = integralPrimaryKeyAutoIncrement;
-        Resolver = new ContractResolver(provider, model, integralPrimaryKeyAutoIncrement);
+        _defaultStringLength = defaultStringLength;
+        Resolver = new ContractResolver(provider, model, integralPrimaryKeyAutoIncrement, defaultStringLength);
         _fallback = new EntitySchemaRegistry(Resolver, Options);
     }
 
@@ -97,7 +99,7 @@ public sealed class GeneratedEntitySchemaRegistry : IEntitySchemaRegistry
         var metadata = Find(clrType)!;
 
         return EntityContractFactory.Build(metadata.ClrType, metadata.Table, metadata.Columns, metadata.Indexes,
-            metadata.Relationships, _types, _integralPrimaryKeyAutoIncrement, metadata.SkipIndexes);
+            metadata.Relationships, _types, _integralPrimaryKeyAutoIncrement, metadata.SkipIndexes, _defaultStringLength);
     }
 
     object BuildSchema(Type clrType)

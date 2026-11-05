@@ -73,31 +73,43 @@ public sealed record ColumnFacts
     /// 构造函数照收 -1、只在有人真调用 IsValid 时才响——建契约这一路一路绿灯，直到发射 DDL
     /// 或首次校验才现形；两条路（源码生成与反射）在这里同形，所以收口只能收在这一个点上，
     /// 各家发射侧与校验侧因此都拿不到负数。</summary>
-    public ColumnContract ToProvisional(TableInfo table) => new()
+    /// <summary>字符上限的三态：&gt; 0 是声明的宽度；&lt;= 0 是显式"无宽度"（声明者明确说过不要上限，
+    /// 因此不吃 orm 的默认长度）；null 是未表态——这一档才吃 <paramref name="defaultStringLength"/>。
+    /// 只有字符串列吃默认，且点名了存储型（<see cref="StoreTypeName"/>）的列不吃：那一列的形状
+    /// 已经由调用方自己钉死（例如 nvarchar(max)），再塞一个契约宽度只会让写侧长度尺子拒掉列装得下的值。
+    /// 可空那一格与非正数收口都留在这一处，G1/G2 两条路因此拿到同一份结论。</summary>
+    public ColumnContract ToProvisional(TableInfo table, int? defaultStringLength = null)
     {
-        MemberName = MemberName,
-        ClrType = ClrType,
-        ColumnName = ColumnName,
-        LengthSemantics = LengthSemantics.Char,
-        Unicode = true,
-        IsNullable = IsNullable,
-        NullabilityDeclared = NullabilityDeclared,
-        IsPrimary = IsPrimary,
-        IsIdentity = false,
-        IsConcurrencyToken = IsConcurrencyToken,
-        AppSetsValue = IsConcurrencyToken && AppSetsValue,
-        MaxChars = MaxChars > 0 ? MaxChars : null,
-        MaxBytes = null,
-        Precision = Precision,
-        Scale = Scale,
-        StoreTypeName = StoreTypeName,
-        Comment = Comment,
-        DefaultValue = DefaultValue,
-        Origin = new OriginTrace(ColumnNameLayer, $"{table.Name}.{ColumnName} ← {ColumnNameNote}; 长度 ← {LengthNote}"
-            + (MaxChars is { } declared && declared <= 0 ? "（非正数 ⇒ 按未声明宽度处理）" : string.Empty)
-            + $"; 可空 ← {NullableNote}"
-            + (IsConcurrencyToken ? $"; 并发 ← {ConcurrencyNote}" : string.Empty)),
-    };
+        var fallback = ClrType == typeof(string) && string.IsNullOrEmpty(StoreTypeName) ? defaultStringLength : null;
+        var width = MaxChars is > 0 ? MaxChars : MaxChars is null ? fallback : null;
+
+        return new()
+        {
+            MemberName = MemberName,
+            ClrType = ClrType,
+            ColumnName = ColumnName,
+            LengthSemantics = LengthSemantics.Char,
+            Unicode = true,
+            IsNullable = IsNullable,
+            NullabilityDeclared = NullabilityDeclared,
+            IsPrimary = IsPrimary,
+            IsIdentity = false,
+            IsConcurrencyToken = IsConcurrencyToken,
+            AppSetsValue = IsConcurrencyToken && AppSetsValue,
+            MaxChars = width,
+            MaxBytes = null,
+            Precision = Precision,
+            Scale = Scale,
+            StoreTypeName = StoreTypeName,
+            Comment = Comment,
+            DefaultValue = DefaultValue,
+            Origin = new OriginTrace(ColumnNameLayer, $"{table.Name}.{ColumnName} ← {ColumnNameNote}; 长度 ← {LengthNote}"
+                + (MaxChars is <= 0 ? "（非正数 ⇒ 显式无宽度，不吃默认长度）" : string.Empty)
+                + (MaxChars is null && width is { } applied ? $"（未声明 ⇒ 默认长度 {applied}）" : string.Empty)
+                + $"; 可空 ← {NullableNote}"
+                + (IsConcurrencyToken ? $"; 并发 ← {ConcurrencyNote}" : string.Empty)),
+        };
+    }
 }
 
 /// <summary>索引在两侧的声明形状：Index 注解与 Fluent 的 HasIndex 都折成它，
@@ -159,16 +171,18 @@ public static class EntityContractFactory
     /// 所以"外键指向了一个没映射的属性"在两条路径上是同一句话。
     /// integralPrimaryKeyAutoIncrement 是约定那一档给不给"整型主键即自增"——false 是给
     /// "主键由客户端生成"那一族库（雪花编号）留的装配声明，它只挪约定，注解与 Fluent
-    /// 表过态的列照旧赢过它。skipIndexes 的声明里没有名字的走约定名，换算与撞名判定
+    /// 表过态的列照旧赢过它。defaultStringLength 是 orm 级的"未声明宽度"兜底（三态规则见
+    /// <see cref="ColumnFacts.ToProvisional"/>），显式宽度、显式非正数与点名了存储型的列都不吃它。
+    /// skipIndexes 的声明里没有名字的走约定名，换算与撞名判定
     /// 都只有 MapSkipIndexes 一份。</summary>
     public static EntityContract Build(Type clrType, TableInfo table, IReadOnlyList<ColumnFacts> columns, IReadOnlyList<IndexFacts> indexes,
         IReadOnlyList<RelationshipFacts> relationships, ITypeMap types, bool integralPrimaryKeyAutoIncrement = true,
-        IReadOnlyList<SkipIndexFacts>? skipIndexes = null)
+        IReadOnlyList<SkipIndexFacts>? skipIndexes = null, int? defaultStringLength = null)
     {
         var resolved = new ColumnContract[columns.Count];
 
         for (var i = 0; i < columns.Count; i++)
-            resolved[i] = Complete(columns[i], table, types, integralPrimaryKeyAutoIncrement);
+            resolved[i] = Complete(columns[i], table, types, integralPrimaryKeyAutoIncrement, defaultStringLength);
 
         if (!Array.Exists(resolved, static c => c.IsPrimary))
             ApplyKeyConvention(resolved, clrType.Name, integralPrimaryKeyAutoIncrement);
@@ -273,9 +287,10 @@ public static class EntityContractFactory
         return split with { ColumnName = column.ColumnName };
     }
 
-    static ColumnContract Complete(ColumnFacts facts, TableInfo table, ITypeMap types, bool integralPrimaryKeyAutoIncrement)
+    static ColumnContract Complete(ColumnFacts facts, TableInfo table, ITypeMap types, bool integralPrimaryKeyAutoIncrement,
+        int? defaultStringLength)
     {
-        var withStorage = types.ApplyStorageDefaults(facts.ToProvisional(table));
+        var withStorage = types.ApplyStorageDefaults(facts.ToProvisional(table, defaultStringLength));
 
         // 自增要等类型定下来才能判定：主键 + 整型，且没有任何一层显式说过不是。
         // 装配口说"这一族库的整型主键归客户端给号"时，约定那一半让位给声明，声明那一半原样保留。

@@ -5,7 +5,9 @@ using QuickSql.Providers;
 namespace QuickSql.Providers.Xugu;
 
 /// <summary>CLR ↔ 虚谷类型名。出处有文档与产物两档（本仓库第一份"类型事实有两个独立出处"的 provider），
-/// 分岔五条：宽度量纲恒字符（厂商明写，实测按字符落闸）；VARCHAR 单列上限 60000 字符、超出换 CLOB（TEXT 只是 VARCHAR 的同义字）；
+/// 分岔五条：宽度量纲恒字符（厂商明写，实测按字符落闸）；VARCHAR 单列上限 60000 字符、超出换 CLOB；
+/// 无宽度也发 CLOB——TEXT 只是 VARCHAR 的同义字（文档明写），无宽度档是"行记录剩余空间（64K）"，
+/// 实测 6 万字符即拒，当不了大文本；
 /// 有原生 BOOLEAN 仍把 bool 落 TINYINT——位只跟存储型走，bool 落 TINYINT 期间 Boolean_Type 永不声明；
 /// DATETIME 取 (3)（库能收 6，但 (3) 是五家同一条纪律，且驱动读回本来就只到毫秒）；CHAR/VARCHAR 存入时去尾空格，
 /// "值变了没有"要看去尾之后。
@@ -67,12 +69,14 @@ public sealed class XuguTypes : ITypeMap
         if (column.StoreTypeName is { Length: > 0 } declared)
             return declared;
 
-        // 超过列级上限就不是"写宽一点"而是换一档型：TEXT 在这一家是 VARCHAR 的同义字（带宽度、可比），
-        // CLOB 是另一档。无宽度发 TEXT、超上限发 CLOB——差别是"有没有宽度声明"，不是"哪一档更大"。
+        // 超过列级上限就不是"写宽一点"而是换一档型。无宽度发 CLOB：TEXT 在这一家是 VARCHAR 的同义字，
+        // 不写长度只吃行记录剩余空间（64K，实测 6 万字符即拒），存不下"大文本"。CLOB 2GB——代价是不能
+        // ORDER BY／不能建索引／不进合并写（ChangeGuard 的 Incomparable 两颗），这一档的使用面本来就只有
+        // "存取正文"，不承诺可比。
         if (clrType == typeof(string))
             return column.MaxChars switch
             {
-                null => "TEXT",
+                null => "CLOB",
                 var chars when chars > MaxVarcharChars => "CLOB",
                 var chars => $"VARCHAR({chars})",
             };

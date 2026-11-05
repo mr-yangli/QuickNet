@@ -177,7 +177,8 @@ public class DbContext : IAsyncDisposable, IDisposable
         if (config is null)
             return null;
 
-        var schemas = new EntitySchemaRegistry(new ContractResolver(Orm.Provider, config));
+        var schemas = new EntitySchemaRegistry(new ContractResolver(Orm.Provider, config,
+            defaultStringLength: Orm.DefaultStringLength));
 
         // mb 点过名的实体预登记：结构同步与 Contract(type) 都按"摸过才算在册"记账。
         foreach (var clrType in config.KnownEntityTypes)

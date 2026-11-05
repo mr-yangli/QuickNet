@@ -33,6 +33,10 @@ public sealed class QuickSqlOrmBuilder
     /// <summary>Fluent 模型配置（优先级最高的那一层）。null 表示只用 DataAnnotations 与约定。</summary>
     public ModelConfiguration? Model { get; set; }
 
+    /// <summary>字符串列没声明宽度时的缺省宽度（与 <see cref="QuickSqlOrmOptions.DefaultStringLength"/> 同一颗）。
+    /// 注册表是 Singleton，所以这一格必须在注册时定好、之后不随请求变。</summary>
+    public int? DefaultStringLength { get; set; }
+
     /// <summary>语句超时秒数。默认 30。</summary>
     public int CommandTimeoutSeconds { get; set; } = 30;
 
@@ -69,6 +73,7 @@ public sealed class QuickSqlOrmBuilder
         Replicas = Replicas,
         Clusters = Clusters,
         Model = Model,
+        DefaultStringLength = DefaultStringLength,
         CommandTimeoutSeconds = CommandTimeoutSeconds,
         PagingOrdering = PagingOrdering,
         SchemaSync = SchemaSync,
@@ -188,7 +193,8 @@ public static class QuickSqlServiceCollectionExtensions
         services.AddSingleton<IEntitySchemaRegistry>(sp =>
         {
             var provider = sp.GetRequiredService<IDbProvider>();
-            return new EntitySchemaRegistry(new ContractResolver(provider, builder.Model));
+            return new EntitySchemaRegistry(new ContractResolver(provider, builder.Model,
+                defaultStringLength: builder.DefaultStringLength));
         });
 
         // QuickSqlOrmOptions 走 Scoped：连接串每个请求可以不同（多租户每库一串）。

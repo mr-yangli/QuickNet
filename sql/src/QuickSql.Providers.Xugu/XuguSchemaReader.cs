@@ -101,7 +101,8 @@ public sealed class XuguSchemaReader : ISchemaReader
     /// <summary>把目录的三颗字段（型名、VARYING、SCALE）合成列定义字形；纪律是还回的字形要与
     /// XuguTypes.GetStoreType 发出的同一。SCALE = -1 说的是"这一型没有声明值"——把"没有声明"读成
     /// 一个负的声明是这一格里最坏的错：不红，还给对账一条看着像答案的数。
-    /// CHAR + VARYING + 无宽度回 TEXT（TEXT 与"不写宽度的 VARCHAR"在目录里是同一个东西，跟着建侧那支）；
+    /// CHAR + VARYING + 无宽度回 TEXT（那是"不写长度的 VARCHAR"，TEXT 与它同源；建侧现在无宽度发 CLOB，
+    /// 这一支留给历史表与外部建的表）；
     /// INTEGER 折回 INT；TIMESTAMP 不折——它与 DATETIME 的同义关系只有一颗样本说过话；
     /// 时刻两支的精度限定词要还原（TIME(3)/DATETIME(3) 建出去 SCALE=3 回来）。</summary>
     static string StoreType(string dataType, bool varying, int scale) => dataType.ToUpperInvariant() switch

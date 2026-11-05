@@ -15,7 +15,7 @@ namespace QuickSql.Metadata;
 /// 这是 G2 兜底路径（启动期反射一次、结果冻结）；G1 源生成器产出同样的 EntityContract，
 /// 两条路径由对拍用例断言逐字段相等。</summary>
 public sealed class ContractResolver(IDbProvider provider, ModelConfiguration? configuration = null,
-    bool integralPrimaryKeyAutoIncrement = true)
+    bool integralPrimaryKeyAutoIncrement = true, int? defaultStringLength = null)
 {
     readonly ConditionalWeakTable<Type, EntityContract> _cache = new();
 
@@ -26,6 +26,16 @@ public sealed class ContractResolver(IDbProvider provider, ModelConfiguration? c
     /// <summary>约定那一档给不给"整型主键 ⇒ 自增"（QuickSqlOrmOptions.IntegralPrimaryKeyAutoIncrement）。
     /// 它只挪约定：注解与 Fluent 表过态的列照旧赢过它。</summary>
     public bool IntegralPrimaryKeyAutoIncrement { get; } = integralPrimaryKeyAutoIncrement;
+
+    /// <summary>orm 级的"未声明宽度"兜底（QuickSqlOrmOptions.DefaultStringLength）：只作用于没有宽度声明
+    /// 的 string 列。显式宽度赢过它；显式非正数（[QuickColumn(Length = -1)]、Fluent HasMaxLength(-1)、
+    /// [StringLength(-1)]）表示"这一列明确不要上限"，同样不吃它；点名了存储型的列也不吃。
+    /// 0 与负数在这里是配置错误而不是"关掉"——关掉就是不设这一格。</summary>
+    public int? DefaultStringLength { get; } = defaultStringLength is null or > 0
+        ? defaultStringLength
+        : throw new ArgumentOutOfRangeException(nameof(defaultStringLength), defaultStringLength,
+            "DefaultStringLength 只收正整数：null 表示不设默认（维持未声明 ⇒ provider 大文本），"
+            + "要某一列不受默认约束请显式给非正数（[QuickColumn(Length = -1)] 或 Fluent HasMaxLength(-1)）。");
 
     [RequiresUnreferencedCode("G2 兜底路径按 Type 扫描属性与注解；AOT 场景要用 G1 生成的契约（§12.7）。")]
     [RequiresDynamicCode("G2 兜底路径为集合导航编译读口委托；AOT 场景要用 G1 生成的契约（§12.7）。")]
@@ -99,7 +109,7 @@ public sealed class ContractResolver(IDbProvider provider, ModelConfiguration? c
         // 与 G1 生成的事实共用同一段代码：这条链的正确性由两侧逐字段相等的对拍断言兜住。
         return EntityContractFactory.Build(clrType, table, [.. columns], ResolveIndexFacts(clrType, fluent),
             ResolveRelationships(members, columns), Provider.Types, IntegralPrimaryKeyAutoIncrement,
-            ResolveSkipIndexes(clrType));
+            ResolveSkipIndexes(clrType), DefaultStringLength);
     }
 
     TableInfo ResolveTable(Type clrType, FluentEntity? fluent)
@@ -350,9 +360,11 @@ public sealed class ContractResolver(IDbProvider provider, ModelConfiguration? c
             : dataColumn?.Name is { } dc ? (dc, MetadataLayer.DataAccessAnnotation, $"[Column(\"{dc}\")]")
             : (name, MetadataLayer.Convention, "约定：属性名");
 
+        // 宽度的三态在这里成形：写了的（含 0 与负数）原样进事实，"未声明"的那一档才是 null。
+        // 非正数 = 声明者明确说过"这一列不要上限"，收尾时因此不吃 orm 的默认长度。
         (int Value, MetadataLayer Layer, string Note) length =
             fluentMember?.MaxLength is { } fl ? (fl, MetadataLayer.Fluent, $"Fluent HasMaxLength({fl})")
-            : quickColumn is { Length: > 0 } scl ? (scl.Length, MetadataLayer.QuickSqlAttribute, $"[QuickColumn(Length={scl.Length})]")
+            : quickColumn?.Length is { } qcl ? (qcl, MetadataLayer.QuickSqlAttribute, $"[QuickColumn(Length={qcl})]")
             : stringLength is not null ? (stringLength.MaximumLength, MetadataLayer.DataAccessAnnotation, $"[StringLength({stringLength.MaximumLength})]")
             : maxLength is not null ? (maxLength.Length, MetadataLayer.DataAccessAnnotation, $"[MaxLength({maxLength.Length})]")
             : (0, MetadataLayer.ProviderFallback, "未声明，交给 provider 默认");
@@ -410,7 +422,7 @@ public sealed class ContractResolver(IDbProvider provider, ModelConfiguration? c
             ColumnName = columnName.Value,
             ColumnNameLayer = columnName.Layer,
             ColumnNameNote = columnName.Note,
-            MaxChars = length.Value == 0 ? null : length.Value,
+            MaxChars = length.Layer == MetadataLayer.ProviderFallback ? null : length.Value,
             LengthNote = length.Note,
             IsNullable = nullable.Value,
             NullableNote = nullable.Note,

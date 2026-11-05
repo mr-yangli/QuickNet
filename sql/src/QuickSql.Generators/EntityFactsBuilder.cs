@@ -187,17 +187,19 @@ static class EntityFactsBuilder
         }
 
         var name = property.Name;
-        var declaredLength = Number(column, -1, "Length") ?? 0;
+        var declaredLength = Number(column, -1, "Length");
 
         var (columnName, columnNameLayer, columnNameNote) =
             Text(dataColumn, 0, "Name") is { } dataName ? (dataName, "DataAccessAnnotation", $"[Column(\"{dataName}\")]")
             : (name, "Convention", "约定：属性名");
 
+        // 三态与反射侧同一口径：写了的（含 0 与负数）原样进事实，"未声明"那一档才是 null。
+        // 非正数 = 声明者明确说过"不要上限"，收尾时不吃 orm 的默认长度。
         var (lengthValue, lengthNote) =
-            declaredLength > 0 ? (declaredLength, $"[QuickColumn(Length={declaredLength})]")
+            declaredLength is { } quick ? ((int?)quick, $"[QuickColumn(Length={quick})]")
             : stringLength is not null ? (Number(stringLength, 0, "MaximumLength") ?? 0, $"[StringLength({Number(stringLength, 0, "MaximumLength") ?? 0})]")
             : maxLength is not null ? (Number(maxLength, 0, "Length") ?? 0, $"[MaxLength({Number(maxLength, 0, "Length") ?? 0})]")
-            : (0, "未声明，交给 provider 默认");
+            : ((int?)null, "未声明，交给 provider 默认");
 
         var (isNullable, nullableNote, nullabilityDeclared) = NullableOf(type, property, column, required);
 
@@ -227,7 +229,7 @@ static class EntityFactsBuilder
             ColumnName = columnName,
             ColumnNameLayer = columnNameLayer,
             ColumnNameNote = columnNameNote,
-            MaxChars = lengthValue == 0 ? null : lengthValue,
+            MaxChars = lengthValue,
             LengthNote = lengthNote,
             IsNullable = isNullable,
             NullableNote = nullableNote,
