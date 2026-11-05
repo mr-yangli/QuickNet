@@ -151,6 +151,19 @@ namespace QuickSql.Tests.Dialects;
 /// <c>BeginTransaction</c> 两颗重载均当场抛 <c>NotSupportedException</c>，lightweight DELETE
 /// 服务端认语法（变异档立场不改）。</para>
 ///
+/// <para><b>v0.39 第五笔把册数带到十八本</b>：第十八份（tdengine）是单层 provider 的第三颗
+///【文档口径行】（继 duckdb、clickhouse 而来，时序库这一档的第一颗；本机没有引擎、驱动程序集
+/// <c>TDengine</c> —— 包名 <c>TDengine.Connector</c> 不是程序集名 —— 从未解析成功），整层
+///【文档·TDengine】口径。声明位只有 4 颗（<c>Paging_LimitOffset</c>/<c>Boolean_Type</c>/
+/// <c>Guid_Char36</c>/<c>Schemas</c>），四颗全是 OfflineText、各自指一份自家 golden/ 基线；
+/// 写路径那组一位都不声明：3.x 无传统 UPDATE、DELETE 只认首列时间窗（两格在方言整格拒），
+/// 无 RETURNING、无 identity（主键就是那颗时间戳、由调用方给值）、驱动 <c>BeginDbTransaction</c>
+/// 当场 throw（<c>Transactions</c> 与 clickhouse 同格取"没有"）；
+/// <c>Comment_On_Column</c> 也不声明——本家没有列注释这一格（官方 column_definition 文法里没有
+/// COMMENT 项，INS_COLUMNS 目录也没有备注列），而表注释那半能发也能读回，不欠一颗位。
+/// <c>insert-with-keys</c> 那份基线在本家不落盘（回填被内核先拦、方言侧 EmitReturning 整格抛，
+/// 黄金样本改判为"断言抛"）。</para>
+///
 /// <para>第四份（虚谷）带来的不是"又多一位乐观声明"，而是<b>交集没变</b>这一件反常事：它声明的 7 位全部落在
 /// 前四家已经出现过的位上，于是"每接一族交集就小一格"那句隐含预期第一次有了反例。那一格不是运气，是判据
 /// 被执行的结果 —— 掩码按"代码今天真的走到那一条语句"攒，不按"这一族文档里有什么"抄，所以新增一族能带来的
@@ -957,6 +970,27 @@ public sealed class CapabilityLedgerTests
             new(DbCapabilities.Alter_Column_Precision, Provenance.Live, "golden/clickhouse/ddl-alter-and-comment.sql"),
             new(DbCapabilities.Comment_On_Column, Provenance.Live, "golden/clickhouse/ddl-column-comment.sql"),
         ]),
+
+        // 第十八本台账（v0.39 第五笔，TDengine 落笔）。单层 provider 的第三颗【文档口径行】
+        //（与 duckdb/clickhouse 那两本同档：本机没有引擎、驱动从未解析，整层【文档·TDengine】口径），
+        // 时序库这一档的第一颗。与第十七本同形的三处差异逐条记：① 声明位只有 4 颗 —— 写路径那组
+        // 位的空档不是漏记，是整格拒：3.x 没有传统 UPDATE 语句（数据变更只有 INSERT 的 upsert 覆盖
+        // 与 ALTER 那两族【文档·TDengine】），DELETE 官方形状只认首列时间窗
+        //（https://docs.tdengine.com/tdengine-sql/08-delete/），RETURNING/OUTPUT 任何一支都不在
+        // 官方写语句清单里，identity 那一档没有（主键就是那颗时间戳、由调用方给值）；
+        // ② <c>Transactions</c> 与第十七本同格取"没有"——驱动侧 <c>BeginDbTransaction</c> 当场
+        // throw NotSupportedException（源码读数），内核写路径逐句 autocommit 直发、公开路径无位即抛；
+        // ③ <c>Guid_Char36</c> 而不是 Raw16：本家没有 UUID 型，Guid 落 VARCHAR(36) 文本形——
+        // 与 GBase 8s 那颗 CHAR(36) 同档不同家，"文本形往返"那一半与邻本一起欠着活库。
+        // 四颗全是 OfflineText、各指一份自家基线；insert-with-keys 在本家不落盘（回填被内核先拦、
+        // 方言侧 EmitReturning 整格抛，golden 改判为"断言抛"）。
+        new("tdengine", static () => TDengine.Provider(SqlServer.NoDriverFactory.Instance), 4, 4, 0,
+        [
+            new(DbCapabilities.Paging_LimitOffset, Provenance.OfflineText, "golden/tdengine/paging-order-skip-take.sql"),
+            new(DbCapabilities.Boolean_Type, Provenance.OfflineText, "golden/tdengine/where-boolean-flag.sql"),
+            new(DbCapabilities.Guid_Char36, Provenance.OfflineText, "TDengineDialectTests 那条 VARCHAR(36) 断言（类型表那一格；\"文本形往返\"那一半与邻本一起欠着活库）"),
+            new(DbCapabilities.Schemas, Provenance.OfflineText, "golden/tdengine/ddl-qualified.sql"),
+        ]),
     ];
 
     /// <summary>按名字取台账。<b>本类的三条逐家用例都收 <c>string</c> 而不是 <see cref="Ledger"/></b>：
@@ -1071,6 +1105,7 @@ public sealed class CapabilityLedgerTests
         var sqlite = Flags("sqlite");
         var duckDb = Flags("duckdb");
         var clickHouse = Flags("clickhouse");
+        var tdengine = Flags("tdengine");
 
         // tidb 进交集链是白给的一票（掩码逐位同 mysql），而它进链本身就是要钉的事：
         // "接第二颗叶子没有把交集改小"与 v0.31 那句"接第五族没改小"是同一格判据的第二次兑现。
@@ -1147,7 +1182,15 @@ public sealed class CapabilityLedgerTests
         // 交集里剩下的 <c>Schemas</c> 量的是"每一家都有限定名发射口"这一格，而 <c>Transactions</c>
         // 从"逐本声明"变成"十六本里有本缺"——它与 <c>Comment_On_Column</c> 那两颗相同格：掉出交集
         // 不等于"谁没人护着"，那一半的账仍在各行辖内。
-        var shared = kingbase.Intersect(dameng).Intersect(mysql).Intersect(xugu).Intersect(tidb).Intersect(oceanbase).Intersect(openGauss).Intersect(gaussDb).Intersect(highgo).Intersect(shenTong).Intersect(gbase8c).Intersect(gbase8s).Intersect(postgreSql).Intersect(oracle).Intersect(sqlite).Intersect(duckDb).Intersect(clickHouse).ToArray();
+        // <b>v0.39 第五笔：这条链第十五次触链，而本票又是一条白给票。</b>第十八本（tdengine，单层第三颗
+        //【文档口径行】，时序库这一档的第一颗）交的 4 位（<c>Paging_LimitOffset</c> ∶
+        // <c>Boolean_Type</c> ∶ <c>Guid_Char36</c> ∶ <c>Schemas</c>）全部落在别人已经出现过的位上，
+        // 而 <c>Schemas</c> 它带着——交集停在"十八本 ∶ 一位"不动。这一格值得钉的另一半在
+        // <c>Transactions</c>：本家与第十七本同格取"没有"，而它的来路比 clickhouse 那票更硬——
+        // 不是"文档没逐页回读"那一档，是驱动源码的当场 throw（<c>BeginDbTransaction</c>，
+        // VendorDoc·TDengine·驱动源码）。交集对此照旧钝感：它量的还是那颗 <c>Schemas</c>，
+        // "没有事务"的账在各行辖内。
+        var shared = kingbase.Intersect(dameng).Intersect(mysql).Intersect(xugu).Intersect(tidb).Intersect(oceanbase).Intersect(openGauss).Intersect(gaussDb).Intersect(highgo).Intersect(shenTong).Intersect(gbase8c).Intersect(gbase8s).Intersect(postgreSql).Intersect(oracle).Intersect(sqlite).Intersect(duckDb).Intersect(clickHouse).Intersect(tdengine).ToArray();
 
         var expected = new[]
         {

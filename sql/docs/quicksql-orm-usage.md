@@ -91,7 +91,7 @@ builder.Services.AddQuickSqlOrm(DbKind.SqlServer, connectionString, b =>
 
 ## 支持的数据库
 
-SQL Server、PostgreSQL、MySQL、Oracle、SQLite、达梦、人大金仓、openGauss、GaussDB、瀚高、GBase 8c/8s、DuckDB、ClickHouse、TiDB、OceanBase、神通、虚谷。
+SQL Server、PostgreSQL、MySQL、Oracle、SQLite、达梦、人大金仓、openGauss、GaussDB、瀚高、GBase 8c/8s、DuckDB、ClickHouse、TDengine、TiDB、OceanBase、神通、虚谷。
 
 每家对应一颗 `QuickSql.Providers.<库种>` 包（血统基类包传递引入，不用直接装）；驱动包应用侧自装。总表与连接串写法见[多数据库支持](https://gitee.com/mr_yangli/quick-net/blob/main/sql/docs/quicksql/15-multi-database.md)。
 

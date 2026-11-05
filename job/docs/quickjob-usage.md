@@ -209,6 +209,53 @@ app.MapQuickJobDashboard();                       // 默认挂在 /quickjob，UI
 - 任务行「详情」弹定义快照（调度/时区/并发/重叠/优先级/超时/宽限/重试体系）与最近 20 条运行。特性档（`[QuickJob]`）带「声明来源」＝ 命名空间.类.方法（生成器编译期搬进登记），DSL 登记的任务标 DSL。
 - 界面偏好记在浏览器本地：语言中英随手切（首访按 `navigator.language`，zh 开头即中文、否则英文兜底），主题浅色/深色（首访看 `prefers-color-scheme`，没定则暗板）。键：`qj.lang`（zh/en）、`qj.theme`（light/dark）；清掉键即回首访引导。
 
+## 10. 性能基准与门禁（QuickJob.Benchmarks）
+
+基准包在 `benchmarks/QuickJob.Benchmarks/`（TFM net11.0 —— 对照组 TickerQ 11.5.x 只发 net11.0，理由写在 `benchmarks/Directory.Build.props` 头注）。两份用场：
+
+```powershell
+# 门禁：一条命令、几秒内、给红绿（CI 阻断项；判据走自测，不看 BDN）
+dotnet run -c Release --project benchmarks/QuickJob.Benchmarks -- --gate
+
+# 人看的前后对比（BDN 显著性与 Alloc Ratio，PR 附件带）
+dotnet run -c Release --project benchmarks/QuickJob.Benchmarks -- --filter *
+```
+
+**门禁不听 Debug 的**：Debug 下 `--gate` 返回 2（解释见 Program.cs）——装箱更多、内联更少，红会假红、绿会假绿。
+
+**退出码语义** = 红行数（CI 阻断位），红行里**比基线更差**时再加 `+32`（`RegressionFlag`——那一位是钉闸门的硬断言位：红行数会随机器负载翻，钉住的字节/计数是确定量，才配当闸门）。
+
+**BDN 分支在本机换了工具链**：本机 SDK 是 net11 preview，BDN 0.15.8（NuGet 最新，没有更高可升）的 SDK 名片校验解不出 preview 名片，落子进程那张路当场炸 —— Program.cs 里给 BDN 分支换了 `InProcessEmitToolchain`（不落子项目，那条校验路径整体不存在；InProcess 的预算是整个进程一份，显式给 30 分钟）。代价：28 个方法同进程轮跑、无子进程隔离，`Allocated` 列读数打这份折扣 —— SDK/BDN 出 stable 名片后删 `AddJob` 那一行即回默认，基准代码一行不用动。
+
+**收件箱两条腿的账不同态**：BDN 的 InboxAdd10 腿是**每迭代空箱重建 + 定次 256**（`PendingRegistrations.Reset()` 经 ivt 内部面取用 —— 全局登记只进不出 × BDN 百万次重放会在单腿里撑到 GB，0.1.0-beta.1 首场实账；修复后单腿实测进程峰值 16 MB）。所以 BDN 那格读「每迭代从空箱起手的一批」，门禁行 5 的钉（2400 B）读「累计态窗内一批」—— 同形状不同状态，两边别互搬。
+
+**对照组口径**：同代社区调度库 TickerQ 11.5.1（公开壳 `CronExpression.Parse` —— 校验 + 归一，稳态走 internal LRU）与 NCrontab 3.3.0（TickerQ.Utilities 引的 cron 引擎本体；tickerq 家自家基准也以 "TickerQ (NCrontab)" 立场出数）。三档同形表达式 `*/5 * * * *` / `0 9-17 * * 1-5`（营业档）/ `*/30 * * * * *`（带秒），同地基 `2026-03-16 12:00 UTC` —— **QuickJob ≡ NCrontab 的三档 × 3 步步进逐字相等**是行 1 的第一判据（对照只放两家都接的同形面；@别名档归 tests 册，因 TickerQ 壳不收）。别把对照读成「谁更快」的榜——三家形状不同（QuickJob 全量位掩码且 Register 一次后 Next 免费；TickerQ 稳态在 LRU；NCrontab 每番全量），费用各自领账。
+
+**七行预算**（判据性质写在括号里）：
+
+| # | 门禁行 | 判据 |
+|---|--------|------|
+| 1 | Cron 下一次触发 | 同形步进逐字相等（QuickJob≡NCrontab；分配/µs 只报不判） |
+| 2 | Cron 解析一次 | 三档三家都拿到结果不炸 + QuickJob Template 保真 |
+| 3 | PayloadJson 往返 | 往返等值 + 枚举字符串档 + store 文本同渠 + null 双向退化 |
+| 4 | DefinitionSerialization | Write→TryLoad 全字段等 + 坏契约/缺 options 返 null + Snapshot 全字段等 |
+| 5 | 收件箱登记摊销 | 10 颗全收 + 重名二次 Add 即 QuickJobException |
+| 6 | InMemoryJobStore 三腿 | take=8 输出 8 条且有序；三腿 8→64 增量 ≤ 12 幅（O(n²) 会爆） |
+| 7 | 反射字样 0 处 | `src/QuickJob/**` 八形状全 0（零反射承诺 —— 新增即红） |
+
+**首场实测（0.1.0-beta.1，2026-11-04，本机 Release —— 15 颗基线钉的来源场）**：
+
+| 钉 | 首场值 |
+|----|--------|
+| 一次 Next（三档） | 32 / 32 / 32 B（NCrontab 同场 0 B） |
+| 一次 Parse：QuickJob | 416 / 624 / 456 B（TickerQ 壳 288/312/280；NCrontab 1704/1776/1992） |
+| Payload serialize / deserialize | 128 / 272 B（5 字段样张） |
+| Definition Write / TryLoad / Snapshot | 1360 / 1032 / 208 B（契约 510 字符样张） |
+| 收件箱 10 颗一批 | 2400 B（≈240 B/颗，带 cron 串） |
+| Store 64 条池：put / peek take=8 / claim4+回池4 | 112 / 2168 / 448 B（8 条池旁证：同腿 112/600/448 —— 8→64 在 12 幅内） |
+
+**重钉纪律**（照 sql 家三代同一条先例：v0.20/0.23/0.27）：阈值与钉管两件事 —— 阈值问「该不该达标」，钉问「不许比上一次观测更差」。**变差要红，变好也要有人把它钉下来**：读数比钉好时行不红但报「比基线好 —— 重钉成新的基线才算跟上，否则网眼留着」；每一次重钉在常量 summary 与本节的账里各留一格来源。时间类（µs）只报不钉 —— 对的是机器状态，不是代码。
+
 ## 边界与常俗
 
 - **只做调度**：不做业务重放、不做死信线、不做日历表 —— 见重试 + 你自己的 handler。

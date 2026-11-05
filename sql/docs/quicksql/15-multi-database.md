@@ -1,6 +1,6 @@
 # 15 · 多数据库支持
 
-> 本篇解决：18 家数据库各自的包、驱动、连接串写法；各家在标识符、自增回填、upsert 形态上的差异；换库时最容易踩的坑。
+> 本篇解决：19 家数据库各自的包、驱动、连接串写法；各家在标识符、自增回填、upsert 形态上的差异；换库时最容易踩的坑。
 
 ## 1. Provider 总表
 
@@ -24,10 +24,11 @@
 | GBase 8s | `Gbase8s` | `QuickSql.Providers.Gbase8s` | 厂商给件（`GBase.DataDB`） | Informix 形：`Database=<db>;Host=<h>;Service=<port>;Protocol=onsoctcp;Server=<实例>;UID=<u>;PWD=<p>` |
 | SQLite | `Sqlite` | `QuickSql.Providers.Sqlite` | `Microsoft.Data.Sqlite` | `Data Source=<文件路径>`（内存库 `:memory:`） |
 | ClickHouse | `ClickHouse` | `QuickSql.Providers.ClickHouse` | `ClickHouse.Client` | 按官方客户端文档（`Host`/`Port`/`Database`/`Username`/`Password`） |
+| TDengine | `TDengine` | `QuickSql.Providers.TDengine` | `TDengine.Connector`（**驱动程序集名是 `TDengine`**，不是包名） | `protocol=websocket;host=<h>;port=6041;username=root;password=<p>;db=<db>`（websocket 档纯托管不落 taos.dll，走 taosAdapter 6041；native 档要装客户端库且 protocol 缺省即 native） |
 
-**诚实的能力口径**：上表是"可寻址、可产方言 SQL"的家底。按真库执行见证分档——**SQL Server** 全能力在真库跑过（集成层两台实例）；**SQLite、虚谷、PostgreSQL、MySQL** 有真库执行见证（覆盖各自的部分能力档）；**其余十二家**停留在文本层（方言文本有离线黄金样本锁形，但从未在一台机器上连通过驱动）。第一次连通某家时，建议先用 `ToSql()` 对一遍文本、再跑一轮你用到的读写路径。达梦的 NuGet 驱动包还原不通是已知事实（见驱动列）。
+**诚实的能力口径**：上表是"可寻址、可产方言 SQL"的家底。按真库执行见证分档——**SQL Server** 全能力在真库跑过（集成层两台实例）；**SQLite、虚谷、PostgreSQL、MySQL** 有真库执行见证（覆盖各自的部分能力档）；**其余十三家**停留在文本层（方言文本有离线黄金样本锁形，但从未在一台机器上连通过驱动）。第一次连通某家时，建议先用 `ToSql()` 对一遍文本、再跑一轮你用到的读写路径。达梦的 NuGet 驱动包还原不通是已知事实（见驱动列）。TDengine 是时序库这一档的第一颗：无事务、无 UPDATE、无 identity、无二级索引，**每张表第一列必须是 TIMESTAMP 且是主键**（系统自动设）——int Id 血统的模型在这一家建不出表，建模面见 provider 工程的键形状校验。
 
-`DbKind` 枚举 18 个值与 provider 一一对应、没有空档；MariaDB 不设档（MySQL provider 天然可用）。
+`DbKind` 枚举 19 个值与 provider 一一对应、没有空档；MariaDB 不设档（MySQL provider 天然可用）。
 
 ## 2. 标识符策略（迁移时最硬的一格）
 
@@ -40,18 +41,19 @@
 | 虚谷 | `" "` | ✔ | **✔** | ✔ | ✘ |
 | GBase 8s | `" "` | ✔ | ✘ | ✔ | ✘ |
 | SQLite | `" "` | ✘ | ✘ | ✘ | ✔ |
+| TDengine | 反引号 | ✘ | ✘ | ✘ | ✔（与 MySQL 同形：反引号是本家唯一转义符，双引号是字符串字面量引号） |
 
 同一份 `Order` 模型：金仓发 `"t0"."CustomerName"`，达梦与虚谷发 `"T0"."CUSTOMERNAME"`（折大写），MySQL 发反引号原样。**不加引号的名字在 Oracle 系进库即大写**——跨家建的表对不上是这类差异的头号现场。
 
 ## 3. 各家差异速查
 
-| 能力 | SQL Server | PG 系 | MySQL 系 | Oracle 系 | 虚谷 | GBase 8s | SQLite | ClickHouse |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 自增键批量回填 | `OUTPUT` | `RETURNING` | ✘（语句后回读） | ✘✘（**要键即抛**） | 语句后回读 | 语句后回读 | `RETURNING` 形 | — |
-| upsert 形态 | `MERGE` | `ON CONFLICT` | `ON DUPLICATE KEY` | `MERGE` | `MERGE` | 两句一队 | `ON CONFLICT` | ✘ |
-| 参数前缀 | `@` | `@` | `@` | `:` | `:` | `?`（位置式） | `@` | `@` |
-| 合并写（UPDATE…FROM） | ✔ | ✔ | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ |
-| 多语句事务 | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✘（逐句 autocommit） |
+| 能力 | SQL Server | PG 系 | MySQL 系 | Oracle 系 | 虚谷 | GBase 8s | SQLite | ClickHouse | TDengine |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 自增键批量回填 | `OUTPUT` | `RETURNING` | ✘（语句后回读） | ✘✘（**要键即抛**） | 语句后回读 | 语句后回读 | `RETURNING` 形 | — | ✘✘（**要键即抛**：无 identity，主键是那颗时间戳、调用方给值） |
+| upsert 形态 | `MERGE` | `ON CONFLICT` | `ON DUPLICATE KEY` | `MERGE` | `MERGE` | 两句一队 | `ON CONFLICT` | ✘ | ✘（INSERT 同 ts 覆盖的语义要活库钉死才敢接） |
+| 参数前缀 | `@` | `@` | `@` | `:` | `:` | `?`（位置式） | `@` | `@` | `?`（位置式；驱动侧参数名翻成 `@pN` 走 stmt2 分类绑定） |
+| 合并写（UPDATE…FROM） | ✔ | ✔ | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ |
+| 多语句事务 | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✘（逐句 autocommit） | ✘（驱动 `BeginDbTransaction` 当场 throw） |
 
 未建模的兼容参数（金仓 Oracle 兼容模式、MySQL `GuidFormat`、OceanBase 双模等）不在本表——同一家不同版本上的行为可能整体不同，换库前按自家现场验。
 

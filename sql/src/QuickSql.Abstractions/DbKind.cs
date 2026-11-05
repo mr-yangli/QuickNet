@@ -24,4 +24,8 @@ public enum DbKind
 
     // 文档口径实现、未经活库实测：UPDATE/DELETE 整格拒、建表带索引整格拒。
     ClickHouse = 17,
+
+    // 文档口径实现、未经活库实测：无事务、无 UPDATE、无 identity、无二级索引；
+    // 每表第一列必须是 TIMESTAMP（时间戳主键校验面在 provider 的 CodeFirst 里）。
+    TDengine = 18,
 }

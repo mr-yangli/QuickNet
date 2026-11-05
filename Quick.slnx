@@ -47,6 +47,10 @@
     <!-- 第十家（本笔：ClickHouse 落笔）：单层族里的第二颗【文档口径行】——本机没有引擎、
          驱动包也从未被解析过，整层与 DuckDB 同档：文档一步到位、实测等第一台。 -->
     <Project Path="sql/src/QuickSql.Providers.ClickHouse/QuickSql.Providers.ClickHouse.csproj" />
+    <!-- 第十一家（本笔：TDengine 落笔）：单层族的第三颗【文档口径行】，时序库这档的第一颗——
+         无事务、无 UPDATE、无 identity、无二级索引，每表第一列必须是 TIMESTAMP（主键由系统自动设，
+         键形状校验面在 provider 的 CodeFirst 里）；驱动 WebSocket 档纯托管，整层未实测等第一台引擎。 -->
+    <Project Path="sql/src/QuickSql.Providers.TDengine/QuickSql.Providers.TDengine.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="excel/tests/QuickExcel.Tests/QuickExcel.Tests.csproj" />
@@ -66,5 +70,8 @@
   <Folder Name="/benchmarks/">
     <Project Path="excel/benchmarks/QuickExcel.Benchmarks/QuickExcel.Benchmarks.csproj" />
     <Project Path="sql/benchmarks/QuickSql.Benchmarks/QuickSql.Benchmarks.csproj" />
+    <!-- 第六家（本笔：QuickJob 落笔）：调度库同档对照 —— 对照组为 TickerQ 11.5.1（公开校验壳） +
+         NCrontab（TickerQ 11.5 的 cron 引擎本体）。 -->
+    <Project Path="job/benchmarks/QuickJob.Benchmarks/QuickJob.Benchmarks.csproj" />
   </Folder>
 </Solution>

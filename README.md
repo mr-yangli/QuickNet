@@ -51,7 +51,7 @@ await db.SaveChangesAsync();                            // 只写脏列
 
 特性一览：
 
-- **18 家数据库**：SQL Server、PostgreSQL、MySQL、Oracle、SQLite、达梦、人大金仓、openGauss、GaussDB、瀚高、GBase 8c/8s、DuckDB、ClickHouse、TiDB、OceanBase、神通、虚谷——换库只动 csproj、一处 `DbKind`、一处连接串，实体与链式代码一字不动
+- **19 家数据库**：SQL Server、PostgreSQL、MySQL、Oracle、SQLite、达梦、人大金仓、openGauss、GaussDB、瀚高、GBase 8c/8s、DuckDB、ClickHouse、TDengine、TiDB、OceanBase、神通、虚谷——换库只动 csproj、一处 `DbKind`、一处连接串，实体与链式代码一字不动
 - **查询**：条件/排序（含字符串排序键）/投影/Distinct/分页计数/存在性探针；`Include`/`IncludeMany` 导航与引用导航自动联表；分组聚合；子查询；流式读取
 - **写入**：批量分块（按各家参数预算）、自增键回填、SQL Server 装载通道高速层、`InsertOrUpdate` upsert
 - **工作单元**：`DbContext`/`DbSet`/`ChangeTracker`/`SaveChanges`（脏列判定、级联新增/摘行/到位、乐观锁）

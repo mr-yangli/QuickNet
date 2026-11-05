@@ -89,6 +89,10 @@
          可空不写在 DDL 修饰那一格而在型包裹（Nullable(T)，没有第三形）——
          所以方言册量的是这三格加 6 位能力掩码，代价是本册要能同时构造它与在线册那套离线探针。 -->
     <ProjectReference Include="..\..\src\QuickSql.Providers.ClickHouse\QuickSql.Providers.ClickHouse.csproj" />
+    <!-- 第十九个方言族（TDengine 落笔）：单层族第三颗【文档口径行】，时序库这档的第一颗——
+         与 ClickHouse 那行同档理由，多出的新形状在拒面之外还有一道键形状校验面
+         （每表第一列必须是 TIMESTAMP 且是主键，int Id 血统的模型在这一家建不出表）。 -->
+    <ProjectReference Include="..\..\src\QuickSql.Providers.TDengine\QuickSql.Providers.TDengine.csproj" />
   </ItemGroup>
 
   <!-- G1 的接线本体在这里：测试实体带 [Table]，编译期就会生成 schema/validator/事实。

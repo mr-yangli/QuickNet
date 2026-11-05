@@ -1,0 +1,18 @@
+<Project>
+
+  <!-- 与 tests/benchmarks 同一个坑：本文件的 Import 会顶掉上一级那份，必须显式接回来。
+       仓库根那份再接 sql 家那份没有 —— 这条链只到 job/ 一层（仓库根 → job/ → 本层）。 -->
+  <Import Project="..\Directory.Build.props" />
+
+  <!-- 本层 TFM 比全子树高一档：对照组 TickerQ 11.5.x 只发 net11.0，而 QuickJob 本体是 net10.0。
+       net11 引 net10 合法（向前兼容），反方向不行 —— 所以只动这一层，不动 job/Directory.Build.props。
+       BenchmarkDotNet 同理：它对 TFM 自己挑最高档，与 QuickJob 不冲突。 -->
+  <PropertyGroup>
+    <TargetFramework>net11.0</TargetFramework>
+    <IsAotCompatible>false</IsAotCompatible>
+    <EnableTrimAnalyzer>false</EnableTrimAnalyzer>
+    <EnableSingleFileAnalyzer>false</EnableSingleFileAnalyzer>
+    <EnableAotAnalyzer>false</EnableAotAnalyzer>
+  </PropertyGroup>
+
+</Project>

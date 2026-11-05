@@ -16,4 +16,10 @@
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
   </ItemGroup>
 
+  <!-- DurationText / DefinitionSerialization / JobDefinition.Snapshot 是内部面：基准套件直接驱动它们
+       （与 Dashboard 对 QuickJob.Tests 用的同一条糖）。 -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="QuickJob.Benchmarks" />
+  </ItemGroup>
+
 </Project>

@@ -85,6 +85,13 @@ public static class BuiltinDrivers
         // "客户端/服务器引擎"档的【文档口径行】。assembly 名按厂商文档口径写（ClickHouse.Client），
         // factoryType 刻意不写走兜底扫描；此名从未在任何机器上解析成功过，整行未实测。
         new("clickhouse", "ClickHouse.Client", null),
+
+        // TDengine：assembly 名是 TDengine 而不是包名 TDengine.Connector——官方源仓的
+        // src/TDengine.csproj 没设 AssemblyName，SDK 默认取项目文件名（这一格是本行最贵的坑）。
+        // TDengineFactory 没有静态 Instance 字段，factoryType 刻意不写走兜底扫描
+        //（程序集里 DbProviderFactory 子类恰好一颗）；连接串 protocol=websocket（纯托管，
+        // taosAdapter 默认 6041）不落 taos.dll，native 档才要装客户端库。整行未实测。
+        new("tdengine", "TDengine", null),
     ];
 
     public static IReadOnlyList<DriverRef> Drivers => _refs;

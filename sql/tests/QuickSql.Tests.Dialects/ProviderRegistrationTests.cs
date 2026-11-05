@@ -38,14 +38,14 @@ public class ProviderRegistrationTests
             DbKind.Kingbase, DbKind.OpenGauss, DbKind.GaussDb, DbKind.Highgo,
             DbKind.Dameng, DbKind.ShenTong, DbKind.Xugu, DbKind.Gbase8s,
             DbKind.Gbase8c, DbKind.TiDb, DbKind.OceanBase, DbKind.Sqlite,
-            DbKind.DuckDb, DbKind.ClickHouse,
+            DbKind.DuckDb, DbKind.ClickHouse, DbKind.TDengine,
         };
 
         foreach (var kind in expected)
             Assert.True(ProviderRegistry.Contains(kind), $"DbKind.{kind} 未登记（生成器没跑或 provider 没引用）");
 
-        Assert.Equal(18, expected.Length);
-        Assert.Equal(18, ProviderRegistry.Registered.Distinct().Count());
+        Assert.Equal(19, expected.Length);
+        Assert.Equal(19, ProviderRegistry.Registered.Distinct().Count());
     }
 
     [Fact]

@@ -64,6 +64,14 @@ public sealed record IdentifierPolicy(
     /// QuoteAlways 取默认 false 与 Gbase8s 同格：恒加引号那半由 CaseSensitive 达成，不需要再开一颗。</summary>
     public static IdentifierPolicy ClickHouse { get; } = new('"', '"', CaseSensitive: true, FoldToUpperCase: false, QuoteWhenMixedCase: true);
 
+    /// <summary>TDengine 的预设：反引号、一律加引号、不折大小写。反引号取自厂商的命名限制页
+    ///（"为与 MySQL 兼容，引入反引号作为表/列名的转义符"），双引号在那边是字符串的字面量引号、
+    /// 不当标识符引号用——这一格与 MySql 预设同一个形状而出处独立。不折大小写：不带引号的标识符
+    /// 会被库内部归一（大小写不敏感），而反引号转义形"保留原样"——恒加引号把契约里写的字形原样
+    /// 带过去，建表与查询读到的就是同一张表；CaseSensitive 取 false 与 MySQL 同格，
+    /// QuoteAlways 为 true 才是恒加引号那半的真正出处。</summary>
+    public static IdentifierPolicy TDengine { get; } = new('`', '`', CaseSensitive: false, FoldToUpperCase: false, QuoteWhenMixedCase: false, QuoteAlways: true);
+
     /// <summary>SQLite 的预设：双引号、一律加引号、不区分大小写。这是这一份表里第一颗
     /// "双引号、恒加引号、不敏感"三者同堂的组合，也是唯一一颗每颗取值的来路都是一台活库的策略。
     /// 双引号取 SQL 标准字形（方括号也认，本家不取）；不区分大小写是库里的事实

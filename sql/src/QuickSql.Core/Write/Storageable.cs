@@ -12,7 +12,7 @@ namespace QuickSql;
 /// ExecuteCommandAsync 一口气全做，顺序固定删 → 改 → 增（唯一列换主的那类调用，先改后插会在旧值还在场上时
 /// 撞唯一约束，先摘后种没有这一格）。键的两档：不给 WhereColumns 用契约主键（复合主键天然支持），给了就按点名的
 /// 属性来；自增键"没填"（0/null）的行不查库直接进新增桶，清单里同一颗键出现两次当场拒。对账的形状要如实说：
-/// 存在性判定按参数预算把键分块，每块发一句 OR 平铺的 SELECT（不是 IN——多列键的行值 IN 没有可移植写法）；
+/// 存在性判定按参数预算把键分块，每块发一句 OR 平铺的 SELECT、只投键列（不是 IN——多列键的行值 IN 没有可移植写法）；
 /// 删除桶要读整表才能回答"库里有而清单里没有的是谁"，大表先想清楚再开；清单为空而删除桶开着当场拒。</summary>
 /// <typeparam name="T">实体型。契约解析与键读口带反射税（G2 那一档），标注跟着入口走。</typeparam>
 public interface IStorageable<T> where T : class
@@ -163,7 +163,8 @@ public sealed class StorageResult<T> where T : class
 }
 
 /// <summary>IStorageable 的本体。对账读走根链（无会话、不进会话闸），执行走
-/// InsertRange/UpdateRange/Delete 三条既有的写链——这一格自己不发明任何一条写路。</summary>
+/// InsertRange/UpdateRange/Delete 三条既有的写链——这一格自己不发明任何一条写路。两读的宽度不一样：
+/// 存在性那一读只投键列，删除桶那一读才把整行读回来（DeleteList 交出去的就是给人看的那一份）。</summary>
 internal sealed class StorageableChain<T> : IStorageable<T> where T : class
 {
     readonly QuickSqlOrm _orm;
@@ -259,9 +260,10 @@ internal sealed class StorageableChain<T> : IStorageable<T> where T : class
                     $"Storageable 的清单里有重复键 [{FormatKey(key)}]：同步语义下同一颗键说两次话没法判增改，"
                     + "请先把清单去重再对账。");
 
-        // 第二步：存在性对账——按参数预算分块，每块一句 OR 平铺的 SELECT（见接口抬头）。
+        // 第二步：存在性对账——按参数预算分块，每块一句 OR 平铺的 SELECT，只投键列（见接口抬头）。
         var found = new HashSet<StorageKey>();
         var size = ChunkSize(columns.Length, _orm);
+        var keyOnly = KeyProjector(columns);
 
         for (var start = 0; start < keyed.Count; start += size)
         {
@@ -270,10 +272,11 @@ internal sealed class StorageableChain<T> : IStorageable<T> where T : class
             for (var i = start; i < Math.Min(start + size, keyed.Count); i++)
                 chunk.Add(keyed[i].Key);
 
-            var dbRows = await _orm.Select<T>().Where(MatchesAny(columns, chunk)).ToListAsync(ct).ConfigureAwait(false);
+            var dbKeys = await _orm.Select<T>().Where(MatchesAny(columns, chunk)).Select(keyOnly)
+                .ToListAsync(ct).ConfigureAwait(false);
 
-            foreach (var dbRow in dbRows)
-                found.Add(KeyOf(dbRow, getters, columns));
+            foreach (var dbKey in dbKeys)
+                found.Add(KeyOf(dbKey, getters, columns));
         }
 
         List<T> updates = [];
@@ -337,6 +340,31 @@ internal sealed class StorageableChain<T> : IStorageable<T> where T : class
             values[i] = Canonical(getters[i](row), columns[i].ClrType);
 
         return new StorageKey(values);
+    }
+
+    /// <summary>对账那一句只要键列：x =&gt; new T { KeyA = x.KeyA, … }。落成投影翻译的成员初始化臂，
+    /// 选列因此只端键位那几颗，收回来的那份 T 也只有键位有值——除了 KeyOf 没有第二处读它。
+    /// 无参构造与逐列赋值是实体物化自己的形状（见 ReflectionEntitySchema），映射列又一律出自公共实例属性，
+    /// 所以凡是读得动的实体都装配得出这一份，没有兜底分支可留。</summary>
+    [RequiresUnreferencedCode("按键位属性名建表达式树（PropertyOrField 与 Bind）。")]
+    [RequiresDynamicCode("投影委托由物化层编译，退路是编译表达式树。")]
+    static Expression<Func<T, T>> KeyProjector(ColumnContract[] columns)
+    {
+        var parameter = Expression.Parameter(typeof(T), "x");
+        var seed = Expression.New(MemberAccessors.ParameterlessConstructor(typeof(T))
+            ?? throw new QuickSqlException(
+                $"实体 {typeof(T).Name} 没有无参构造器：对账的键投影装配不出实例（与实体物化同一颗判据）。"));
+
+        var bindings = new MemberBinding[columns.Length];
+
+        for (var i = 0; i < columns.Length; i++)
+        {
+            var member = Expression.PropertyOrField(parameter, columns[i].MemberName);
+
+            bindings[i] = Expression.Bind(member.Member, member);
+        }
+
+        return Expression.Lambda<Func<T, T>>(Expression.MemberInit(seed, bindings), parameter);
     }
 
     /// <summary>点名键是不是主键（按属性名集合比）：修改桶执行据此走批量或逐行。</summary>

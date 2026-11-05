@@ -31,6 +31,19 @@ public static class PendingRegistrations
         var snapshot = Inbox.ToArray();
         return snapshot;
     }
+
+    /// <summary>清箱（_tests/benchmarks 内部面 —— <c>QuickJob.Benchmarks</c> 经 ivt 取用）。
+    /// 本类全局生命周期是「Add 只进不出、Drain 只有一次」，真实进程按这个算 —— BDN 档的百万次重放
+    /// 却会把 Known/Inbox 撑到 GB 级（本机首场实账：65 536 op/轮 × 15 轮 × 10 颗 ≈ 千万颗 ≈ 3-4 GB Gen2）。
+    /// 所以基准侧每迭代起手 Reset（见 Benchmarks.InboxBench）—— 别把这两个用途混成一个。
+    /// ConcurrentBag 没有原子清口，逐颗 TryTake（数千颗在这个可见度下不成负担）；_taken 推回 0，
+    /// Reset 之后的 Drain 又可用一次。</summary>
+    internal static void Reset()
+    {
+        while (Inbox.TryTake(out _)) { }
+        Known.Clear();
+        Interlocked.Exchange(ref _taken, 0);
+    }
 }
 
 /// <summary>One [QuickJob] method, as the generator saw it (attribute values + a bound handler factory).</summary>

@@ -65,10 +65,11 @@ public sealed class TableNamingEmissionTests
         "Gbase8c" => Gbase8c.Orm(),
         "DuckDb" => DuckDb.Orm(),
         "ClickHouse" => ClickHouse.Orm(),
+        "TDengine" => TDengine.Orm(),
         _ => throw new InvalidOperationException($"没有这一家方言：{family}"),
     };
 
-    /// <summary>十七家 = <see cref="DbKind"/> 的成员数，一颗不多一颗不少：漏一家就是"这家没被量过"，
+    /// <summary>十九家 = <see cref="DbKind"/> 的成员数，一颗不多一颗不少：漏一家就是"这家没被量过"，
     /// 而台账上写的却是"这一档全族已接"。</summary>
     public static TheoryData<string> Families()
     {
@@ -129,7 +130,12 @@ public sealed class TableNamingEmissionTests
     /// DDL·时间档那格在那一家用的是"建表遇契约索引整格拒"
     ///（ShardLog 带 <c>[Index(nameof(Level))]</c>，ClickHouse 没有 CREATE INDEX 语句级格）——
     /// 砍三格砍的是发射口的事，不是命名通路的事；发出去的那五格仍然逐家同量。
-    /// 另立有一颗 <see cref="ClickHouse_refuses_mutation_and_indexed_ddl"/> 把被砍的三格折成一册点名。</summary>
+    /// 另立有一颗 <see cref="ClickHouse_refuses_mutation_and_indexed_ddl"/> 把被砍的三格折成一册点名。
+    /// <b>v0.39 第五笔：第十九颗 TDengine 到场，砍的格子比 ClickHouse 多一格</b>：写·UPDATE/写·DELETE
+    /// 同一档整格拒（3.x 无传统 UPDATE、DELETE 只认首列时间窗）；DDL·时间档同一档整格拒
+    ///（ShardLog 的契约索引）；<b>DDL·哈希档也砍</b>——TenantRow 是 int Id 血统，本家每一张表
+    /// 第一列都必须是 TIMESTAMP，键形状校验面在建表前就拒（这一条不是"还没有实现"，是
+    /// 建模面的硬约束）。被砍的四格折在 <see cref="TDengine_refuses_mutation_and_family_shaped_ddl"/>。</summary>
     static (string Label, string Sql, string[] Suffixes)[] Surfaces(QuickSqlOrm orm, string family)
     {
         var readOnlySurfaces = new (string Label, string Sql, string[] Suffixes)[]
@@ -138,8 +144,13 @@ public sealed class TableNamingEmissionTests
             ("读·两片", orm.Select<ShardLog>().SplitTables(January, February).ToSql(), ["202601", "202602"]),
             ("读·桶", orm.Select<TenantRow>().SplitTables(0, 1).ToSql(), ["_00", "_01"]),
             ("写·INSERT", orm.Insert(new ShardLog { Id = Guid.Empty, OccurredAt = January, Level = 1 }).Explain().Chunks[0].Sql.Text, ["202601"]),
-            ("DDL·哈希档", orm.SplitTablesScript<TenantRow>(0, 1), ["_00", "_01"]),
+            // 哈希档是急切求值的那一格（元组数组一构造就跑）：TDengine 在这一格走不到发射——
+            // TenantRow 是 int Id 血统，本家的键形状校验面在建表前就拒，所以这一格按家摆、不进共表。
+            family == "TDengine" ? default : ("DDL·哈希档", orm.SplitTablesScript<TenantRow>(0, 1), new[] { "_00", "_01" }),
         };
+
+        if (family == "TDengine")
+            return readOnlySurfaces[..4];
 
         if (family == "ClickHouse")
             return readOnlySurfaces;
@@ -162,7 +173,7 @@ public sealed class TableNamingEmissionTests
         var kinds = Enum.GetNames<DbKind>().Select(Orm).Select(static orm => orm.Provider.Kind.ToString()).ToArray();
 
         Assert.Equal(Enum.GetNames<DbKind>().Order(StringComparer.Ordinal).ToArray(), kinds.Order(StringComparer.Ordinal).ToArray());
-        Assert.Equal(18, kinds.Length);
+        Assert.Equal(19, kinds.Length);
     }
 
     /// <summary>被 <see cref="Surfaces"/> 砍掉的那三格，逐格点名：ClickHouse 的 UPDATE/DELETE 两整格
@@ -196,6 +207,51 @@ public sealed class TableNamingEmissionTests
         });
 
         Assert.Contains("拒收契约索引", indexed.Message);
+    }
+
+    /// <summary>被 <see cref="Surfaces"/> 砍掉的那四格，逐格点名（TDengine 这一档）：UPDATE/DELETE
+    /// 两整格拒发（3.x 无传统 UPDATE【文档·TDengine】、DELETE 只认首列时间窗
+    ///（https://docs.tdengine.com/tdengine-sql/08-delete/））；带契约索引的建表整格拒
+    ///（本家没有用户索引那一档）；<b>int Id 血统的建表在键形状校验面整格拒</b>——本家每一张表
+    /// 第一列都必须是 TIMESTAMP 且是主键（系统自动设），TenantRow 的首列是整型主键，建不出表。
+    /// 四格的共同点与前一家同款：拒的是<em>发射口</em>，"名字必须换算好再进"那条通路一格都没豁免
+    /// —— 所以砍命名出口量的是文本产不出那一格，不是这一条纪律少了一家。</summary>
+    [Fact]
+    public void TDengine_refuses_mutation_and_family_shaped_ddl()
+    {
+        var orm = TDengine.Orm();
+
+        var update = Checks.Raised<QuickSqlException>(() =>
+            orm.Update<ShardLog>().SplitTable(January).Set(o => o.Level, 9).Where(o => o.Id == Guid.Empty).ToSql());
+
+        Assert.Contains("没有 UPDATE 语句", update.Message);
+
+        var deletion = Checks.Raised<QuickSqlException>(() =>
+            orm.Delete<ShardLog>().SplitTable(January).Where(o => o.Id == Guid.Empty).ToSql());
+
+        Assert.Contains("时间窗", deletion.Message);
+
+        var indexed = Checks.Raised<QuickSqlException>(() =>
+        {
+            var writer = new SqlWriter(new StringBuilder(), [], orm.Provider.Dialect.ParameterPrefix);
+
+            orm.Provider.CodeFirst.EmitCreateTable(writer, orm.Schemas.Contract<Order>());
+
+            return null;
+        });
+
+        Assert.Contains("拒收契约索引", indexed.Message);
+
+        var intId = Checks.Raised<QuickSqlException>(() =>
+        {
+            var writer = new SqlWriter(new StringBuilder(), [], orm.Provider.Dialect.ParameterPrefix);
+
+            orm.Provider.CodeFirst.EmitCreateTable(writer, orm.Schemas.Contract<TenantRow>());
+
+            return null;
+        });
+
+        Assert.Contains("第一列都必须是 TIMESTAMP", intId.Message);
     }
 
     /// <summary>收 <see cref="TableInfo"/> 的接口成员是一个<em>闭集</em>，十二颗各有角色：DML 侧只有
