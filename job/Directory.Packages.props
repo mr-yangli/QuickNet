@@ -13,12 +13,8 @@
     <PackageVersion Include="Microsoft.CodeAnalysis.CSharp" Version="4.14.0" />
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
     <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="9.0.0" />
-    <!-- benchmarks/ 一族：BDN 与 sql 家同版。TickerQ 是对照组（QuickJob.Roll 之前那种同代社区的
-         调度库TickerQ）—— 11.5.x 只发 net11.0，且比 QuickJob 家当前 TFM 高一档，所以基准项目自己
-         独 TFM（见 benchmarks/Directory.Build.props）。NCrontab 是 TickerQ.Utilities 11.5.1 引的
-         cron 引擎（对照腿的引擎本体），版本同颗同 3.3.0，别脱钩。 -->
     <PackageVersion Include="BenchmarkDotNet" Version="0.15.8" />
-    <PackageVersion Include="TickerQ" Version="11.5.1" />
+    <PackageVersion Include="TickerQ" Version="10.4.0" />
     <PackageVersion Include="NCrontab" Version="3.3.0" />
     <PackageVersion Include="coverlet.collector" Version="6.0.4" />
     <PackageVersion Include="xunit" Version="2.9.3" />

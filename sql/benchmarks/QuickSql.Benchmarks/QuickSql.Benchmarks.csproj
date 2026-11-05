@@ -5,10 +5,6 @@
     <IsPackable>false</IsPackable>
     <RootNamespace>QuickSql.Benchmarks</RootNamespace>
     <Description>§12.8 的基准套件与门禁自检。两种跑法：不带参数 = BenchmarkDotNet 出数字；--gate = 拿门禁阈值判红绿并以退出码反馈。不是发布物。</Description>
-
-    <!-- §12.8 第七行（首次查询元数据构建 0 次 PropertyInfo）的唯一可靠探针是生成物本体：
-         托管代码里没有 API 能数出"这次解析枚举了几个 PropertyInfo"，但生成出来的 .g.cs 里
-         有没有反射字样是看得见的。所以这里把生成物落盘，让门禁能直接读它。 -->
     <EmitCompilerGeneratedFiles>true</EmitCompilerGeneratedFiles>
   </PropertyGroup>
 

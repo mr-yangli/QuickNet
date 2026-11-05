@@ -111,7 +111,7 @@ public class QuickSqlQuery<T> : IQuery<T>, IEngineCarrier
 
     /// <summary>集合运算的本体：形状守卫在链上当场把"发了也不会对"的形状拦掉，外层只换 FROM 位——
     /// 谓词、序、分页、投影、聚合都留给合并之后的那条链，它们落在外层就是落在整串集合运算上。</summary>
-    IQuery<T> SetOps(IQuery<T> other, SetOperationKind operation)
+    QuickSqlQuery<T> SetOps(IQuery<T> other, SetOperationKind operation)
     {
         ArgumentNullException.ThrowIfNull(other);
 

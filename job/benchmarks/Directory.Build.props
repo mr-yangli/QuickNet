@@ -8,7 +8,7 @@
        net11 引 net10 合法（向前兼容），反方向不行 —— 所以只动这一层，不动 job/Directory.Build.props。
        BenchmarkDotNet 同理：它对 TFM 自己挑最高档，与 QuickJob 不冲突。 -->
   <PropertyGroup>
-    <TargetFramework>net11.0</TargetFramework>
+    <TargetFramework>net10.0</TargetFramework>
     <IsAotCompatible>false</IsAotCompatible>
     <EnableTrimAnalyzer>false</EnableTrimAnalyzer>
     <EnableSingleFileAnalyzer>false</EnableSingleFileAnalyzer>

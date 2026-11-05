@@ -3,18 +3,9 @@
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <IsPackable>false</IsPackable>
-    <!-- TFM/LangVersion/Nullable/ImplicitUsings 见 job/benchmarks/Directory.Build.props（net11.0，理由写在那份） -->
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- 版本钉在 job/Directory.Packages.props（CPM）。对照组只出现 benchmarks/：TickerQ 是同代社区
-         调度库（与 QuickJob 同档能力面：cron/interval/一次性、重试、重叠策略、编译期登记），它的
-         许可是 source-available（社区档免费商用）——按 excel 家对照 MiniExcel 的同一条纪律，
-         对照组不进 src/，也永远不随 QuickJob 发出去。
-         NCrontab 是 TickerQ.Utilities 11.5.1 引的 cron 引擎：TickerQ 11.5 的自研 CronExpression 只是
-         校验壳，真正的解析/下一次时刻走 internal CronScheduleCache + NCrontab —— 所以「下一次触发」
-         那条对照腿引用引擎本体（tickerq 家自家基准也以 "TickerQ (NCrontab)" 立场对它出数）。
-         与 sql 家同一条规则：基准项目的依赖不进 QuickJob 的传递图。 -->
     <PackageReference Include="BenchmarkDotNet" />
     <PackageReference Include="TickerQ" />
     <PackageReference Include="NCrontab" />
