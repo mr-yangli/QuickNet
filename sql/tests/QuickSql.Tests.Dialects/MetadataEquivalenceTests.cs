@@ -61,6 +61,10 @@ public sealed class MetadataEquivalenceTests
     // 换算后的列名），落进库里的就是两张不同的表 —— 那种分叉不会让任何一条 SQL 变红。
     [InlineData(typeof(ShardLog))]
     [InlineData(typeof(TenantRow))]
+    // 超级表那张（v0.39 第六笔）同一取向：Subtable 模板与 TAG 成员清单在 G1 是从 TypedConstant 抄成的
+    // 字面量、在 G2 读的是注解实例；两侧漏抄一颗 TAG 或抄错一个占位符，TAGS 子句与子表名从第一天起就不同，
+    // 而任何一条 SQL 都不会因此变红 —— 那一格的分叉只有这里量得到。
+    [InlineData(typeof(StableMeter))]
     // 集群归属这两张（§16.4①）同一取向：G1 那颗集群名是从注解实参抄成<em>字符串字面量</em>的，
     // G2 读的是注解实例。那一格分叉不会让任何一条 SQL 变红 —— 它让一句读发到另一座库里去。
     // ArchiveNote 是第三、第四颗参数同时非空的那一张：漏抄任一颗都是"片名对、库错"。
@@ -97,6 +101,10 @@ public sealed class MetadataEquivalenceTests
     [InlineData(typeof(SelfRef), "nav Manager → QuickSql.TestInfra.SelfRef fk=(ManagerId) cols=(ManagerId)")]
     [InlineData(typeof(TwoKeys), "nav = (0)")]
     [InlineData(typeof(ReportRow), "source = report")]
+    // 超级表那一格钉绝对值（v0.39 第六笔）：两侧同时把 StableMeter 记成"普通表"也是相等的，
+    // 而那种共同退化会让 CREATE STABLE 发成 CREATE TABLE —— 相等断言看不见，这一条看得见。
+    [InlineData(typeof(StableMeter), "table = -.QuickSqlStableMeter",
+        "stable = template=QuickSqlStableMeter_{device} tags=(Device→Device,GroupId→GroupId)")]
     // 开关那一格钉绝对值：两条路径同时把 [NoCascade] 读成"照旧级联"也是相等的，
     // 而那种共同退化会让看板在两条启动路径上各自带出一串卡片 —— 相等断言看不见，这一条看得见。
     [InlineData(typeof(Board), "coll Cards → QuickSql.TestInfra.Card fk=() cascade=False")]
@@ -111,8 +119,9 @@ public sealed class MetadataEquivalenceTests
             Assert.Contains(shape, l => l == line || l.StartsWith(line, StringComparison.Ordinal));
 
         // 自增不是哪一层声明的，是「整型主键 ⇒ 自增」这条约定在收尾时补的（两侧共用一份实现）。
-        // Project 的主键是 Guid，那一格必须是 False —— 无条件断 True 等于把这条约定念成"每个主键都自增"。
-        Assert.Contains(shape, l => l.Contains("identity=" + (clrType == typeof(Project) ? "False" : "True"), StringComparison.Ordinal));
+        // Project 的主键是 Guid、StableMeter 的主键是 DateTime（v0.39 第六笔的稳定表夹具），
+        // 那一格必须是 False —— 无条件断 True 等于把这条约定念成"每个主键都自增"。
+        Assert.Contains(shape, l => l.Contains("identity=" + (clrType == typeof(Project) || clrType == typeof(StableMeter) ? "False" : "True"), StringComparison.Ordinal));
     }
 
     /// <summary>把契约摊成一行一个字段：集合相等的失败消息只会说「两个集合不同」，
@@ -137,6 +146,11 @@ public sealed class MetadataEquivalenceTests
             // 集群归属那一格（§16.4①）：不加进来的话「逐字段相同」又是一句假话 —— G1 把 report 抄成
             // archive 时两侧各自都能建出表、都能出 SQL，只是发往两座不同的库。
             $"source = {contract.Table.Source?.Name ?? "-"}",
+
+            // 超级表那一格（v0.39 第六笔）：模板与 TAG 清单（成员名→列名、声明序）都要比。
+            // 只比"是不是稳定表"的话，G1 漏抄一颗 TAG 而 G2 抄全也照样绿，
+            // 而两侧发出的 TAGS 子句从第一天起就少一列。
+            $"stable = {(contract.Stable is { } stable ? $"template={stable.SubtableTemplate ?? "-"} tags=({string.Join(",", stable.Tags.Select(t => t.MemberName + "→" + t.ColumnName))})" : "-")}",
 
             $"primary = {string.Join(",", contract.PrimaryKey.Select(c => c.MemberName))}",
             $"nav = ({contract.Relationships.Count})",

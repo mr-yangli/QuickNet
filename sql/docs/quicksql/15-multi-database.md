@@ -30,6 +30,8 @@
 
 `DbKind` 枚举 19 个值与 provider 一一对应、没有空档；MariaDB 不设档（MySQL provider 天然可用）。
 
+**TDengine 超级表（v0.39 第六笔）**：`[TDengineStable(Subtable = "meters_{device}")]` 打在类上、`[TDengineTag]` 打在属性上——`[Table]` 名即稳定名（`CREATE STABLE … TAGS (…)` 与查询面都指它），TAG 列照常参与查询与物化；插入走 `INSERT INTO 子表 USING 稳定 TAGS(内联值) (数据列) VALUES(…)` 自动建表，子表名由模板填行内 TAG 值解析（同批行 TAG 值必须一致）。TAG 值刻意内联：STMT2 的参数化自动建表有明文行为缺口（子表不存在时报错【文档·TDengine：stmt 页】）。结构同步对稳定表只管建（`INS_COLUMNS` 含不含 TAG 列官方无明文），补差以库的拒绝收尾；子表预建走 provider 的 `EmitCreateSubtable` 手工口。
+
 ## 2. 标识符策略（迁移时最硬的一格）
 
 | 预设 | 引号 | 大小写敏感 | 折大写 | 混合大小写才引 | 一律引 |

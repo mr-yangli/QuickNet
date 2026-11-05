@@ -354,6 +354,32 @@ public class TenantRow
     public string? Name { get; set; }
 }
 
+/// <summary>TDengine 超级表声明面（v0.39 第六笔）的靶子：[TDengineStable] 把实体声明成稳定表——
+/// [Table] 名即稳定名（DDL 与查询面都指它），[TDengineTag] 两颗点出 TAG 列（声明序 = TAGS 子句列序），
+/// Subtable 模板的占位符引用 TAG 成员，插入时用行内 TAG 值解析成具体子表名（发射形见
+/// TDengineDialectTests 的稳定面一节）。GroupId 故意是 <c>int?</c>：部分标签列形式
+///（官方推荐的 NULL 表达法）要一颗真可为空的 TAG 才落得出 golden。它进 MetadataEquivalenceTests
+/// 的对拍清单：声明流两侧逐字段对拍，契约构建是 provider 中性的，SqlServer 侧照常解析这一格
+///（稳定发射语义归 TDengine 的 CodeFirst/Dialect，中性契约只背"哪些列是 TAG"这一格事实）。</summary>
+[Table("QuickSqlStableMeter")]
+[TDengineStable(Subtable = "QuickSqlStableMeter_{device}")]
+public class StableMeter
+{
+    [Da.Key]
+    public DateTime Ts { get; set; }
+
+    public double Current { get; set; }
+
+    public int Voltage { get; set; }
+
+    [QuickColumn(Length = 64)]
+    [TDengineTag]
+    public string Device { get; set; } = "";
+
+    [TDengineTag]
+    public int? GroupId { get; set; }
+}
+
 /// <summary>§16.4① 具名集群的靶子：这一张表<em>声明</em>住在 <c>report</c> 那一座库里。</summary>
 /// <remarks>
 /// 注解里只有集群名、没有连接串，所以这一张可以进版本库而那条串不能（分工写在

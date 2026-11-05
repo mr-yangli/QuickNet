@@ -1,6 +1,7 @@
 using System.Data;
 using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
+using DaSchema = System.ComponentModel.DataAnnotations.Schema;
 using System.Text;
 using QuickSql.Metadata;
 using QuickSql.Metadata.Fluent;
@@ -333,7 +334,7 @@ public sealed class TDengineDialectTests
             return string.Empty;
         });
 
-        Assert.Contains("主键必须是契约首列", misplaced.Message);
+        Assert.Contains("主键必须是首颗数据列", misplaced.Message);
 
         var intId = Checks.Raised<QuickSqlException>(() =>
         {
@@ -661,6 +662,225 @@ public sealed class TDengineDialectTests
         Assert.Equal(DbType.String, guid.DbType);
         Assert.Equal("01234567-89ab-cdef-0123-456789abcdef", guid.Value);
         Assert.Equal(36, guid.Size);
+    }
+
+    // ── 稳定表面（v0.39 第六笔）：声明位、CREATE STABLE、INSERT USING 自动建表 ──
+
+    /// <summary>占位符引用了没声明的 TAG 成员：契约期红（EntityContractFactory.MapStable 那一份，
+    /// 两侧管线同一句）。模板在插入时用行内 TAG 值填空，占位符落到数据列上就是
+    /// "值每行都在变而子表名只能有一个"的语义错。</summary>
+    [TDengineStable(Subtable = "meters_{missing}")]
+    sealed class ProbeBadTemplate
+    {
+        [Key]
+        public DateTime Ts { get; set; }
+
+        [TDengineTag]
+        public string Device { get; set; } = "";
+    }
+
+    /// <summary>DECIMAL 的 TAG：厂商明文"仅支持普通列、暂不支持标签列"，发射点红。</summary>
+    [TDengineStable]
+    sealed class ProbeDecimalTag
+    {
+        [Key]
+        public DateTime Ts { get; set; }
+
+        [TDengineTag]
+        public decimal Weight { get; set; }
+    }
+
+    /// <summary>一颗 TAG 都没有：稳定表至少要一颗 TAG（厂商硬性事实），契约期红。</summary>
+    [TDengineStable]
+    sealed class ProbeStableNoTags
+    {
+        [Key]
+        public DateTime Ts { get; set; }
+
+        public double Current { get; set; }
+    }
+
+    /// <summary>稳定表与分表并用：两套"一个实体对多张表"，发射点红。</summary>
+    [DaSchema.Table("QuickSqlSplitStable_{year}{month}")]
+    [SplitTable(SplitKind.Month, nameof(Ts))]
+    [TDengineStable(Subtable = "QuickSqlSplitStable_{device}")]
+    sealed class ProbeSplitStable
+    {
+        [Key]
+        public DateTime Ts { get; set; }
+
+        [TDengineTag]
+        public string Device { get; set; } = "";
+    }
+
+    /// <summary>没声明 Subtable 模板：DDL 与查询面照常，插入面没有子表名的来路，发射点指路。</summary>
+    [TDengineStable]
+    sealed class ProbeStableNoTemplate
+    {
+        [Key]
+        public DateTime Ts { get; set; }
+
+        [TDengineTag]
+        public string Device { get; set; } = "";
+    }
+
+    [Fact]
+    public void A_stable_declaration_emits_create_stable_with_the_tags_clause()
+    {
+        var contract = orm().Schemas.Contract<StableMeter>();
+        var writer = NewWriter();
+
+        Provider.CodeFirst.EmitCreateTable(writer, contract);
+
+        var sql = writer.ToSqlString();
+
+        Verify("ddl-stable", sql);
+
+        // TAGS 子句在列定义之后【VendorDoc·TDengine：超级表页】；TAG 列的声明序就是 TAGS 的列序；
+        // 首列 TIMESTAMP 校验收窄到数据列（Device/GroupId 声明在后面，数据列第一颗仍是 Ts）。
+        // 变长 TAG 的库侧上限 16 382 字节这一格在这里读不到（64 chars × 4 = 256 没到线）。
+        Checks.Has("CREATE STABLE `QuickSqlStableMeter` (`Ts` TIMESTAMP, `Current` DOUBLE, `Voltage` INT) TAGS (`Device` VARCHAR(256), `GroupId` INT)", sql);
+        Checks.Absent("CREATE TABLE", sql);
+        Checks.Absent(" NOT NULL", sql);
+        Checks.Absent("PRIMARY KEY", sql);
+    }
+
+    [Fact]
+    public void A_stable_insert_resolves_the_subtable_from_the_row_tags_and_lifts_tags_into_the_using_clause()
+    {
+        var meter = new StableMeter
+        {
+            Ts = new DateTime(2026, 11, 6, 9, 0, 0),
+            Current = 10.5,
+            Voltage = 220,
+            Device = "d001",
+            GroupId = 2,
+        };
+
+        var chunk = orm().Insert(meter).Explain().Chunks[0];
+
+        Verify("insert-using-tags", chunk.Sql.Text);
+
+        // 子表名 = Subtable 模板填行内 TAG 值；TAG 值内联（STMT2 的参数化自动建表有明文行为缺口，
+        // 子表不存在时报错【VendorDoc·TDengine：stmt 页】——文本形把自动建表留在 shell 同侧）；
+        // 数据列清单摘掉 TAG 两颗，参数照常位置形 ?（文本不进参数名）。
+        Checks.Has("INSERT INTO `QuickSqlStableMeter_d001` USING `QuickSqlStableMeter` TAGS ('d001', 2) (`Ts`, `Current`, `Voltage`) VALUES (?, ?, ?)", chunk.Sql.Text);
+        Assert.Equal(["?p0", "?p1", "?p2"], chunk.Sql.Parameters.Select(p => p.Name).ToArray());
+        Assert.Equal(["@p0", "@p1", "@p2"], chunk.Sql.Parameters.Select(p => p.DriverName).ToArray());
+        Checks.Absent("'d001'", chunk.Sql.Text[(chunk.Sql.Text.IndexOf("VALUES", StringComparison.Ordinal))..]);
+    }
+
+    [Fact]
+    public void A_null_tag_goes_by_the_partial_tag_list_form()
+    {
+        var meter = new StableMeter
+        {
+            Ts = new DateTime(2026, 11, 6, 9, 0, 0),
+            Current = 10.5,
+            Voltage = 220,
+            Device = "d002",
+            GroupId = null,
+        };
+
+        var sql = orm().Insert(meter).ToSql();
+
+        Verify("insert-using-partial-tags", sql);
+
+        // 部分标签列形式【VendorDoc·TDengine：插入页——"可以只指定部分标签列，其余标签列为 NULL"】：
+        // 名清单在 USING 之后、TAGS 之前，只列非空的那颗；"TAGS(null) 字面量"那一形没有明文，不走。
+        Checks.Has("INSERT INTO `QuickSqlStableMeter_d002` USING `QuickSqlStableMeter` (`Device`) TAGS ('d002') (`Ts`, `Current`, `Voltage`) VALUES (?, ?, ?)", sql);
+    }
+
+    [Fact]
+    public void A_mixed_tag_batch_is_refused_in_one_piece()
+    {
+        // 一条 INSERT … USING 只服务一颗子表；对已存在子表厂商会忽略语句里的 TAG 值（不报错），
+        // 所以混 TAG 的批必须先红，不能靠"发出去再看"。
+        var raised = Checks.Raised<QuickSqlException>(() =>
+            orm().InsertRange(
+            [
+                new StableMeter { Ts = new DateTime(2026, 11, 6, 9, 0, 0), Current = 10.5, Device = "d001", GroupId = 2 },
+                new StableMeter { Ts = new DateTime(2026, 11, 6, 9, 0, 1), Current = 10.6, Device = "d002", GroupId = 2 },
+            ]).ToSql());
+
+        Assert.Contains("TAG 值不一致", raised.Message);
+    }
+
+    [Fact]
+    public void The_stable_declaration_gates_fire_at_the_two_layers_where_they_belong()
+    {
+        // 契约期两颗：占位符引用了没声明的 TAG 成员（MapStable 那一份，两侧管线同一句）、
+        // 一颗 TAG 都没有（稳定表至少要一颗 TAG，厂商硬性事实）。
+        var badTemplate = Checks.Raised<QuickSqlException>(() => orm().Schemas.Contract<ProbeBadTemplate>());
+
+        Assert.Contains("不是已声明的 TAG 成员", badTemplate.Message);
+
+        var noTags = Checks.Raised<QuickSqlException>(() => orm().Schemas.Contract<ProbeStableNoTags>());
+
+        Assert.Contains("一颗 TAG 都没有", noTags.Message);
+
+        // 契约期第三颗：稳定表与分表不并用——这一格在 EntityContractFactory.Build 收口时就红
+        //（不等到发射：SplitTablesScript/建片链对分表契约逐片调 EmitCreateTable，留到发射才判
+        // 会让脚本路先折进"普通表"那一支，发出一张形状说错的 CREATE TABLE）。
+        // CodeFirst 那一侧的同款守卫因此是虚口保真（防手工拼契约），测试点的是契约期这颗。
+        var splitStable = Checks.Raised<QuickSqlException>(() => orm().Schemas.Contract<ProbeSplitStable>());
+
+        Assert.Contains("同时声明了超级表与分表", splitStable.Message);
+
+        // 发射点一颗：DECIMAL 不可作 TAG（厂商明文"仅支持普通列"）。
+        var decimalTag = Checks.Raised<QuickSqlException>(() =>
+        {
+            var writer = NewWriter();
+
+            Provider.CodeFirst.EmitCreateTable(writer, orm().Schemas.Contract<ProbeDecimalTag>());
+
+            return string.Empty;
+        });
+
+        Assert.Contains("DECIMAL 仅支持普通列", decimalTag.Message);
+    }
+
+    [Fact]
+    public void A_stable_insert_without_a_subtable_template_points_at_the_declaration()
+    {
+        // 没声明 Subtable 模板：DDL 与查询面照常（ProbeStableNoTemplate 的契约建得出来），
+        // 插入面没有子表名的来路 —— 发射点指路，不发"插稳定名"那种非法对象。
+        var raised = Checks.Raised<QuickSqlException>(() =>
+            orm().Insert(new ProbeStableNoTemplate
+            {
+                Ts = new DateTime(2026, 11, 6, 9, 0, 0),
+                Device = "d001",
+            }).ToSql());
+
+        Assert.Contains("没有声明子表名模板", raised.Message);
+    }
+
+    [Fact]
+    public void The_subtable_script_mouth_emits_the_create_table_using_form()
+    {
+        // 子表建表脚本口（宿主手工口，照 ClickHouse EmitAddSkipIndex 的先例：不在 SPI 上，
+        // Core 的结构同步不走这一句）。官方形 CREATE TABLE 子表 USING 稳定 TAGS (…)；
+        // TAG 值按声明序给、一律内联（脚本口不发参数）。
+        var contract = orm().Schemas.Contract<StableMeter>();
+        var writer = NewWriter();
+
+        ((TDengineCodeFirst)Provider.CodeFirst).EmitCreateSubtable(writer, contract, "QuickSqlStableMeter_d003", "d003", 7);
+
+        Verify("ddl-subtable", writer.ToSqlString());
+
+        Checks.Has("CREATE TABLE `QuickSqlStableMeter_d003` USING `QuickSqlStableMeter` TAGS ('d003', 7)", writer.ToSqlString());
+
+        // 颗数对齐：给少一颗当场指路，不猜缺省。
+        var count = Checks.Raised<QuickSqlException>(() =>
+        {
+            var shortWriter = NewWriter();
+
+            ((TDengineCodeFirst)Provider.CodeFirst).EmitCreateSubtable(shortWriter, contract, "QuickSqlStableMeter_d004", "d004");
+
+            return string.Empty;
+        });
+
+        Assert.Contains("一颗不多一颗不少", count.Message);
     }
 
     static SqlWriter NewWriter() => new(new StringBuilder(), [], Provider.Dialect.ParameterPrefix);

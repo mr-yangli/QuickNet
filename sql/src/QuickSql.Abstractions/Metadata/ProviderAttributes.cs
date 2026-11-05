@@ -125,3 +125,37 @@ public sealed record SkipIndexContract(
     int BucketSize = 0,
     int HashFunctions = 0,
     int Seed = 0);
+
+/// <summary>TDengine 的超级表声明位（v0.39 第六笔）。打在类上：这个实体是一颗稳定表（STABLE），
+/// [Table] 的名字就是稳定名（DDL 与查询面都指它），数据列之外的 TAG 列由 [TDengineTag] 逐颗点出。
+/// Subtable 是插入面的子表名模板：占位符 {成员名} 引用已声明的 TAG 成员，INSERT 时用行内 TAG 值
+/// 解析成具体子表名、发 INSERT INTO 子表 USING 稳定 TAGS(...) 的自动建表形；不写 Subtable 时
+/// DDL 与查询面照常，插入面没有子表名的来路（发射点会指路）。
+/// 解析纪律与 ClickHouseSkipIndex 同形：两侧管线只抄声明进 StableFacts，成员到列换算、
+/// 占位符校验收在 EntityContractFactory 一份；TAG 列的类型门禁（DECIMAL 不可作 TAG 等）
+/// 是发射侧那一家 CodeFirst 的方言语义，不进中性契约。</summary>
+[AttributeUsage(AttributeTargets.Class)]
+public sealed class TDengineStableAttribute : Attribute
+{
+    /// <summary>子表名模板。占位符 {成员名} 引用本类已声明 [TDengineTag] 的成员；
+    /// null = 不声明插入面的子表命名（DDL 与查询面照常）。</summary>
+    public string? Subtable { get; set; }
+}
+
+/// <summary>TDengine 的 TAG 列声明位。打在属性上：这一列是稳定表的 TAG（子表元数据）而不是
+/// 数据列——契约里它仍是普通列（查询/物化/写值全通），发射时由那一家 CodeFirst/Dialect
+/// 把它从数据列清单摘出、放进 TAGS 子句。一颗声明一颗 TAG，声明序即 TAGS 子句的列序。</summary>
+[AttributeUsage(AttributeTargets.Property)]
+public sealed class TDengineTagAttribute : Attribute;
+
+/// <summary>一侧管线给另一侧（含 EntityContractFactory）交出的超级表声明：
+/// 反射侧由 TDengineStableAttribute/TDengineTagAttribute 抄，源生成侧由生成器把同一形状写成代码。
+/// 成员到列换算、占位符校验都不在这里做——EntityContractFactory 只有一份实现。</summary>
+public sealed record StableFacts
+{
+    /// <summary>子表名模板（TDengineStableAttribute.Subtable 原样）；null = 没写。</summary>
+    public string? SubtableTemplate { get; init; }
+
+    /// <summary>TAG 成员名清单，声明序（类内属性次序）即 TAGS 子句的列序。</summary>
+    public required IReadOnlyList<string> TagMemberNames { get; init; }
+}

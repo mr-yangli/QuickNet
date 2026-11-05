@@ -109,7 +109,7 @@ public sealed class ContractResolver(IDbProvider provider, ModelConfiguration? c
         // 与 G1 生成的事实共用同一段代码：这条链的正确性由两侧逐字段相等的对拍断言兜住。
         return EntityContractFactory.Build(clrType, table, [.. columns], ResolveIndexFacts(clrType, fluent),
             ResolveRelationships(members, columns), Provider.Types, IntegralPrimaryKeyAutoIncrement,
-            ResolveSkipIndexes(clrType), DefaultStringLength);
+            ResolveSkipIndexes(clrType), DefaultStringLength, ResolveStable(clrType));
     }
 
     TableInfo ResolveTable(Type clrType, FluentEntity? fluent)
@@ -496,6 +496,26 @@ public sealed class ContractResolver(IDbProvider provider, ModelConfiguration? c
             facts.Add(new IndexFacts(index.Name, index.MemberNames, index.Unique, Descending: index.Descending));
 
         return [.. facts];
+    }
+
+    /// <summary>TDengine 超级表声明抄进事实：类特性给 Subtable 模板、属性特性给 TAG 成员名
+    /// （声明序即 TAGS 子句的列序）。成员枚举的筛子与 ResolveSkipIndexes 同一把
+    ///（公开实例非索引器），只抄声明——换算与占位符校验收在 EntityContractFactory 一份。</summary>
+    [RequiresUnreferencedCode("G2 兜底路径按 Type 扫描属性与注解；主路径是 G1 源生成。")]
+    StableFacts? ResolveStable(Type clrType)
+    {
+        var stable = clrType.GetCustomAttribute<TDengineStableAttribute>();
+
+        if (stable is null)
+            return null;
+
+        var members = new List<string>();
+
+        foreach (var property in clrType.GetProperties(BindingFlags.Public | BindingFlags.Instance))
+            if (property.GetCustomAttribute<TDengineTagAttribute>() is not null && property.GetIndexParameters().Length == 0)
+                members.Add(property.Name);
+
+        return new StableFacts { SubtableTemplate = stable.Subtable, TagMemberNames = [.. members] };
     }
 
     /// <summary>跳过索引声明只认自研注解那一层（Fluent 侧今天不落这一格）。类挂与属性挂两条来路

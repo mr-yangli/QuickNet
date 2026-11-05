@@ -31,6 +31,10 @@ sealed class EntityModel
     /// 与反射侧同一份次序——顺序也算对拍的内容。</summary>
     public List<SkipIndexModel> SkipIndexes = [];
 
+    /// <summary>超级表声明（[TDengineStable]），null = 实体不是稳定表。TAG 成员按属性次序收，
+    /// 与反射侧同一份次序——顺序也算对拍的内容。</summary>
+    public StableModel? Stable;
+
     public List<RelationshipModel> Relationships = [];
 
     /// <summary>分表声明，null = 这张表不分表。与 TableName 分开存：名字是模板还是实名，
@@ -159,6 +163,16 @@ sealed class SkipIndexModel
     public int HashFunctions;
 
     public int Seed;
+}
+
+/// <summary>[TDengineStable] 的编译期抄本（v0.39 第六笔）。Subtable 为 null = 声明里没写子表模板；
+/// TagMembers 按属性次序收（TAGS 子句的列序就是它），只抄声明——成员到列换算与占位符校验
+/// 在运行期 EntityContractFactory 那一份。</summary>
+sealed class StableModel
+{
+    public string? Subtable;
+
+    public List<string> TagMembers = [];
 }
 
 /// <summary>一条导航边的声明（to-one 或集合，按 IsCollection 分）。列名换算不在生成期做——

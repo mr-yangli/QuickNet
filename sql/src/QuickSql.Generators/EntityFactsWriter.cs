@@ -286,7 +286,8 @@ static class EntityFactsWriter
 
         b.AppendLine("        ],")
          .AppendLine("        contract => new " + m.Name + "Schema(contract),")
-         .AppendLine("        contract => new " + m.Name + "Validator(contract));")
+         .AppendLine("        contract => new " + m.Name + "Validator(contract),")
+         .AppendLine("        " + StableFact(m.Stable) + ");")
          .AppendLine("}");
     }
 
@@ -327,6 +328,14 @@ static class EntityFactsWriter
     }
 
     static string Lit(string? value) => value is null ? "null" : SymbolDisplay.FormatLiteral(value, quote: true);
+
+    /// <summary>超级表声明那格的实参文本：没有 [TDengineStable] 的实体发 null——
+    /// "没声明"与"声明了空清单"是两个形状（后者在收口那一句红：稳定表至少要一颗 TAG）。</summary>
+    static string StableFact(StableModel? stable) => stable is null
+        ? "null"
+        : "new " + Metadata + "StableFacts"
+            + "{ SubtableTemplate = " + Lit(stable.Subtable) + ", "
+            + "TagMemberNames = [" + string.Join(", ", stable.TagMembers.Select(Lit)) + "] }";
 
     /// <summary>默认值的 C# 字面量。带后缀的那几型（decimal/float/double/ulong）把后缀写死，
     /// 否则生成的代码在整数字面上类型悄悄漂移（12.5 是 double 不是 decimal）。</summary>

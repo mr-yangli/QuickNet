@@ -59,7 +59,7 @@ public sealed class EntityContract
 {
     public EntityContract(Type clrType, TableInfo table, ColumnContract[] columns, IReadOnlyList<IndexContract>? indexes,
         IReadOnlyList<RelationshipContract> relationships, IReadOnlyList<CollectionEdgeContract>? collections = null,
-        IReadOnlyList<SkipIndexContract>? skipIndexes = null)
+        IReadOnlyList<SkipIndexContract>? skipIndexes = null, StableDeclaration? stable = null)
     {
         ClrType = clrType;
         Table = table;
@@ -68,6 +68,7 @@ public sealed class EntityContract
         Relationships = relationships;
         Collections = collections ?? [];
         SkipIndexes = skipIndexes ?? [];
+        Stable = stable;
         ByMember = columns.ToFrozenDictionary(c => c.MemberName, StringComparer.Ordinal);
         ByColumn = columns.ToFrozenDictionary(c => c.ColumnName, StringComparer.Ordinal);
         PrimaryKey = Array.FindAll(columns, c => c.IsPrimary);
@@ -89,6 +90,10 @@ public sealed class EntityContract
     /// 而跳过索引是发射进建表骨架的声明，两格不换算——混进一格会让拒收整族索引的那一家
     /// （ClickHouse）连自家合法的声明一起拒。</summary>
     public IReadOnlyList<SkipIndexContract> SkipIndexes { get; }
+
+    /// <summary>非 null = 这个实体是 TDengine 的稳定表（STABLE）：声明与换算见
+    /// <see cref="StableDeclaration"/>。null = 普通表，发射侧的稳定分岔对这一格不生效。</summary>
+    public StableDeclaration? Stable { get; }
 
     /// <summary>引用导航解析出来的关系边（写序读它）。顺序 = 实体里的声明序，
     /// 与 Columns 同一纪律：两侧生成的是同一份顺序，对拍才比得出"谁漏了一条"。</summary>
@@ -115,3 +120,14 @@ public sealed class EntityContract
     public EntityContract ForShardDdl(TableInfo shard)
         => new(ClrType, shard, Columns, [], Relationships, Collections, []);
 }
+
+/// <summary>超级表声明里的一颗 TAG 列：成员名（C# 侧，子表名模板的占位符用它）与列名（库侧，TAGS 子句用）。
+/// 声明序即 TAGS 子句的列序。</summary>
+public sealed record TagColumnContract(string MemberName, string ColumnName);
+
+/// <summary>TDengine 超级表声明换算后的契约（v0.39 第六笔）。实体是稳定表：[Table] 名即稳定名
+///（DDL 与查询面都指它），SubtableTemplate 是插入面的子表名模板（占位符 {成员名} 引用 Tags 里的成员，
+/// null = 没声明插入面的命名，插入面在发射点没有子表名的来路）；Tags 声明序即 TAGS 子句的列序。
+/// TAG 列本身仍在 <see cref="EntityContract.Columns"/> 里（查询/物化/写值全通），把它们从数据列
+/// 摘出去进 TAGS 子句是发射侧（那一家 CodeFirst/Dialect）的事——中性契约只背"哪些列是 TAG"这一格事实。</summary>
+public sealed record StableDeclaration(string? SubtableTemplate, IReadOnlyList<TagColumnContract> Tags);

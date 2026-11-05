@@ -17,7 +17,9 @@ namespace QuickSql.Providers.TDengine;
 /// "官方语句形状没读到"（本家没有由库递增的列，主键就是那颗时间戳，由调用方自己给值）；
 /// Comment_On_Column 不声明：本家没有列注释这一格（官方 column_definition 文法里没有 COMMENT 项，
 /// INS_COLUMNS 目录也没有备注列），而表注释那半能发也能读回（INS_TABLES.table_comment），
-/// 成对闭合走 TryEmitTableComment 的返回值说话，不欠一颗位；Bulk 交 null，批量从 L3 起；
+/// 成对闭合走 TryEmitTableComment 的返回值说话，不欠一颗位；稳定表（STABLE）面是
+/// provider 本地发射（声明位 [TDengineStable]/[TDengineTag] 走 EntityContract.Stable 那颗槽），
+/// 不欠能力位；Bulk 交 null，批量从 L3 起；
 /// Alter_Column_Precision 保守不声明（ALTER … MODIFY COLUMN 的改宽文档有一句，活库复核再翻）。
 /// 整层是厂商文档口径、未实测台账——重开条件只有一条：拿到一台可跑的引擎。</summary>
 [QuickSqlProvider(DbKind.TDengine)]
@@ -36,7 +38,7 @@ public sealed class TDengineProvider : IDbProvider
     public TDengineProvider(DbProviderFactory driverFactory)
     {
         Connectors = new TDengineConnectorFactory(driverFactory);
-        CodeFirst = new TDengineCodeFirst(_types);
+        CodeFirst = new TDengineCodeFirst(_types, _values);
         _dialect = new TDengineDialect(_types, _keys, _values, _expressions);
     }
 

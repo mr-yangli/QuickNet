@@ -174,10 +174,11 @@ public static class EntityContractFactory
     /// 表过态的列照旧赢过它。defaultStringLength 是 orm 级的"未声明宽度"兜底（三态规则见
     /// <see cref="ColumnFacts.ToProvisional"/>），显式宽度、显式非正数与点名了存储型的列都不吃它。
     /// skipIndexes 的声明里没有名字的走约定名，换算与撞名判定
-    /// 都只有 MapSkipIndexes 一份。</summary>
+    /// 都只有 MapSkipIndexes 一份。stable（TDengine 超级表声明）的成员到列换算与
+    /// 子表名模板的占位符校验同格只有 MapStable 一份。</summary>
     public static EntityContract Build(Type clrType, TableInfo table, IReadOnlyList<ColumnFacts> columns, IReadOnlyList<IndexFacts> indexes,
         IReadOnlyList<RelationshipFacts> relationships, ITypeMap types, bool integralPrimaryKeyAutoIncrement = true,
-        IReadOnlyList<SkipIndexFacts>? skipIndexes = null, int? defaultStringLength = null)
+        IReadOnlyList<SkipIndexFacts>? skipIndexes = null, int? defaultStringLength = null, StableFacts? stable = null)
     {
         var resolved = new ColumnContract[columns.Count];
 
@@ -206,9 +207,20 @@ public static class EntityContractFactory
         var skip = MapSkipIndexes(skipIndexes, resolved,
             table.Split is null ? table.Name : clrType.Name, clrType.Name);
 
+        var stableDeclaration = MapStable(stable, resolved, clrType.Name);
+
+        // 稳定表与分表不并用——这一格必须在契约期红而不是等发射：SplitTablesScript/建片链
+        // 对分表契约逐片调 EmitCreateTable，而那一格只给片契约（ForShardDdl 的形状），
+        // 稳定格若留到发射才判，脚本路会先折进"普通表"那一支发出一张形状说错的 CREATE TABLE
+        // —— "看似建好了"的假绿，比当场红严重一档。
+        if (stableDeclaration is not null && table.Split is not null)
+            throw new QuickSqlException($"实体 {clrType.Name} 同时声明了超级表与分表：两套\"一个实体对多张表\"不并用 —— "
+                + "分表的片名模板落在 [Table] 名上，而稳定表实体那里那颗名字是稳定名，"
+                + "子表命名走 [TDengineStable(Subtable = …)] 的模板那档（插入时用行内 TAG 值解析）。请摘掉 [SplitTable]。");
+
         return new EntityContract(clrType, table, resolved, MapIndexes(indexes, resolved,
             table.Split is null ? table.Name : clrType.Name),
-            edges, collections, skip);
+            edges, collections, skip, stableDeclaration);
     }
 
     /// <summary>跳过索引声明到已换算的契约。三件事只有这里一份（两侧同一出口）：
@@ -265,6 +277,62 @@ public static class EntityContractFactory
         }
 
         return result;
+    }
+
+    /// <summary>超级表声明到已换算的契约（两侧同一出口）。三件事只有这里一份：TAG 成员必须是列
+    ///（漏映射就是 TAGS 子句里出现一颗不存在的列，与 MapSkipIndexes 同一条拒绝）；一颗 TAG 都没有
+    /// 当场红（TDengine 的稳定表至少要一颗 TAG，这是厂商的硬性事实）；子表名模板的占位符只能引用
+    /// 已声明的 TAG 成员——模板在插入时用行内 TAG 值填空，占位符落到数据列上就是"值每行都在变
+    /// 而子表名只能有一个"的语义错。TAG 列的类型门禁（DECIMAL 不可作 TAG 等）不在这里判：
+    /// 那是发射那一家 CodeFirst 的方言语义，中性契约只背声明。</summary>
+    static StableDeclaration? MapStable(StableFacts? facts, ColumnContract[] columns, string entityName)
+    {
+        if (facts is null)
+            return null;
+
+        if (facts.TagMemberNames.Count == 0)
+            throw new QuickSqlException($"实体 {entityName} 声明了超级表却一颗 TAG 都没有：TDengine 的稳定表至少要一颗 TAG"
+                + "（[TDengineTag] 打在属性上，至少一颗；厂商上限 128 颗）");
+
+        var tags = new TagColumnContract[facts.TagMemberNames.Count];
+
+        for (var i = 0; i < facts.TagMemberNames.Count; i++)
+        {
+            var member = facts.TagMemberNames[i];
+
+            var column = Array.Find(columns, c => string.Equals(c.MemberName, member, StringComparison.Ordinal))
+                ?? throw new QuickSqlException($"超级表的 TAG 引用了不是列的成员 {member}（实体 {entityName}，可能被 [NotMapped] 排除）");
+
+            tags[i] = new TagColumnContract(column.MemberName, column.ColumnName);
+        }
+
+        if (facts.SubtableTemplate is { } template)
+            ValidateSubtableTemplate(template, tags, entityName);
+
+        return new StableDeclaration(facts.SubtableTemplate, tags);
+    }
+
+    /// <summary>子表名模板的占位符校验：每颗 {成员名} 都得是已声明的 TAG 成员。
+    /// 只扫形状（配对、命中），不在这里管"值能不能当文件名"——那是插入面发射点的事。</summary>
+    static void ValidateSubtableTemplate(string template, TagColumnContract[] tags, string entityName)
+    {
+        for (var at = template.IndexOf('{'); at >= 0; at = template.IndexOf('{', at + 1))
+        {
+            var close = template.IndexOf('}', at + 1);
+
+            if (close < 0)
+                throw new QuickSqlException($"子表名模板 {template} 的 '{{' 没有配对的 '}}'（实体 {entityName}）：占位符形如 {{成员名}}");
+
+            var placeholder = template[(at + 1)..close];
+
+            // 占位符比对大小写不敏感：模板是写给人看的那个面（{device} 比 {Device} 顺眼），
+            // 而发射侧（TDengineDialect.EmitSubtableName）用同一把尺解析——两处不同尺就是
+            // "契约期放行、插入期红"的那类分叉，这里与那里必须一字不差地同判。
+            if (Array.FindIndex(tags, t => string.Equals(t.MemberName, placeholder, StringComparison.OrdinalIgnoreCase)) < 0)
+                throw new QuickSqlException($"子表名模板 {template} 的占位符 {{{placeholder}}} 不是已声明的 TAG 成员（实体 {entityName}）："
+                    + "占位符只能引用 [TDengineTag] 点出的成员——TAG 是子表的元数据、值在同一个子表里恒定，"
+                    + "拿数据列填子表名会让同一批行落到说不出是哪张表的模板上");
+        }
     }
 
     /// <summary>分片声明到已换算的声明，顺手把四条启动期判据比一遍：分片键得是一列、

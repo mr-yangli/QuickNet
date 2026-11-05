@@ -15,7 +15,8 @@ public sealed record GeneratedEntityMetadata(
     IReadOnlyList<SkipIndexFacts> SkipIndexes,
     IReadOnlyList<RelationshipFacts> Relationships,
     Func<EntityContract, object> CreateSchema,
-    Func<EntityContract, object>? CreateValidator = null);
+    Func<EntityContract, object>? CreateValidator = null,
+    StableFacts? Stable = null);
 
 /// <summary>按运行期 Type 取 G1 事实。生成器产出的查询方法形状就是这个委托，
 /// 由 IEntitySchemaRegistry 的 G1 实现持有；返回 false = 这个实体没被生成

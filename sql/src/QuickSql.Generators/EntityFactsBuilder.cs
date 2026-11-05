@@ -26,6 +26,8 @@ static class EntityFactsBuilder
     const string QuickSqlIndex = "QuickSql.Metadata.IndexAttribute";
 
     const string QuickSqlClickHouseSkipIndex = "QuickSql.Metadata.ClickHouseSkipIndexAttribute";
+    const string QuickSqlTDengineStable = "QuickSql.Metadata.TDengineStableAttribute";
+    const string QuickSqlTDengineTag = "QuickSql.Metadata.TDengineTagAttribute";
     const string QuickSqlSplit = "QuickSql.Metadata.SplitTableAttribute";
     const string QuickSqlDataSource = "QuickSql.Metadata.DataSourceAttribute";
     const string QuickSqlConcurrency = "QuickSql.Metadata.ConcurrencyTokenAttribute";
@@ -136,6 +138,8 @@ static class EntityFactsBuilder
         IndexesOf(entity, model, outcome, at, conflicts);
 
         SkipIndexesOf(entity, model, outcome, at, conflicts);
+
+        StableOf(entity, model);
 
         if (conflicts)
             // 报错时不产出模型，但诊断必须留着——丢掉它等于「编译不过却没人说为什么」。
@@ -605,6 +609,36 @@ static class EntityFactsBuilder
             HashFunctions = Number(declared, -1, "HashFunctions") ?? 0,
             Seed = Number(declared, -1, "Seed") ?? 0,
         });
+    }
+
+    /// <summary>超级表声明抄进模型：类特性给 Subtable 模板、属性特性按次序给 TAG 成员名
+    ///（与反射侧同一份次序，TAGS 子句的列序就是它）。只抄声明：成员 → 列换算、占位符校验
+    /// 全在运行期 EntityContractFactory 那一份——TAG 引用了不是列的成员在两条路径上
+    /// 都是收口那句话，编译期不再另立一份诊断（与 SkipIndex 的编译期拦截不同档，记 notes）。</summary>
+    static void StableOf(INamedTypeSymbol entity, EntityModel model)
+    {
+        var stable = entity.GetAttributes().FirstOrDefault(a => Name(a) == QuickSqlTDengineStable);
+
+        if (stable is null)
+            return;
+
+        var tagMembers = new List<string>();
+
+        foreach (var property in entity.GetMembers().OfType<IPropertySymbol>())
+        {
+            // G2 的成员枚举带可访问性/静态/索引器三把筛子（列侧同一链），编译期对齐那一半。
+            if (property.DeclaredAccessibility != Accessibility.Public || property.IsStatic || property.IsIndexer)
+                continue;
+
+            if (property.GetAttributes().Any(a => Name(a) == QuickSqlTDengineTag))
+                tagMembers.Add(property.Name);
+        }
+
+        model.Stable = new StableModel
+        {
+            Subtable = Named(stable, "Subtable")?.Value as string,
+            TagMembers = tagMembers,
+        };
     }
 
     /// <summary>Roslyn 的符号层面查不到 init，只能回到语法树。之所以要单独问一句：
