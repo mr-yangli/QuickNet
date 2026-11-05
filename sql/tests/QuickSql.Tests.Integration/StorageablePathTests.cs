@@ -1,5 +1,6 @@
 using System.ComponentModel.DataAnnotations.Schema;
 using System.Globalization;
+using QuickSql.Aop;
 using QuickSql.Metadata;
 using QuickSql.TestInfra;
 using Xunit;
@@ -9,7 +10,8 @@ namespace QuickSql.Tests.Integration;
 /// <summary>集合同步（SqlSugar 的 <c>Storageable</c> 同一语义）在真库上的那一半。钉的是四件事：
 ///
 /// <para>① <b>对账不发一句写</b>：<c>ToStorage</c> 之后库的行数与值必须原封不动 —— "先看账再动手"
-/// 是这条链与 <c>InsertOrUpdate</c>（对上就改、对不上就插、没有删除桶）的分界。</para>
+/// 是这条链与 <c>InsertOrUpdate</c>（对上就改、对不上就插、没有删除桶）的分界。<b>存在性那一句还只端
+/// 键列</b>：整行读回只属于删除桶，那一份才是交出去给人看的。</para>
 ///
 /// <para>② <b>键的三档都对得准</b>：默认主键（自增键"没填"的行直进新增桶，不查库）、点名单列
 /// （<c>Sku</c> 对账，<c>Id=0</c> 的行照样能进修改桶 —— 点名键不是自增列，"没填"的捷径不生效）、
@@ -101,6 +103,39 @@ public sealed class StorageablePathTests
         var judge = Assert.Single(StorableRows("[Id] = @id", ("@id", existing)));
         Assert.Equal("10", judge["Quantity"]);
         Assert.DoesNotContain(StorableRows(Like, Tag), r => r["Sku"] == $"{Batch}/ghost");
+    }
+
+    /// <summary>①那一读的宽度：存在性对账只端键列（宽列一个都不回来），整行读回只属于删除桶那一句。
+    /// 两句都只发读，而桶仍分得准 —— 键投影没把键读丢的证据就在同一次的账上。</summary>
+    [Fact]
+    public async Task Reconciliation_reads_only_the_key_columns()
+    {
+        Database.Ready();
+        Database.EnsureTable(typeof(StorableRow));
+
+        await Orm.Insert(storable("width", 10)).ExecuteAffrowsAsync(ct);
+
+        var sent = new List<string>();
+        var aop = new QuickSqlAop();
+
+        aop.Executing = e => sent.Add(e.Sql.Text);
+
+        var result = await Database.OrmWith(aop)
+            .Storageable(new[] { storable("width", 11), storable("width-new", 12) })
+            .WhereColumns(r => r.Sku!)
+            .SplitDelete(r => r.Sku!.StartsWith(Batch))
+            .ToStorageAsync(ct);
+
+        // 两句读：对账在前（谓词是 OR 平铺的键等值），删除桶的整片读回在后（scope 落进 WHERE）。
+        Assert.Equal(2, sent.Count);
+        Assert.All(sent, s => Assert.Contains(Database.CatalogueName("QuickSqlStorableRow"), s, StringComparison.OrdinalIgnoreCase));
+
+        Assert.DoesNotContain("Quantity", sent[0], StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Quantity", sent[1], StringComparison.OrdinalIgnoreCase);
+
+        Assert.Single(result.UpdateList);
+        Assert.Single(result.InsertList);
+        Assert.Empty(result.DeleteList);
     }
 
     /// <summary>②点名键档：<c>Id=0</c> 的行按 <c>Sku</c> 对上就进修改桶 —— 点名键不是自增列，

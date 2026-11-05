@@ -168,6 +168,8 @@
 - `src/QuickSql.Core/Write/UpdateEngine.cs → ColumnOf / SplitTable`：已知边界——IDENTITY_INSERT 那条路（显式写自增列）P0 未接；SET 值位不收行号（写侧没有"换个表源"可言，读侧的 WindowGuard 出路两样都接不上）。
 - `src/QuickSql.Core/Write/UpdateEngine.cs → Check`：差异记录（原记 §14）——链式 UPDATE 只过值级两把尺子（长度/必填），DataAnnotations 与 Custom 档不参与（拿整实体校验得造假实体，会把没填的列判成"缺"）。
 - `src/QuickSql.Core/Write/Storageable.cs → Canonical`：边界——整型统一成 long 的代价：ulong 键值高过 long.MaxValue 那一颗在对账前抛溢出；主键大到那一档的表不在本库服务面里，抛比错对账诚实。
+- `src/QuickSql.Core/Write/Storageable.cs → KeyProjector`：性能账——存在性对账那一句从整行投影收成只投键列（`x => new T { Key = x.Key }` 落进投影翻译的成员初始化臂，选列按槽位出）：省的是**列宽不是行宽**——谓词只命中被点名的键，行数上限本就是清单大小，所以宽实体（长文本/JSON/位图列）才量得出差，三列小表基本无感。删除桶那一读刻意不动：`ExecuteDeleteAsync` 全程只用键，但 `DeleteList` 交出去的是"库原样读回的那一份"给人看，收成键投影就等于交出非键列全默认值的半成品。A/B 读数（sqlite 靶库，`Reconciliation_reads_only_the_key_columns`）：投影在场时对账句是 `"t0"."Sku"`，摘掉后是 `"t0"."Id", "t0"."Sku", "t0"."Quantity"`。
+- `src/QuickSql.Core/Write/Storageable.cs → ToStorageAsync`：坑——对账两读都得带着全局过滤器（软删那一族）走 `orm.Select<T>()` 这条正路：过滤器只叠进 WHERE、从不进选列，所以收窄选列不影响它；哪天为省事把存在性判定换成绕过过滤器的裸 SQL 或逐颗键 EXISTS，库里被软删的行会判成"存在"→ 发一句打不到行的 UPDATE，或反过来判成"不存在"→ 种出重复行。
 
 ## Tracking
 
